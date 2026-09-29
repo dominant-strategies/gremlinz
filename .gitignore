@@ -1,0 +1,7 @@
+privkey.key
+*.key
+.env
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/

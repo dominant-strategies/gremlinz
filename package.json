@@ -1,0 +1,22 @@
+{
+  "name": "gremlins",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/launch"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "vitest run",
+    "typecheck": "tsc -b packages/treasury packages/hatch packages/egg packages/hosting"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
