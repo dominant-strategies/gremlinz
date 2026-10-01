@@ -73,3 +73,6 @@ export function verifySignedConfig(signed: SignedConfig, expected: { maker: stri
   if (recovered.toLowerCase() !== expected.maker.toLowerCase()) return { ok: false, reason: 'signature is not from the maker' }
   return { ok: true, config: parsed.data }
 }
+
+/** GremlinRegistry on Quai mainnet (cyprus1), deployed 2026-09-29. See contracts/deployments/registry-9.json. */
+export const GREMLIN_REGISTRY = '0x0023F20256Fd8014CB3fc1250d8Cf93E3e44d103'

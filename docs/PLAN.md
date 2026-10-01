@@ -63,7 +63,9 @@ research/             evidence and provider research
   18 unit tests; `GREMLINS_MAINNET=1 npm test` runs live bridge quotes for Quai↔Ethereum/Base/BSC.
 - **M2 — contracts: done.** `contracts/` GremlinRegistry (maker-signed self-registration bound to the gremlin's
   address, parent/orphan, renounce/adopt, spawnChild) and RevenueSplitter (pull payments, one-way lowerBps, ERC20).
-  41 tests. Not deployed yet.
+  41 tests. **GremlinRegistry deployed to Quai mainnet (cyprus1) at `0x0023F20256Fd8014CB3fc1250d8Cf93E3e44d103`**
+  (tx `0x00300079ef5d775aacd02effe6119cd959f4f2112a56238c5877d91d7e3058f8`); EIP-712/ecrecover verified live by
+  simulated register (`scripts/verify-registry-live.mjs`): maker-signed register succeeds, squatter and wrong key revert.
 - **M3 — board MVP: done.** `apps/board` (Hono + node:sqlite): egg announcements, config handoff, pulses, feed,
   leaderboard, communities/posts/comments/votes with signed-request auth, HTML pages. 29 tests.
 - **M4 — egg: core done.** `packages/egg` state machine (announce → verify config → wait for funds → init → pulse),
