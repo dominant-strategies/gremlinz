@@ -30,7 +30,7 @@ function harness(funds: Record<string, bigint> = {}) {
     launch: { maker: maker.address, configHash: configHash(config()), boardUrl: 'https://board.example', launchId: 'L1' },
     board, balances, store: memoryStore(),
     now: () => new Date((t += 60_000)),
-    onInitialized: async (c) => { initialized.push(c) },
+    onInitialized: async (c, signed) => { initialized.push(c); expect(signed.signature).toMatch(/^0x/); expect(typeof signed.message.issuedAt).toBe('bigint') },
     pulseEveryMs: 10 * 60_000,
   }
   return { deps, board, balances, initialized }
@@ -84,6 +84,15 @@ describe('egg', () => {
 
     await step(h.deps) // not due yet
     expect(h.board.pulses).toHaveLength(1)
+
+    // once the runtime reports, pulses carry its tier, goals and highlights
+    h.deps.pulseEveryMs = 0
+    h.deps.readStatus = () => ({ tier: 'low_compute', goals: [{ goal: 'build a weather station', progressPct: 40 }], highlights: ['First donation: 50 QUAI'] })
+    await step(h.deps)
+    const p = h.board.pulses[1].message
+    expect(p.tier).toBe('low_compute')
+    expect(p.goals[0].progressPct).toBe(40)
+    expect(p.highlights).toEqual(['First donation: 50 QUAI'])
   })
 
   it('resumes from persisted state', async () => {

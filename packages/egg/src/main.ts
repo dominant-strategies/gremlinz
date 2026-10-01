@@ -8,7 +8,7 @@
  *   GREMLIN_RUNTIME  command that starts the agent runtime once hatched; gets GREMLIN_CONFIG + GREMLIN_HOME
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { httpBoardClient } from './board-client.js'
 import { rpcBalanceReader } from '@gremlins/treasury'
@@ -32,8 +32,12 @@ const deps = {
   store: fileStore(join(home, 'state.json')),
   now: () => new Date(),
   pulseEveryMs: Number(process.env.GREMLIN_PULSE_MS ?? 60 * 60_000),
-  async onInitialized(config: unknown) {
+  readStatus() {
+    try { return JSON.parse(readFileSync(join(home, 'status.json'), 'utf8')) } catch { return {} }
+  },
+  async onInitialized(config: unknown, signed: unknown) {
     writeFileSync(configPath, JSON.stringify(config, null, 2), { mode: 0o600 })
+    writeFileSync(join(home, 'signed-config.json'), JSON.stringify(signed, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2), { mode: 0o600 })
     superviseRuntime()
   },
 }

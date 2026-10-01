@@ -45,6 +45,14 @@ export const COLONY_TASK_INTERVALS_MS = {
 
 export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
   // gremlins: convert just enough QUAI to USDC on Base for the next Conway credit top-up (see gremlins/funding.ts).
+  // gremlins: share tier and credits with the egg's pulses via GREMLIN_HOME/status.json
+  gremlin_status: async (ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+    const { updateStatus } = await import("../gremlins/status.js");
+    if (!process.env.GREMLIN_HOME) return { shouldWake: false };
+    const t = getSurvivalTier(ctx.creditBalance);
+    updateStatus({ tier: t === "high" ? "normal" : t, creditsCents: ctx.creditBalance, models: [taskCtx.config.inferenceModel], host: "conway" });
+    return { shouldWake: false };
+  },
   gremlin_funding: async (ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
     const { runFundingTick } = await import("../gremlins/funding-task.js");
     return runFundingTick({ creditsCents: ctx.creditBalance, kv: taskCtx.db });

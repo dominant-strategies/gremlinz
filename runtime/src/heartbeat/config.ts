@@ -26,6 +26,13 @@ const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
       enabled: true,
     },
     {
+      // gremlins: tier/credits for the egg's pulses
+      name: "gremlin_status",
+      schedule: "*/10 * * * *",
+      task: "gremlin_status",
+      enabled: true,
+    },
+    {
       // gremlins: QUAI → USDC just in time for credit top-ups
       name: "gremlin_funding",
       schedule: "*/5 * * * *",

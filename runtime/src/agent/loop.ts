@@ -96,7 +96,9 @@ export async function runAgentLoop(
   const { identity, config, db, conway, inference, social, skills, policyEngine, spendTracker, onStateChange, onTurnComplete, ollamaBaseUrl } =
     options;
 
-  const builtinTools = createBuiltinTools(identity.sandboxId);
+  // gremlins: board, treasury and registry tools alongside the upstream builtins
+  const { createGremlinTools } = await import("../gremlins/tools.js");
+  const builtinTools = [...createBuiltinTools(identity.sandboxId), ...createGremlinTools()];
   const installedTools = loadInstalledTools(db);
   const tools = [...builtinTools, ...installedTools];
   const toolContext: ToolContext = {

@@ -7,7 +7,7 @@
  * Moving out to a server under the gremlin's own keys, and handing over to the agent runtime, happen after
  * `hatched` and live elsewhere.
  */
-import { signMessage, verifySignedConfig, type EggAnnouncement, type GremlinConfig, type Pulse } from '@gremlins/hatch'
+import { signMessage, verifySignedConfig, type EggAnnouncement, type GremlinConfig, type Pulse, type SignedConfig } from '@gremlins/hatch'
 import { tokenKey, FUNDING_TOKENS, CHAIN } from '@gremlins/treasury'
 import type { BoardClient } from './board-client.js'
 import { hasFunds, type BalanceReader, type Balances } from '@gremlins/treasury'
@@ -20,6 +20,8 @@ export interface EggState {
   stage: Stage
   bootedAt: string
   config?: GremlinConfig
+  /** The maker's signed config; the runtime needs the signature to self-register in GremlinRegistry. */
+  signed?: SignedConfig
   pulseSeq: number
   lastPulseAt?: string
   log: { at: string; event: string }[]
@@ -37,8 +39,10 @@ export interface EggDeps {
   balances: BalanceReader
   store: StateStore
   now: () => Date
+  /** Latest runtime status, merged into pulses. */
+  readStatus?: () => RuntimeStatus
   /** Called once when the egg initializes; starts the agent runtime with the verified config. */
-  onInitialized: (config: GremlinConfig) => Promise<void>
+  onInitialized: (config: GremlinConfig, signed: SignedConfig) => Promise<void>
   pulseEveryMs?: number
 }
 
@@ -62,23 +66,34 @@ export function announcement(deps: Pick<EggDeps, 'keys' | 'launch'>, bootedAt: s
   }
 }
 
-export function buildPulse(state: EggState, keys: EggKeys, balances: Balances, now: Date): Pulse {
+/** What the agent runtime reports via GREMLIN_HOME/status.json (see runtime/src/gremlins/status.ts). */
+export interface RuntimeStatus {
+  tier?: Pulse['tier']
+  goals?: Pulse['goals']
+  highlights?: string[]
+  models?: string[]
+  host?: string
+}
+
+export function buildPulse(state: EggState, keys: EggKeys, balances: Balances, now: Date, status: RuntimeStatus = {}): Pulse {
   const quaiKey = tokenKey({ symbol: 'QUAI', chainId: CHAIN.quai })
   return {
     kind: 'pulse',
     address: keys.evm.address,
     seq: state.pulseSeq + 1,
     at: now.toISOString(),
-    // Tiers and USD figures come from the runtime once it is running; the egg reports raw balances.
-    tier: 'normal',
+    // Tier, goals and highlights come from the runtime once it is running; the egg reports raw balances.
+    tier: status.tier ?? 'normal',
     balances: Object.fromEntries(Object.entries(balances).map(([k, v]) => [k, v.toString()])),
     netWorthQuai: (balances[quaiKey] ?? 0n).toString(),
     runwayDays: 0,
     burnRate7dUsd: '0',
     revenue7dUsd: '0',
     revenueLifetimeUsd: '0',
-    goals: (state.config?.goals ?? []).map((goal) => ({ goal, progressPct: 0 })),
-    highlights: state.stage === 'initialized' ? ['Hatched.'] : [],
+    goals: status.goals ?? (state.config?.goals ?? []).map((goal) => ({ goal, progressPct: 0 })),
+    highlights: status.highlights ?? (state.stage === 'initialized' ? ['Hatched.'] : []),
+    ...(status.models ? { models: status.models } : {}),
+    ...(status.host ? { host: status.host } : {}),
   }
 }
 
@@ -106,12 +121,12 @@ export async function step(deps: EggDeps): Promise<EggState> {
         state = record(state, now, `rejected config: ${v.reason}`)
         break
       }
-      state = record({ ...state, stage: 'configured', config: v.config }, now, 'configured')
+      state = record({ ...state, stage: 'configured', config: v.config, signed }, now, 'configured')
       break
     }
     case 'configured': {
       if (!hasFunds(await readAll(deps))) break
-      await deps.onInitialized(state.config!)
+      await deps.onInitialized(state.config!, { ...state.signed!, message: { ...state.signed!.message, issuedAt: BigInt(state.signed!.message.issuedAt) } })
       state = record({ ...state, stage: 'initialized' }, now, 'initialized')
       break
     }
@@ -119,7 +134,7 @@ export async function step(deps: EggDeps): Promise<EggState> {
     case 'hatched': {
       const due = !state.lastPulseAt || now.getTime() - new Date(state.lastPulseAt).getTime() >= (deps.pulseEveryMs ?? 60 * 60_000)
       if (!due) break
-      const pulse = buildPulse(state, deps.keys, await readAll(deps), now)
+      const pulse = buildPulse(state, deps.keys, await readAll(deps), now, deps.readStatus?.() ?? {})
       await deps.board.postPulse(await signMessage(deps.keys.evm, pulse))
       state = { ...state, pulseSeq: pulse.seq, lastPulseAt: pulse.at }
       if (state.stage === 'initialized') state = record({ ...state, stage: 'hatched' }, now, 'hatched')

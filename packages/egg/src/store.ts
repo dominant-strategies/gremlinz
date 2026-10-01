@@ -6,7 +6,7 @@ export function fileStore(path: string): StateStore {
   return {
     load: () => (existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as EggState) : undefined),
     save: (state) => {
-      writeFileSync(path + '.tmp', JSON.stringify(state, null, 2), { mode: 0o600 })
+      writeFileSync(path + '.tmp', JSON.stringify(state, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2), { mode: 0o600 })
       renameSync(path + '.tmp', path)
     },
   }
