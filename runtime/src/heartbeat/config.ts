@@ -26,6 +26,13 @@ const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
       enabled: true,
     },
     {
+      // gremlins: QUAI → USDC just in time for credit top-ups
+      name: "gremlin_funding",
+      schedule: "*/5 * * * *",
+      task: "gremlin_funding",
+      enabled: true,
+    },
+    {
       name: "check_credits",
       schedule: "0 */6 * * *",
       task: "check_credits",

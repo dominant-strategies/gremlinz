@@ -44,6 +44,12 @@ export const COLONY_TASK_INTERVALS_MS = {
 } as const;
 
 export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
+  // gremlins: convert just enough QUAI to USDC on Base for the next Conway credit top-up (see gremlins/funding.ts).
+  gremlin_funding: async (ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+    const { runFundingTick } = await import("../gremlins/funding-task.js");
+    return runFundingTick({ creditsCents: ctx.creditBalance, kv: taskCtx.db });
+  },
+
   heartbeat_ping: async (ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
     // Use ctx.creditBalance instead of calling conway.getCreditsBalance()
     const credits = ctx.creditBalance;

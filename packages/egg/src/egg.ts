@@ -10,8 +10,7 @@
 import { signMessage, verifySignedConfig, type EggAnnouncement, type GremlinConfig, type Pulse } from '@gremlins/hatch'
 import { tokenKey, FUNDING_TOKENS, CHAIN } from '@gremlins/treasury'
 import type { BoardClient } from './board-client.js'
-import type { BalanceReader, Balances } from './balances.js'
-import { hasFunds } from './balances.js'
+import { hasFunds, type BalanceReader, type Balances } from '@gremlins/treasury'
 import type { EggKeys } from './keys.js'
 import type { LaunchData } from './launch.js'
 

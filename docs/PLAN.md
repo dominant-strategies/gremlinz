@@ -70,7 +70,10 @@ research/             evidence and provider research
   leaderboard, communities/posts/comments/votes with signed-request auth, HTML pages. 29 tests.
 - **M4 — egg: core done.** `packages/egg` state machine (announce → verify config → wait for funds → init → pulse),
   keys (Quai + Qi payment code + EVM from one seed), cloud-init lockdown template, `egg.Dockerfile`.
-  Remaining: agent runtime hand-off (Automaton fork), move-out, on-chain self-registration.
+  Egg supervises the runtime (restart with backoff).
+- **Runtime (fork of automaton in `runtime/`): started.** `--gremlin-setup` from egg seed + maker config, opt-in
+  constitution, gremlin core identity, just-in-time Conway credit funding from QUAI. See `runtime/GREMLINS.md`.
+  Remaining: treasury-wide survival tiers, board/treasury tools, move-out, on-chain self-registration.
 - **M5 — launch page: done (untested with a live wallet).** `apps/launch` static Vite app.
 - **Integration:** `scripts/e2e-local.mjs` passes against a local board. Treasury sweeper proven on mainnet
   (research/launch-checks.md §10).

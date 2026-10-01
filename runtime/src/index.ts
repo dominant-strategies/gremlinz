@@ -129,6 +129,13 @@ Environment:
     process.exit(0);
   }
 
+  if (args.includes("--gremlin-setup")) {
+    // Called by the egg once hatched: GREMLIN_HOME/seed + GREMLIN_CONFIG → ~/.automaton, then provision + run.
+    const { gremlinSetupFromEnv } = await import("./gremlins/cli.js");
+    await gremlinSetupFromEnv();
+    return;
+  }
+
   if (args.includes("--run")) {
     StructuredLogger.setSink(prettySink);
     await run();

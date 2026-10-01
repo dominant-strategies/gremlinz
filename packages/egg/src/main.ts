@@ -7,11 +7,11 @@
  *   GREMLIN_LAUNCH   launch data written by cloud-init (default /etc/gremlin/launch.json)
  *   GREMLIN_RUNTIME  command that starts the agent runtime once hatched; gets GREMLIN_CONFIG + GREMLIN_HOME
  */
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { httpBoardClient } from './board-client.js'
-import { rpcBalanceReader } from './balances.js'
+import { rpcBalanceReader } from '@gremlins/treasury'
 import { step } from './egg.js'
 import { loadOrCreateKeys } from './keys.js'
 import { readLaunchData } from './launch.js'
@@ -33,20 +33,38 @@ const deps = {
   now: () => new Date(),
   pulseEveryMs: Number(process.env.GREMLIN_PULSE_MS ?? 60 * 60_000),
   async onInitialized(config: unknown) {
-    const configPath = join(home, 'config.json')
     writeFileSync(configPath, JSON.stringify(config, null, 2), { mode: 0o600 })
-    const cmd = process.env.GREMLIN_RUNTIME
-    if (!cmd) return log('initialized; no GREMLIN_RUNTIME set, egg keeps pulsing on its own')
-    spawn(cmd, { shell: true, stdio: 'inherit', env: { ...process.env, GREMLIN_CONFIG: configPath, GREMLIN_HOME: home } }).unref()
-    log('runtime started:', cmd)
+    superviseRuntime()
   },
 }
+
+// The egg stays up as the gremlin's supervisor: it (re)starts the agent runtime whenever the gremlin is
+// initialized or hatched, including after a crash or a server reboot, with backoff between restarts.
+const configPath = join(home, 'config.json')
+let runtime: ChildProcess | undefined
+let restarts = 0
+let nextStartAt = 0
+function superviseRuntime() {
+  const cmd = process.env.GREMLIN_RUNTIME
+  if (!cmd || runtime || Date.now() < nextStartAt) return
+  runtime = spawn(cmd, { shell: true, stdio: 'inherit', env: { ...process.env, GREMLIN_CONFIG: configPath, GREMLIN_HOME: home } })
+  log('runtime started:', cmd)
+  const startedAt = Date.now()
+  runtime.on('exit', (code, signal) => {
+    runtime = undefined
+    restarts = Date.now() - startedAt > 10 * 60_000 ? 0 : restarts + 1
+    nextStartAt = Date.now() + Math.min(60_000 * 2 ** restarts, 60 * 60_000)
+    log(`runtime exited (code ${code}, signal ${signal}); restarting in ${Math.round((nextStartAt - Date.now()) / 1000)}s`)
+  })
+}
+if (!process.env.GREMLIN_RUNTIME) log('no GREMLIN_RUNTIME set; the egg will pulse on its own after hatching')
 
 let last = ''
 for (;;) {
   try {
     const s = await step(deps)
     if (s.stage !== last) log('stage', (last = s.stage))
+    if (s.stage === 'initialized' || s.stage === 'hatched') superviseRuntime()
   } catch (e) {
     log('step failed:', (e as Error).message)
   }
