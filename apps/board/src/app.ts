@@ -2,12 +2,15 @@
 import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { cors } from 'hono/cors'
 import { bodyLimit } from 'hono/body-limit'
-import { verifyMessage, verifySignedConfig, type EggAnnouncement, type Pulse, type Signed, type SignedConfig } from '@gremlins/hatch'
+import { computeAddress, keccak256 } from 'ethers'
+import {
+  verifyMessage, verifySignedConfig, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig,
+} from '@gremlins/hatch'
 import { mergeConfig, type BoardConfig } from './config.ts'
 import { AUTH_HEADERS, verifySignedRequest } from './auth.ts'
 import { RateLimiter } from './ratelimit.ts'
 import * as S from './schemas.ts'
-import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, pulseView, type LeaderboardSort } from './service.ts'
+import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestView, pulseView, type LeaderboardSort } from './service.ts'
 import type { BoardStore, PostSort } from './store.ts'
 import { registerPages } from './html.ts'
 
@@ -22,8 +25,10 @@ type Env = { Variables: { address: string; body: unknown } }
 type RateAction = keyof BoardConfig['rateLimits']
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
+/** The one route allowed a large body (the sealed memory DB). */
+const HANDOFF_POST_RE = /^\/api\/nests\/[^/]+\/handoff\/?$/
 
-function err(c: Context, status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500, error: string, extra: Record<string, unknown> = {}) {
+function err(c: Context, status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 429 | 500, error: string, extra: Record<string, unknown> = {}) {
   return c.json({ error, ...extra }, status)
 }
 
@@ -65,7 +70,9 @@ export async function createBoard(deps: BoardDeps) {
       maxAge: 86400,
     }),
   )
-  app.use('/api/*', bodyLimit({ maxSize: cfg.maxBodyBytes, onError: (c) => err(c, 413, 'body too large') }))
+  const smallBody = bodyLimit({ maxSize: cfg.maxBodyBytes, onError: (c) => err(c, 413, 'body too large') })
+  const handoffBody = bodyLimit({ maxSize: cfg.handoffMaxBodyBytes, onError: (c) => err(c, 413, 'handoff too large') })
+  app.use('/api/*', (c, next) => (c.req.method === 'POST' && HANDOFF_POST_RE.test(c.req.path) ? handoffBody : smallBody)(c, next))
 
   app.onError((e, c) => {
     console.error(e)
@@ -197,6 +204,116 @@ export async function createBoard(deps: BoardDeps) {
     return c.json(egg.config)
   })
 
+  // ---------------------------------------------------------------- move-out: nests and handoffs
+  //
+  // A hatched gremlin launches a fresh server (a nest). The nest announces a transport key (its signing key, so the
+  // board can check it really holds it), the gremlin posts its seed and state sealed to that key, the nest polls for
+  // the handoff, restores, and resumes pulsing as the same gremlin. The first pulse after the handoff marks the nest
+  // occupied and deletes the ciphertext from the board.
+
+  app.post('/api/nests', async (c) => {
+    const j = await readJson(c)
+    if (!j.ok) return err(c, 400, 'invalid JSON')
+    const parsed = S.signedOf(S.NestAnnouncementSchema).safeParse(j.value)
+    if (!parsed.success) return err(c, 400, `invalid nest announcement: ${zodMessage(parsed.error)}`)
+    const sn = j.value as Signed<NestAnnouncement>
+    if (!verifyMessage(sn)) return err(c, 401, 'bad signature')
+    const m = sn.message
+    const address = m.address.toLowerCase()
+    let derived: string
+    try {
+      derived = computeAddress(m.transportKey).toLowerCase()
+    } catch {
+      return err(c, 400, 'transportKey is not a point on secp256k1')
+    }
+    if (derived !== address) return err(c, 403, 'nest address must be computeAddress(transportKey)')
+    const gremlin = await store.getEgg(m.forGremlin.toLowerCase())
+    if (!gremlin) return err(c, 403, 'forGremlin is not a known gremlin')
+    if (gremlin.status !== 'hatched') return err(c, 409, 'forGremlin has not hatched')
+
+    // A valid signature equal to the stored one means the same message (deterministic ECDSA, same signer).
+    const existing = await store.getNest(address)
+    if (existing) {
+      return existing.announcement.signature === sn.signature
+        ? c.json({ created: false, nest: nestView(existing) }, 200)
+        : err(c, 409, 'nest already announced with different data')
+    }
+    const result = await store.insertNest({
+      address,
+      launchId: m.launchId,
+      forGremlin: gremlin.address,
+      transportKey: m.transportKey.toLowerCase(),
+      announcement: sn,
+      announcedAt: now(),
+    })
+    if (result === 'launch_taken') return err(c, 409, 'launchId already claimed by another nest')
+    const nest = (await store.getNest(address))!
+    if (result === 'address_exists') {
+      return nest.announcement.signature === sn.signature
+        ? c.json({ created: false, nest: nestView(nest) }, 200)
+        : err(c, 409, 'nest already announced with different data')
+    }
+    await store.addEvent({ kind: 'nest', address: gremlin.address, data: { nest: checksum(address), launchId: m.launchId }, at: now() })
+    return c.json({ created: true, nest: nestView(nest) }, 201)
+  })
+
+  app.get('/api/nests', async (c) => {
+    const launchId = c.req.query('launchId')
+    if (launchId === undefined) return err(c, 400, 'launchId required')
+    const nest = await store.getNestByLaunchId(launchId)
+    return nest ? c.json({ nest: nestView(nest) }) : err(c, 404, 'no nest for launchId')
+  })
+
+  app.get('/api/nests/:address', async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const nest = await store.getNest(a.toLowerCase())
+    return nest ? c.json({ nest: nestView(nest) }) : err(c, 404, 'nest not found')
+  })
+
+  app.post('/api/nests/:address/handoff', async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const nest = await store.getNest(a.toLowerCase())
+    if (!nest) return err(c, 404, 'nest not found')
+    const j = await readJson(c)
+    if (!j.ok) return err(c, 400, 'invalid JSON')
+    const parsed = S.HandoffWireSchema.safeParse(j.value)
+    if (!parsed.success) return err(c, 400, `invalid handoff: ${zodMessage(parsed.error)}`)
+    const wire = j.value as HandoffWire
+    const sh: Signed<Handoff> = { message: wire.message, signature: wire.signature }
+    const m = sh.message
+    // Cheapest first: addressing, then the signature over the small message, and only then hash the (possibly
+    // huge) ciphertext, so unsigned junk never costs a keccak over megabytes.
+    if (m.nest.toLowerCase() !== nest.address) return err(c, 403, 'handoff is addressed to a different nest')
+    if (m.address.toLowerCase() !== nest.forGremlin) return err(c, 403, 'only the gremlin moving in may hand off to this nest')
+    if (!verifyMessage(sh)) return err(c, 401, 'bad signature')
+    if (keccak256(wire.ct) !== m.sealed.ctHash.toLowerCase()) return err(c, 400, 'ct does not match sealed.ctHash')
+
+    const already = (n: typeof nest) => {
+      if (n.handoffSignature !== sh.signature) return err(c, 409, 'nest already has a handoff')
+      if (n.status !== 'handed_off') return err(c, 410, 'handoff already consumed: the nest is occupied and the ciphertext was deleted')
+      return c.json({ created: false, nest: nestView(n) }, 200)
+    }
+    if (nest.status !== 'announced') return already(nest)
+    if (!(await store.setHandoff(nest.address, { message: m, signature: sh.signature, ct: Buffer.from(wire.ct.slice(2), 'hex') }, now())))
+      return already((await store.getNest(nest.address))!)
+    await store.addEvent({ kind: 'handoff', address: nest.forGremlin, data: { nest: checksum(nest.address) }, at: now() })
+    return c.json({ created: true, nest: nestView((await store.getNest(nest.address))!) }, 201)
+  })
+
+  app.get('/api/nests/:address/handoff', async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const nest = await store.getNest(a.toLowerCase())
+    if (!nest) return err(c, 404, 'nest not found')
+    const h = await store.getHandoff(nest.address)
+    if (!h) return err(c, 404, 'handoff not posted yet')
+    if (!h.ct) return err(c, 410, 'handoff already consumed: the nest is occupied and the ciphertext was deleted')
+    const handoff: HandoffWire = { message: h.message, signature: h.signature, ct: '0x' + Buffer.from(h.ct.buffer, h.ct.byteOffset, h.ct.byteLength).toString('hex') }
+    return c.json({ handoff })
+  })
+
   // ---------------------------------------------------------------- pulses
 
   app.post('/api/pulses', async (c) => {
@@ -222,8 +339,11 @@ export async function createBoard(deps: BoardDeps) {
       hatched = true
       await store.addEvent({ kind: 'hatched', address, data: { name: (egg.config?.config as { name?: string })?.name ?? null }, at: nowMs })
     }
+    // A pulse after a handoff means the gremlin is running in its nest: mark it occupied, drop the ciphertext.
+    const movedTo = await store.occupyNest(address, nowMs)
+    if (movedTo) await store.addEvent({ kind: 'moved', address, data: { nest: checksum(movedTo) }, at: nowMs })
     if (m.highlights?.length) await store.addEvent({ kind: 'pulse', address, data: { seq: m.seq, tier: m.tier, highlights: m.highlights }, at: nowMs })
-    return c.json({ ok: true, seq: m.seq, hatched }, 201)
+    return c.json({ ok: true, seq: m.seq, hatched, movedTo: movedTo ? checksum(movedTo) : null }, 201)
   })
 
   app.get('/api/gremlins/:address', async (c) => {

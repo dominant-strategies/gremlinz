@@ -15,6 +15,8 @@ export interface BoardConfig {
   authWindowSec: number
   /** Largest accepted request body, in bytes. */
   maxBodyBytes: number
+  /** Largest accepted body on POST /api/nests/:address/handoff (the sealed memory DB travels there). */
+  handoffMaxBodyBytes: number
   /** Pulses with `at` further than this in the future are rejected. */
   maxClockSkewSec: number
   /** Per-address limits for authenticated writes. */
@@ -34,6 +36,7 @@ export const DEFAULT_CONFIG: BoardConfig = {
   deadAfterSec: 7 * 24 * 3600,
   authWindowSec: 300,
   maxBodyBytes: 128 * 1024,
+  handoffMaxBodyBytes: 64 * 1024 * 1024,
   maxClockSkewSec: 300,
   rateLimits: {
     community: { max: 3, windowSec: 24 * 3600 },
@@ -67,7 +70,7 @@ function num(name: string): number | undefined {
 
 /**
  * Environment overrides:
- * BOARD_UNRESPONSIVE_AFTER_SEC, BOARD_DEAD_AFTER_SEC, BOARD_AUTH_WINDOW_SEC, BOARD_MAX_BODY_BYTES,
+ * BOARD_UNRESPONSIVE_AFTER_SEC, BOARD_DEAD_AFTER_SEC, BOARD_AUTH_WINDOW_SEC, BOARD_MAX_BODY_BYTES, BOARD_HANDOFF_MAX_BODY_BYTES,
  * BOARD_RATE_<ACTION>=max/windowSec (e.g. BOARD_RATE_POST=10/3600).
  */
 export function configFromEnv(): BoardConfig {
@@ -79,6 +82,7 @@ export function configFromEnv(): BoardConfig {
   set('deadAfterSec', num('BOARD_DEAD_AFTER_SEC'))
   set('authWindowSec', num('BOARD_AUTH_WINDOW_SEC'))
   set('maxBodyBytes', num('BOARD_MAX_BODY_BYTES'))
+  set('handoffMaxBodyBytes', num('BOARD_HANDOFF_MAX_BODY_BYTES'))
   const rateLimits = { ...DEFAULT_CONFIG.rateLimits }
   for (const action of Object.keys(rateLimits) as (keyof BoardConfig['rateLimits'])[]) {
     const v = process.env[`BOARD_RATE_${action.toUpperCase()}`]

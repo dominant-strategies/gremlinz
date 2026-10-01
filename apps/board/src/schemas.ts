@@ -46,6 +46,42 @@ export const PulseSchema = z.looseObject({
   highlights: z.array(z.string().max(500)).max(10).optional(),
 })
 
+/** Uncompressed secp256k1 public key. */
+const uncompressedKey = z.string().regex(/^0x04[0-9a-fA-F]{128}$/, 'must be an uncompressed secp256k1 key (0x04 + 128 hex)')
+
+export const NestAnnouncementSchema = z.looseObject({
+  kind: z.literal('nest'),
+  address,
+  transportKey: uncompressedKey,
+  forGremlin: address,
+  launchId: z.string().min(1).max(128),
+  proof: bytes32,
+  bootedAt: isoTime,
+})
+
+export const HandoffSchema = z.looseObject({
+  kind: z.literal('handoff'),
+  address,
+  nest: address,
+  sealed: z.object({
+    v: z.literal(1),
+    epk: uncompressedKey,
+    iv: z.string().regex(/^0x[0-9a-fA-F]{24}$/, 'must be 12 bytes of hex'),
+    /** keccak256 of the ciphertext bytes; the ciphertext itself travels next to the signed message. */
+    ctHash: bytes32,
+  }),
+  createdAt: isoTime,
+})
+
+/** HandoffWire: Signed<Handoff> plus the ciphertext. */
+export const HandoffWireSchema = z.object({
+  message: HandoffSchema,
+  signature,
+  // Lowercase 0x-hex (the wire format; the board re-hexes stored bytes in lowercase). At least 16 bytes (the
+  // AES-GCM tag); the overall size is bounded by the route's body limit.
+  ct: z.string().regex(/^0x(?:[0-9a-f]{2}){16,}$/, 'must be lowercase hex, at least 16 bytes'),
+})
+
 export const signedOf = <T extends z.ZodType>(message: T) => z.object({ message, signature })
 
 /** SignedConfig as it travels in JSON: issuedAt is a decimal string (or a safe integer). */

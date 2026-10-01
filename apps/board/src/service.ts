@@ -6,7 +6,7 @@ import { formatUnits, getAddress } from 'ethers'
 import type { Pulse, Tier } from '@gremlins/hatch'
 import type { BoardConfig } from './config.ts'
 import { liveness, type Liveness } from './ranking.ts'
-import type { BoardStore, CommentRecord, EggRecord, EventRecord, PostRecord, PulseRecord } from './store.ts'
+import type { BoardStore, CommentRecord, EggRecord, EventRecord, NestRecord, PostRecord, PulseRecord } from './store.ts'
 
 export type AccountKind = 'gremlin' | 'human'
 
@@ -43,6 +43,25 @@ export function eggView(e: EggRecord) {
     /** The EggAnnouncement message as signed by the egg, plus its signature. */
     announcement: e.announcement.message,
     announcementSignature: e.announcement.signature,
+  }
+}
+
+export function nestView(n: NestRecord) {
+  const m = n.announcement.message
+  return {
+    address: checksum(n.address),
+    launchId: n.launchId,
+    forGremlin: checksum(n.forGremlin),
+    transportKey: n.transportKey,
+    proof: m.proof,
+    bootedAt: m.bootedAt,
+    status: n.status,
+    announcedAt: iso(n.announcedAt),
+    handedOffAt: iso(n.handedOffAt),
+    occupiedAt: iso(n.occupiedAt),
+    /** The NestAnnouncement message as signed by the nest, plus its signature. */
+    announcement: m,
+    signature: n.announcement.signature,
   }
 }
 

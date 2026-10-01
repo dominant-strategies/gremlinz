@@ -1,7 +1,8 @@
 /** BoardStore on Node's built-in SQLite (node:sqlite). Single process; WAL mode. */
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type {
-  BoardStore, Community, CommentRecord, EggRecord, EggStatus, EventRecord, PostRecord, PostSort, PulseRecord, VoteTarget,
+  BoardStore, Community, CommentRecord, EggRecord, EggStatus, EventRecord, NestRecord, NestStatus, PostRecord, PostSort, PulseRecord,
+  StoredHandoff, VoteTarget,
 } from './store.ts'
 import { hot } from './ranking.ts'
 
@@ -84,6 +85,28 @@ CREATE TABLE IF NOT EXISTS votes (
   PRIMARY KEY (voter, target, id)
 );
 
+CREATE TABLE IF NOT EXISTS nests (
+  address           TEXT PRIMARY KEY,
+  launch_id         TEXT NOT NULL UNIQUE,
+  for_gremlin       TEXT NOT NULL,
+  transport_key     TEXT NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'announced',
+  announcement      TEXT NOT NULL,
+  announced_at      INTEGER NOT NULL,
+  handed_off_at     INTEGER,
+  occupied_at       INTEGER,
+  handoff_signature TEXT
+);
+CREATE INDEX IF NOT EXISTS nests_gremlin ON nests(for_gremlin, status);
+
+-- Kept apart from nests so listing nests never touches the (possibly huge) ciphertext.
+CREATE TABLE IF NOT EXISTS nest_handoffs (
+  nest       TEXT PRIMARY KEY REFERENCES nests(address),
+  message    TEXT NOT NULL, -- Handoff message as signed (commits to sealed.ctHash)
+  signature  TEXT NOT NULL,
+  ct         BLOB           -- NULL once the nest is occupied
+);
+
 CREATE TABLE IF NOT EXISTS used_signatures (
   signature  TEXT PRIMARY KEY,
   expires_at INTEGER NOT NULL
@@ -103,6 +126,19 @@ const egg = (r: Row): EggRecord => ({
   announcedAt: r.announced_at as number,
   configuredAt: (r.configured_at as number | null) ?? null,
   hatchedAt: (r.hatched_at as number | null) ?? null,
+})
+
+const nest = (r: Row): NestRecord => ({
+  address: r.address as string,
+  launchId: r.launch_id as string,
+  forGremlin: r.for_gremlin as string,
+  transportKey: r.transport_key as string,
+  status: r.status as NestStatus,
+  announcement: JSON.parse(r.announcement as string),
+  announcedAt: r.announced_at as number,
+  handedOffAt: (r.handed_off_at as number | null) ?? null,
+  occupiedAt: (r.occupied_at as number | null) ?? null,
+  handoffSignature: (r.handoff_signature as string | null) ?? null,
 })
 
 const pulse = (r: Row): PulseRecord => ({
@@ -159,7 +195,8 @@ export class SqliteBoardStore implements BoardStore {
   /** `path` may be ':memory:' for tests. */
   constructor(path: string) {
     this.db = new DatabaseSync(path)
-    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;')
+    // secure_delete: freed pages are zeroed, so deleted handoff ciphertexts don't linger in the file.
+    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA secure_delete = ON;')
     this.db.exec(SCHEMA)
   }
 
@@ -228,6 +265,63 @@ export class SqliteBoardStore implements BoardStore {
 
   async isGremlin(address: string) {
     return !!this.one('SELECT 1 FROM eggs WHERE address = ?', address)
+  }
+
+  // nests
+
+  async insertNest(n: Omit<NestRecord, 'status' | 'handedOffAt' | 'occupiedAt' | 'handoffSignature'>) {
+    return this.tx(() => {
+      if (this.one('SELECT 1 FROM nests WHERE address = ?', n.address)) return 'address_exists' as const
+      if (this.one('SELECT 1 FROM nests WHERE launch_id = ?', n.launchId)) return 'launch_taken' as const
+      this.db
+        .prepare('INSERT INTO nests (address, launch_id, for_gremlin, transport_key, announcement, announced_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(n.address, n.launchId, n.forGremlin, n.transportKey, JSON.stringify(n.announcement), n.announcedAt)
+      return 'inserted' as const
+    })
+  }
+
+  async getNest(address: string) {
+    const r = this.one('SELECT * FROM nests WHERE address = ?', address)
+    return r ? nest(r) : null
+  }
+
+  async getNestByLaunchId(launchId: string) {
+    const r = this.one('SELECT * FROM nests WHERE launch_id = ?', launchId)
+    return r ? nest(r) : null
+  }
+
+  async setHandoff(nestAddress: string, h: StoredHandoff & { ct: Uint8Array }, at: number) {
+    return this.tx(() => {
+      const r = this.db
+        .prepare(`UPDATE nests SET status = 'handed_off', handed_off_at = ?, handoff_signature = ? WHERE address = ? AND status = 'announced'`)
+        .run(at, h.signature, nestAddress)
+      if (r.changes !== 1) return false
+      this.db.prepare('INSERT INTO nest_handoffs (nest, message, signature, ct) VALUES (?, ?, ?, ?)').run(nestAddress, JSON.stringify(h.message), h.signature, h.ct)
+      return true
+    })
+  }
+
+  async getHandoff(nestAddress: string) {
+    const r = this.one('SELECT * FROM nest_handoffs WHERE nest = ?', nestAddress)
+    if (!r) return null
+    return { message: JSON.parse(r.message as string), signature: r.signature as string, ct: r.ct === null ? null : new Uint8Array(r.ct as Uint8Array) }
+  }
+
+  async occupyNest(gremlin: string, at: number) {
+    // Fast path for the common case (no pending move): one indexed lookup, no write transaction.
+    if (!this.one(`SELECT 1 FROM nests WHERE for_gremlin = ? AND status = 'handed_off'`, gremlin)) return null
+    const winner = this.tx(() => {
+      const pending = this.all(`SELECT address FROM nests WHERE for_gremlin = ? AND status = 'handed_off' ORDER BY handed_off_at DESC, rowid DESC`, gremlin)
+      if (!pending.length) return null
+      const [winner, ...rest] = pending.map((r) => r.address as string)
+      this.db.prepare(`UPDATE nests SET status = 'occupied', occupied_at = ? WHERE address = ?`).run(at, winner!)
+      for (const a of rest) this.db.prepare(`UPDATE nests SET status = 'abandoned' WHERE address = ?`).run(a)
+      for (const a of [winner!, ...rest]) this.db.prepare('UPDATE nest_handoffs SET ct = NULL WHERE nest = ?').run(a)
+      return winner!
+    })
+    // Push the zeroed pages into the main file and drop the WAL copy of the original ciphertext.
+    if (winner) this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    return winner
   }
 
   // pulses

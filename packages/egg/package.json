@@ -5,13 +5,19 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "bin": { "gremlin-egg": "dist/main.js" },
-  "scripts": { "build": "tsc -b", "start": "node dist/main.js" },
+  "bin": {
+    "gremlin-egg": "dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/main.js"
+  },
   "dependencies": {
     "@gremlins/hatch": "0.1.0",
     "@gremlins/treasury": "0.1.0",
     "ethers": "^6.13.0",
     "quais": "^1.0.0-alpha.40",
-    "zod": "^4.1.0"
+    "zod": "^4.1.0",
+    "@gremlins/hosting": "0.1.0"
   }
 }

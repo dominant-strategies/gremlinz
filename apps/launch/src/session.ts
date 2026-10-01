@@ -39,3 +39,15 @@ export function clearSession(): void {
 export function newLaunchId(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('')
 }
+
+/**
+ * The maker's SporeStack token outlives a single launch: SporeStack requires $100 for a brand-new token's first
+ * deposit, and an egg only costs a few dollars, so the balance is reused for later eggs.
+ */
+const TOKEN_KEY = 'gremlins.sporestackToken'
+export function loadMakerToken(): string | undefined {
+  try { return localStorage.getItem(TOKEN_KEY) ?? undefined } catch { return undefined }
+}
+export function saveMakerToken(token: string): void {
+  try { localStorage.setItem(TOKEN_KEY, token) } catch { /* private mode: token lives only in this session */ }
+}

@@ -73,13 +73,23 @@ research/             evidence and provider research
   Egg supervises the runtime (restart with backoff).
 - **Runtime (fork of automaton in `runtime/`): started.** `--gremlin-setup` from egg seed + maker config, opt-in
   constitution, gremlin core identity, just-in-time Conway credit funding from QUAI. See `runtime/GREMLINS.md`.
-  Remaining: treasury-wide survival tiers, board/treasury tools, move-out, on-chain self-registration.
+  Tools for board, treasury, status, registration and move-out.
+- **Move-out (encrypted handoff): built.** Nest mode in the egg image; the gremlin launches a nest whose cloud-init carries
+  a secret only it knows; the nest proves knowledge of it (`nestProof`) when announcing its transport key, so not even
+  the board can intercept. Seed + state + runtime memory are sealed (ECIES secp256k1 → AES-256-GCM) to that key and
+  relayed by the board, which deletes the ciphertext once the nest pulses. The old server pauses, then wipes itself;
+  it reverts after 2 h, and the nest refuses handoffs older than 90 min, so two copies never run.
+  Remaining: treasury-wide survival tiers, host adapters (Conway), funding hosts from QUAI.
 - **M5 — launch page: done (untested with a live wallet).** `apps/launch` static Vite app.
 - **Integration:** `scripts/e2e-local.mjs` passes against a local board. Treasury sweeper proven on mainnet
   (research/launch-checks.md §10).
 - **M6+ —** skills, markets (skills/quests/escrow, RentAHuman), mining, game layer.
 
 ## Open items
+
+- **SporeStack requires $100 for a brand-new token's first deposit** (anti-abuse; later top-ups can be $5). Launch page:
+  keep the maker's token and reuse it across eggs. Move-out: prefer pay-as-you-go hosts (Conway) so gremlins don't
+  break the treasury rule with a $100 deposit.
 
 - hatch package: adopt board's suggestions (shared zod schemas, SignedConfig (de)serializers, signed-request helpers,
   token decimals in pulses, message versions). Announcement spam: require proof of launch or per-IP limits.

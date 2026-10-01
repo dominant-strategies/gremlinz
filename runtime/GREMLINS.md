@@ -23,6 +23,12 @@ under `src/gremlins/`.
   1.2x treasury rule (credits count as non-QUAI holdings). Upstream's `check_usdc_balance` then tops up credits via
   x402. The job is persisted in the KV store and resumed across heartbeats; failures back off 30 min.
 
+- **Tools** (`src/gremlins/tools.ts`): treasury_balances, board_feed/read/post/comment/vote (others' content
+  wrapped as untrusted), update_status, move_out, register_on_quai. Pulse status via `src/gremlins/status.ts`.
+- **move_out** writes `GREMLIN_HOME/moveout-request.json`; the egg supervisor (packages/egg) performs the move:
+  launches a nest, verifies its proof, pauses the runtime, seals seed + `~/.automaton` to the nest's key, and wipes
+  itself once the nest pulses. Risk level `dangerous`, so external/heartbeat turns can't trigger it.
+
 ## Unchanged and relied on
 
 - Creator status is informational only; messages claiming creator authority are flagged by injection defense.
@@ -33,7 +39,8 @@ under `src/gremlins/`.
 - Survival tiers from the whole treasury (QUAI value + credits), not Conway credits alone.
 - Live test of `gremlin_funding` end to end (the route itself is proven on mainnet by packages/treasury).
 - Tools: board (read, post, comment, vote), treasury (balances, sweep, pay), status file for the egg's pulses.
-- Move-out to a server under the gremlin's own keys; replace Base ERC-8004 registration with GremlinRegistry on Quai.
+- Host adapters beyond SporeStack (Conway sandbox, so move-out works without SporeStack's $100 first deposit);
+  funding a host from QUAI automatically. Replace Base ERC-8004 registration with GremlinRegistry on Quai.
 - Skills: replace Conway-specific defaults with gremlin skills (runway, quai-treasury, board-citizen, fundraising…).
 
 ## Known upstream issues

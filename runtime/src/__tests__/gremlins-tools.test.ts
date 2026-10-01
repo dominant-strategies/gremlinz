@@ -49,7 +49,7 @@ describe("gremlin tools", () => {
 
   it("exposes the expected tool set", () => {
     expect(createGremlinTools().map((t) => t.name)).toEqual([
-      "treasury_balances", "board_feed", "board_read", "board_post", "board_comment", "board_vote", "update_status", "register_on_quai",
+      "treasury_balances", "board_feed", "board_read", "board_post", "board_comment", "board_vote", "update_status", "move_out", "register_on_quai",
     ]);
   });
 });

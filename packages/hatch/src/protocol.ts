@@ -48,7 +48,43 @@ export interface Pulse {
   highlights?: string[]
 }
 
-export type BoardMessage = EggAnnouncement | Pulse
+/**
+ * A nest is a fresh server the gremlin launched for itself. It announces a transport key; the gremlin seals its
+ * seed and state to that key. `proof` = nestProof(nestSecret, transportKey, forGremlin) (see seal.ts) shows the
+ * nest knows the secret only the gremlin and the host saw.
+ */
+export interface NestAnnouncement {
+  kind: 'nest'
+  /** The nest's ephemeral signing address (EVM), derived from its transport key. */
+  address: string
+  /** Uncompressed secp256k1 public key the gremlin seals to. */
+  transportKey: string
+  /** EVM address of the gremlin moving in. */
+  forGremlin: string
+  launchId: string
+  proof: string
+  bootedAt: string
+}
+
+/**
+ * The gremlin's sealed seed and state for a nest. Signed by the gremlin (address = gremlin's EVM address).
+ * The signature covers `ctHash` (keccak256 of the ciphertext bytes), not the ciphertext itself, so verifying a
+ * multi-megabyte handoff is cheap. The ciphertext travels next to the signed message: see `HandoffWire`.
+ */
+export interface Handoff {
+  kind: 'handoff'
+  address: string
+  nest: string
+  sealed: { v: 1; epk: string; iv: string; ctHash: string }
+  createdAt: string
+}
+
+/** What is posted to and served by the board: the signed handoff plus the ciphertext (lowercase 0x-hex). */
+export interface HandoffWire extends Signed<Handoff> {
+  ct: string
+}
+
+export type BoardMessage = EggAnnouncement | Pulse | NestAnnouncement | Handoff
 
 /** Hash committed to by a signed message: keccak of canonical JSON. */
 export function messageDigest(message: BoardMessage): string {

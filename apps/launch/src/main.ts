@@ -10,7 +10,7 @@ import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
 import { sporestack, newToken, unusableSshKey, type Currency, type Provider } from '@gremlins/hosting'
 import { boardApi } from './board.js'
 import { connect, signConfigWithPelagus } from './pelagus.js'
-import { clearSession, loadSession, newLaunchId, saveSession, type Session } from './session.js'
+import { clearSession, loadMakerToken, loadSession, newLaunchId, saveMakerToken, saveSession, type Session } from './session.js'
 
 const env = import.meta.env
 const BOARD = env.VITE_BOARD_URL as string
@@ -98,15 +98,24 @@ function stepConfigure() {
 }
 
 // ── 3–4. pay for the egg server ───────────────────────────────────────────────
+/** SporeStack's anti-abuse rule: a brand-new token's first deposit must be at least $100; later ones $5. */
+const FIRST_DEPOSIT_USD = 100
+const MIN_TOPUP_USD = 5
+
 async function stepPay() {
-  s.sporestackToken ??= newToken()
+  s.sporestackToken ??= loadMakerToken() ?? newToken()
+  saveMakerToken(s.sporestackToken)
   save()
   const ss = sporestack({ token: s.sporestackToken })
   const quote = await ss.quote(FLAVOR, DAYS, PROVIDER)
-  const dollars = Math.max(5, Math.ceil(quote.cents / 100))
+  const balance = await ss.balanceCents().catch(() => 0)
+  const everFunded = (await ss.invoices().catch(() => [])).some((i) => i.paid > 0)
+  const shortfall = Math.ceil(Math.max(0, quote.cents - balance) / 100)
+  const dollars = everFunded ? Math.max(MIN_TOPUP_USD, shortfall) : Math.max(FIRST_DEPOSIT_USD, shortfall)
   show(`<h2>Pay for the egg's first server</h2>
-    <p>${DAYS} days of a small server costs about <b>$${(quote.cents / 100).toFixed(2)}</b> (minimum top-up $5).
+    <p>${DAYS} days of a small server costs about <b>$${(quote.cents / 100).toFixed(2)}</b>.
        This only buys the egg's nursery; your gremlin moves to a server it pays for itself once it hatches.</p>
+    ${everFunded ? '' : `<p class="muted">The host (SporeStack) requires at least $${FIRST_DEPOSIT_USD} for a new account's first deposit. The rest stays on your hosting token in this browser and pays for future eggs.</p>`}
     <label>Pay with <select id="cur"><option value="usdt">USDT</option><option value="btc">BTC</option><option value="xmr">XMR</option></select></label>
     <button id="inv">Create invoice for $${dollars}</button>
     <div id="pay"></div>`)
@@ -189,7 +198,8 @@ async function route() {
     if (!s.maker) return stepConnect()
     if (!s.config) return stepConfigure()
     if (!s.machineId) {
-      const ss = sporestack({ token: (s.sporestackToken ??= newToken()) })
+      const ss = sporestack({ token: (s.sporestackToken ??= loadMakerToken() ?? newToken()) })
+      saveMakerToken(s.sporestackToken)
       save()
       const quote = await ss.quote(FLAVOR, DAYS, PROVIDER)
       if ((await ss.balanceCents().catch(() => 0)) < quote.cents) return await stepPay()

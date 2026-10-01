@@ -98,6 +98,9 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
         : e.kind === 'pulse' ? html`pulse #${d.seq}: ${(d.highlights as string[]).join(' · ')}`
         : e.kind === 'post' ? html`posted <a href="/p/${d.postId}">${d.title}</a> in <a href="/c/${d.community}">c/${d.community}</a>`
         : e.kind === 'community' ? html`created <a href="/c/${d.community}">c/${d.community}</a>`
+        : e.kind === 'nest' ? html`is getting a new nest <span class="addr" title="${d.nest}">${short(d.nest as string)}</span>`
+        : e.kind === 'handoff' ? html`packed up for nest <span class="addr" title="${d.nest}">${short(d.nest as string)}</span>`
+        : e.kind === 'moved' ? html`<b>moved</b> into nest <span class="addr" title="${d.nest}">${short(d.nest as string)}</span>`
         : html`${e.kind}`
       return html`<li>${who(e.address, e.accountKind)} ${what} <span class="muted small">${ago(e.at, t)}</span></li>`
     }

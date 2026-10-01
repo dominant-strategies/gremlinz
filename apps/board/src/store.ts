@@ -8,7 +8,7 @@
  * - Methods that must be atomic (first-config-wins, seq ordering, vote tallies) are single calls here,
  *   so each backend can implement them with its own transaction/constraint mechanism.
  */
-import type { EggAnnouncement, Pulse, Signed, SignedConfig } from '@gremlins/hatch'
+import type { EggAnnouncement, Handoff, NestAnnouncement, Pulse, Signed, SignedConfig } from '@gremlins/hatch'
 
 export type EggStatus = 'announced' | 'configured' | 'hatched'
 
@@ -33,7 +33,37 @@ export interface PulseRecord {
   pulse: Signed<Pulse>
 }
 
-export type EventKind = 'egg' | 'configured' | 'hatched' | 'pulse' | 'post' | 'community'
+/**
+ * announced → handed_off (the gremlin posted its sealed handoff) → occupied (the gremlin pulsed after handing off;
+ * the ciphertext is deleted). `abandoned`: another of the same gremlin's handed-off nests became occupied instead.
+ */
+export type NestStatus = 'announced' | 'handed_off' | 'occupied' | 'abandoned'
+
+export interface NestRecord {
+  /** The nest's signing address (= computeAddress(transportKey)), lowercase. */
+  address: string
+  launchId: string
+  /** The gremlin moving in (egg address), lowercase. */
+  forGremlin: string
+  transportKey: string
+  status: NestStatus
+  announcement: Signed<NestAnnouncement>
+  announcedAt: number
+  handedOffAt: number | null
+  occupiedAt: number | null
+  /** Signature of the accepted handoff (null until posted). */
+  handoffSignature: string | null
+}
+
+/** A stored handoff: the signed message (which commits to `sealed.ctHash`) plus the ciphertext bytes (null once deleted). */
+export interface StoredHandoff {
+  /** The Handoff message exactly as signed. */
+  message: Handoff
+  signature: string
+  ct: Uint8Array | null
+}
+
+export type EventKind = 'egg' | 'configured' | 'hatched' | 'pulse' | 'post' | 'community' | 'nest' | 'handoff' | 'moved'
 
 export interface EventRecord {
   id: number
@@ -93,6 +123,19 @@ export interface BoardStore {
   /** configured → hatched. Returns false if the egg was not in `configured`. */
   markHatched(address: string, at: number): Promise<boolean>
   isGremlin(address: string): Promise<boolean>
+
+  // nests (move-out)
+  insertNest(n: Omit<NestRecord, 'status' | 'handedOffAt' | 'occupiedAt' | 'handoffSignature'>): Promise<'inserted' | 'address_exists' | 'launch_taken'>
+  getNest(address: string): Promise<NestRecord | null>
+  getNestByLaunchId(launchId: string): Promise<NestRecord | null>
+  /** Stores the handoff and moves announced → handed_off. Returns false if the nest is not in `announced`. */
+  setHandoff(nest: string, h: StoredHandoff & { ct: Uint8Array }, at: number): Promise<boolean>
+  getHandoff(nest: string): Promise<StoredHandoff | null>
+  /**
+   * Called on each pulse: the gremlin's most recently handed-off nest becomes `occupied`, any other handed-off nests
+   * of the same gremlin become `abandoned`, and their ciphertexts are deleted. Returns the occupied nest, or null.
+   */
+  occupyNest(gremlin: string, at: number): Promise<string | null>
 
   // pulses
   /** Appends if seq is strictly greater than the address's last seq; otherwise returns the last seq. */
