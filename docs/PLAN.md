@@ -79,7 +79,17 @@ research/             evidence and provider research
   the board can intercept. Seed + state + runtime memory are sealed (ECIES secp256k1 → AES-256-GCM) to that key and
   relayed by the board, which deletes the ciphertext once the nest pulses. The old server pauses, then wipes itself;
   it reverts after 2 h, and the nest refuses handoffs older than 90 min, so two copies never run.
-  Remaining: treasury-wide survival tiers, host adapters (Conway), funding hosts from QUAI.
+  Host adapters: **Conway** (default; sandbox paid from the gremlin's own Conway credits; installs checksum-pinned
+  Node 22 + the checksum-pinned release bundle; nest secret goes via the files API, never the script) and SporeStack.
+  Remaining: treasury-wide survival tiers, funding a SporeStack token from QUAI.
+
+## Build & release
+
+- Dev Docker: Colima (`colima start --vm-type vz --vz-rosetta`) + Docker CLI + buildx via Homebrew.
+- `scripts/build-release.sh linux/amd64 <tag>` builds the egg image and exports the identical `/app` tree as
+  `release/gremlin-linux-amd64.tgz` (+ sha256) for Docker-less hosts. Launch data pins both: `image@sha256:…` and
+  `artifact { url, sha256 }`.
+- Registry: ghcr.io primary, Docker Hub mirror (safe because everything pins by digest).
 - **M5 — launch page: done (untested with a live wallet).** `apps/launch` static Vite app.
 - **Integration:** `scripts/e2e-local.mjs` passes against a local board. Treasury sweeper proven on mainnet
   (research/launch-checks.md §10).

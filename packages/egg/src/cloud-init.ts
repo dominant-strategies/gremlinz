@@ -10,6 +10,8 @@ import type { EggLaunchData, NestLaunchData } from './launch.js'
 
 export interface CloudInitOptions {
   launch: Omit<z.input<typeof EggLaunchData>, 'image'> | Omit<z.input<typeof NestLaunchData>, 'image'>
+  /** Release bundle of the same build, recorded so the gremlin can later move to Docker-less hosts. */
+  artifact?: { url: string; sha256: string }
   /** Image reference pinned by digest, e.g. ghcr.io/org/egg@sha256:… */
   image: string
 }
@@ -19,7 +21,7 @@ const DIGEST = /^[a-z0-9./_-]+(:[0-9]+)?(\/[a-z0-9._-]+)*@sha256:[0-9a-f]{64}$/
 export function renderCloudInit(opts: CloudInitOptions): string {
   if (!DIGEST.test(opts.image)) throw new Error('egg image must be pinned by sha256 digest')
   // The server records its own image so a gremlin can launch nests from the same build.
-  const launchJson = JSON.stringify({ ...opts.launch, image: opts.image })
+  const launchJson = JSON.stringify({ ...opts.launch, image: opts.image, ...(opts.artifact ? { artifact: opts.artifact } : {}) })
   return `#cloud-config
 package_update: true
 packages: [docker.io]

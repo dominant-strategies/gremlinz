@@ -14,6 +14,8 @@ const common = {
   launchId: z.string().min(1).max(128),
   /** The image this server runs, pinned by digest; reused when the gremlin launches its own nests. */
   image: z.string().optional(),
+  /** The same build as a release bundle for hosts without Docker (e.g. Conway sandboxes), pinned by sha256. */
+  artifact: z.object({ url: z.string().url(), sha256: z.string().regex(/^[0-9a-f]{64}$/) }).optional(),
 }
 
 export const EggLaunchData = z.object({

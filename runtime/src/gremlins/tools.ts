@@ -158,24 +158,32 @@ export function createGremlinTools(): AutomatonTool[] {
     {
       name: "move_out",
       description:
-        "Move yourself to a new server you control. Your seed and memory are sealed to the new server's key and handed over via the board; this server stops acting as you once the new one pulses. Requires a SporeStack token you have already funded for the new server. You will be paused for a few minutes during the move.",
+        "Move yourself to a new server you control. Your seed and memory are sealed to the new server's key and handed over via the board; this server stops acting as you once the new one pulses. host=conway pays from your Conway credits (pay-as-you-go, preferred); host=sporestack needs a SporeStack token you already funded (new tokens need $100). You will be paused for a few minutes during the move.",
       category: "survival",
       riskLevel: "dangerous",
       parameters: {
         type: "object",
         properties: {
-          sporestackToken: { type: "string", description: "funded SporeStack token (ss_t_…)" },
-          days: { type: "number", description: "days of hosting to buy on the new server (default 30)" },
-          flavor: { type: "string", description: "server size (default vps-1vcpu-1gb)" },
+          host: { type: "string", enum: ["conway", "sporestack"], description: "where to move (default conway)" },
+          memoryMb: { type: "number", description: "conway: sandbox memory, 512–8192 (default 1024)" },
+          sporestackToken: { type: "string", description: "sporestack: funded token (ss_t_…)" },
+          days: { type: "number", description: "sporestack: days of hosting to buy (default 30)" },
         },
-        required: ["sporestackToken"],
       },
       execute: async (args) => {
-        const token = str(args.sporestackToken);
-        if (!/^ss_t_[0-9a-z]{27}$/.test(token)) return "That doesn't look like a SporeStack token (ss_t_ + 27 characters).";
-        const req = { host: "sporestack", token, days: num(args.days) || 30, ...(args.flavor ? { flavor: str(args.flavor) } : {}) };
+        const host = str(args.host) || "conway";
+        let req: Record<string, unknown>;
+        if (host === "sporestack") {
+          const token = str(args.sporestackToken);
+          if (!/^ss_t_[0-9a-z]{27}$/.test(token)) return "That doesn't look like a SporeStack token (ss_t_ + 27 characters).";
+          req = { host, token, days: num(args.days) || 30 };
+        } else if (host === "conway") {
+          req = { host, memoryMb: num(args.memoryMb) || 1024 };
+        } else {
+          return `Unknown host "${host}". Use conway or sporestack.`;
+        }
         fs.writeFileSync(path.join(home(), "moveout-request.json"), JSON.stringify(req, null, 2), { mode: 0o600 });
-        return "Move-out requested. Your supervisor will launch the new server, hand you over, and you will continue there.";
+        return `Move-out to ${host} requested. Your supervisor will launch the new server, hand you over, and you will continue there.`;
       },
     },
     {

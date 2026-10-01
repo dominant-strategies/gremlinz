@@ -32,6 +32,8 @@ export interface MoveOutState {
 
 export interface NestLaunchRequest {
   mode: 'nest'
+  image?: string
+  artifact?: { url: string; sha256: string }
   forGremlin: string
   nestSecret: string
   boardUrl: string
