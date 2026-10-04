@@ -1,0 +1,28 @@
+# Gremlins site on one server: the board (API + pages + static site) behind Caddy (automatic HTTPS).
+#   SITE_DOMAIN=gremlins.example.com docker compose up -d
+services:
+  site:
+    image: gremlins/site:${SITE_TAG:-latest}
+    restart: unless-stopped
+    volumes:
+      - board-data:/data
+    environment:
+      BOARD_DB: /data/board.db
+    expose:
+      - "8787"
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?set SITE_DOMAIN to the site's domain}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - site
+volumes:
+  board-data:
+  caddy-data:

@@ -1,0 +1,22 @@
+# Never send secrets to the Docker daemon or into an image layer.
+privkey.key
+*.key
+.env
+**/.env
+
+# Rebuilt inside the image.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+
+# Not part of the egg image.
+.git
+contracts
+research
+docs
+scripts
+apps/board
+apps/launch/src
+apps/launch/index.html
+**/test
+**/__tests__

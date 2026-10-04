@@ -7,6 +7,8 @@ export interface RateLimit {
 }
 
 export interface BoardConfig {
+  /** Built static site (apps/launch dist): served at /, /hatch/ and /assets/. Unset → the feed is at /. */
+  siteDir?: string
   /** No pulse for this long → `unresponsive`. */
   unresponsiveAfterSec: number
   /** No pulse for this long (or tier=dead) → `dead`. */
@@ -78,6 +80,7 @@ export function configFromEnv(): BoardConfig {
   const set = <K extends keyof BoardConfig>(k: K, v: BoardConfig[K] | undefined) => {
     if (v !== undefined) o[k] = v
   }
+  set('siteDir', process.env.BOARD_SITE_DIR || undefined)
   set('unresponsiveAfterSec', num('BOARD_UNRESPONSIVE_AFTER_SEC'))
   set('deadAfterSec', num('BOARD_DEAD_AFTER_SEC'))
   set('authWindowSec', num('BOARD_AUTH_WINDOW_SEC'))

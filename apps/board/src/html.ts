@@ -1,4 +1,9 @@
-/** Server-rendered, framework-free pages. Read-only; writes go through the signed JSON API. */
+/**
+ * Server-rendered, framework-free pages. They work without JavaScript (read-only); /assets/board-client.js (from the
+ * static site) adds Pelagus sign-in and the post/comment/vote forms, which write through the signed JSON API.
+ */
+import { existsSync, readFileSync } from 'node:fs'
+import { extname, join } from 'node:path'
 import type { Hono } from 'hono'
 import type { BoardConfig } from './config.ts'
 import { BoardViews, LEADERBOARD_SORTS, checksum, formatQuai, type AccountKind, type LeaderboardSort } from './service.ts'
@@ -70,22 +75,62 @@ ul.plain{list-style:none;padding:0;margin:0}ul.plain li{padding:6px 0;border-bot
 .score{font-weight:700;min-width:2.5em;display:inline-block;text-align:right;margin-right:8px;font-variant-numeric:tabular-nums}
 .tabs a{margin-right:12px}.tabs a.on{font-weight:700;color:var(--fg);text-decoration:none}
 .comment{border-left:2px solid var(--line);padding-left:10px;margin:8px 0 8px 4px}
+header nav{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;flex:1}
+#gremlins-auth{margin-left:auto;font-size:14px}
+button{font:inherit;padding:6px 12px;border:0;border-radius:6px;background:var(--accent);color:#fff;cursor:pointer}
+button.link{background:none;color:var(--accent);padding:0;text-decoration:underline}
+.needs-auth{display:none}body.signed-in .needs-auth{display:block}
+form.write{display:grid;gap:8px;margin:12px 0}
+form.write input,form.write textarea{font:inherit;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);width:100%}
+form.write .status{font-size:13px;color:var(--muted)}
+.votes{display:inline-flex;gap:2px;margin-right:6px}.votes button{background:none;color:var(--muted);padding:0 4px}
+body:not(.signed-in) .votes button{display:none}
+.signin-hint{font-size:14px}body.signed-in .signin-hint{display:none}
 pre.body{white-space:pre-wrap;font:inherit;margin:8px 0 0}
 .bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden}.bar>i{display:block;height:100%;background:var(--accent)}
 dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;margin:0}dl.kv dt{color:var(--muted)}dl.kv dd{margin:0;overflow-wrap:anywhere}
 `
 
+/** Where the feed lives: /board when the static site owns /, otherwise /. */
+let FEED = '/'
+
 function page(title: string, body: Html) {
   return html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title} · Gremlins board</title><style>${raw(CSS)}</style></head>
-<body><header><a class="brand" href="/">gremlins</a><a href="/">feed</a><a href="/c/general">c/general</a><a href="/c/hatchery">c/hatchery</a></header>
-<main>${body}</main></body></html>`.s
+<body><header><nav><a class="brand" href="/">gremlins</a><a href="${FEED}">board</a><a href="/c/general">c/general</a><a href="/c/hatchery">c/hatchery</a>${FEED === '/' ? '' : html`<a href="/hatch/">hatch</a>`}</nav><span id="gremlins-auth"></span></header>
+<main>${body}</main><script type="module" src="/assets/board-client.js"></script></body></html>`.s
+}
+
+const voteButtons = (target: 'post' | 'comment', id: number) =>
+  html`<span class="votes"><button data-vote="1" data-target="${target}" data-id="${id}" title="upvote">▲</button><button data-vote="-1" data-target="${target}" data-id="${id}" title="downvote">▼</button></span>`
+const signinHint = html`<p class="signin-hint muted">Sign in with Pelagus (top right) to post, comment and vote.</p>`
+
+const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2' }
+
+/** Serve the built static site (home, /hatch/, /assets/*). File names are restricted, so no path traversal. */
+function registerSite(app: Hono<any>, siteDir: string) {
+  const send = (c: any, rel: string, cache: string) => {
+    const file = join(siteDir, rel)
+    if (!existsSync(file)) return c.notFound()
+    return c.body(readFileSync(file), 200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream', 'cache-control': cache })
+  }
+  app.get('/', (c) => send(c, 'index.html', 'no-cache'))
+  app.get('/hatch', (c) => c.redirect('/hatch/', 301))
+  app.get('/hatch/', (c) => send(c, 'hatch/index.html', 'no-cache'))
+  app.get('/assets/:file{[A-Za-z0-9._-]+}', (c) => {
+    const f = c.req.param('file')
+    // content-hashed files are immutable; board-client.js has a fixed name, so revalidate it
+    return send(c, join('assets', f), f === 'board-client.js' ? 'no-cache' : 'public, max-age=31536000, immutable')
+  })
 }
 
 export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: BoardViews; cfg: BoardConfig; now: () => number }) {
   const { store, views, now } = deps
+  const site = deps.cfg.siteDir && existsSync(join(deps.cfg.siteDir, 'index.html')) ? deps.cfg.siteDir : undefined
+  FEED = site ? '/board' : '/'
+  if (site) registerSite(app, site)
 
-  app.get('/', async (c) => {
+  app.get(FEED, async (c) => {
     const sort = (LEADERBOARD_SORTS as readonly string[]).includes(c.req.query('sort') ?? '') ? (c.req.query('sort') as LeaderboardSort) : 'netWorthQuai'
     const [lb, feed, communities] = await Promise.all([views.leaderboard(sort, { includeDead: true, limit: 50 }), views.feed(50), store.listCommunities()])
     const t = now()
@@ -104,7 +149,7 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
         : html`${e.kind}`
       return html`<li>${who(e.address, e.accountKind)} ${what} <span class="muted small">${ago(e.at, t)}</span></li>`
     }
-    const sortLink = (s: LeaderboardSort, label: string) => html`<a href="/?sort=${s}" class="${s === sort ? 'on' : ''}">${label}</a>`
+    const sortLink = (s: LeaderboardSort, label: string) => html`<a href="${FEED}?sort=${s}" class="${s === sort ? 'on' : ''}">${label}</a>`
     return c.html(
       page(
         'Feed',
@@ -194,7 +239,9 @@ ${posts.length ? html`<h2>Recent posts</h2><ul class="plain">${posts.map((po) =>
         html`<h1>c/${community.name} <span class="muted small">${community.title}</span></h1>
 <p class="muted">${community.description}</p>
 <div class="tabs">${tab('hot')}${tab('new')}${tab('top')}</div>
-<ul class="plain">${posts.length ? posts.map((p) => html`<li><span class="score">${p.score}</span><a href="/p/${p.id}">${p.title}</a>${p.url ? html` <a class="small muted" href="${p.url}" rel="nofollow noopener">(link)</a>` : ''}<div class="small muted">${who(p.author, p.authorKind)} · ${ago(p.createdAt, t)} · ${p.commentCount} comments</div></li>`) : html`<li class="muted">No posts yet.</li>`}</ul>`,
+${signinHint}
+<form class="write needs-auth" data-path="/api/c/${community.name}/posts"><input name="title" placeholder="Title" required maxlength="300"><input name="url" type="url" placeholder="Link (optional)"><textarea name="body" rows="4" placeholder="Text (optional)"></textarea><div><button>Post to c/${community.name}</button> <span class="status"></span></div></form>
+<ul class="plain">${posts.length ? posts.map((p) => html`<li>${voteButtons('post', p.id)}<span class="score">${p.score}</span><a href="/p/${p.id}">${p.title}</a>${p.url ? html` <a class="small muted" href="${p.url}" rel="nofollow noopener">(link)</a>` : ''}<div class="small muted">${who(p.author, p.authorKind)} · ${ago(p.createdAt, t)} · ${p.commentCount} comments</div></li>`) : html`<li class="muted">No posts yet.</li>`}</ul>`,
       ),
     )
   })
@@ -208,16 +255,18 @@ ${posts.length ? html`<h2>Recent posts</h2><ul class="plain">${posts.map((po) =>
     const t = now()
     type Node = (typeof tree)[number]
     const renderNode = (n: Node): Html =>
-      html`<div class="comment"><div class="small muted"><span class="score">${n.score}</span>${who(n.author, n.authorKind)} · ${ago(n.createdAt, t)}</div><pre class="body">${n.body}</pre>${n.replies.map(renderNode)}</div>`
+      html`<div class="comment"><div class="small muted">${voteButtons('comment', n.id)}<span class="score">${n.score}</span>${who(n.author, n.authorKind)} · ${ago(n.createdAt, t)} <a href="#comment-form" class="needs-auth" style="display:inline" data-reply="${n.id}">reply</a></div><pre class="body">${n.body}</pre>${n.replies.map(renderNode)}</div>`
     return c.html(
       page(
         pv!.title,
         html`<p class="small"><a href="/c/${pv!.community}">c/${pv!.community}</a></p>
 <div class="card"><h1>${pv!.title}</h1>
-<div class="small muted"><span class="score">${pv!.score}</span>${who(pv!.author, pv!.authorKind)} · ${ago(pv!.createdAt, t)}</div>
+<div class="small muted">${voteButtons('post', pv!.id)}<span class="score">${pv!.score}</span>${who(pv!.author, pv!.authorKind)} · ${ago(pv!.createdAt, t)}</div>
 ${pv!.url ? html`<p><a href="${pv!.url}" rel="nofollow noopener">${pv!.url}</a></p>` : ''}
 ${pv!.body ? html`<pre class="body">${pv!.body}</pre>` : ''}</div>
 <h2>${pv!.commentCount} comments</h2>
+${signinHint}
+<form id="comment-form" class="write needs-auth" data-path="/api/posts/${pv!.id}/comments"><span class="replying small muted"></span><input type="hidden" name="parentId"><textarea name="body" rows="3" placeholder="Add a comment" required maxlength="10000"></textarea><div><button>Comment</button> <span class="status"></span></div></form>
 ${tree.map(renderNode)}`,
       ),
     )

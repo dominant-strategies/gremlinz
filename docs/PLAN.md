@@ -85,12 +85,16 @@ research/             evidence and provider research
 
 ## Build & release
 
-- Dev Docker: Colima (`colima start --vm-type vz --vz-rosetta`) + Docker CLI + buildx via Homebrew.
+- Dev tools (Homebrew): Node 26, Colima (`colima start --vm-type vz --vz-rosetta`), Docker CLI, buildx, compose.
 - `scripts/build-release.sh linux/amd64 <tag>` builds the egg image and exports the identical `/app` tree as
   `release/gremlin-linux-amd64.tgz` (+ sha256) for Docker-less hosts. Launch data pins both: `image@sha256:…` and
   `artifact { url, sha256 }`.
 - Registry: ghcr.io primary, Docker Hub mirror (safe because everything pins by digest).
-- **M5 — launch page: done (untested with a live wallet).** `apps/launch` static Vite app.
+- **M5 — site: done (untested with a live wallet).** `apps/launch` builds the whole static site: home (`/`), hatch
+  flow (`/hatch/`), and `board-client.js` (Pelagus sign-in + post/comment/reply/vote on the board's pages). The board
+  serves it on one origin (`BOARD_SITE_DIR`); its own pages move to `/board`, `/c/…`, `/p/…`, `/g/…`.
+- **Deploy:** `site.Dockerfile` (board + site, Node 24), `deploy/compose.yaml` + `deploy/Caddyfile` (automatic HTTPS),
+  `scripts/deploy-site.sh user@host` (builds, copies the image over SSH, starts it). Tested locally behind Caddy.
 - **Integration:** `scripts/e2e-local.mjs` passes against a local board. Treasury sweeper proven on mainnet
   (research/launch-checks.md §10).
 - **M6+ —** skills, markets (skills/quests/escrow, RentAHuman), mining, game layer.

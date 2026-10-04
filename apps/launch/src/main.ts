@@ -13,8 +13,11 @@ import { connect, signConfigWithPelagus } from './pelagus.js'
 import { clearSession, loadMakerToken, loadSession, newLaunchId, saveMakerToken, saveSession, type Session } from './session.js'
 
 const env = import.meta.env
-const BOARD = env.VITE_BOARD_URL as string
+// Served by the board itself by default, so the board is this origin.
+const BOARD = (env.VITE_BOARD_URL as string) || window.location.origin
 const IMAGE = env.VITE_EGG_IMAGE as string
+// Same build as a release bundle, recorded in the egg so the gremlin can later move to Docker-less hosts.
+const ARTIFACT = env.VITE_EGG_ARTIFACT_URL && env.VITE_EGG_ARTIFACT_SHA256 ? { url: env.VITE_EGG_ARTIFACT_URL as string, sha256: env.VITE_EGG_ARTIFACT_SHA256 as string } : undefined
 const FLAVOR = (env.VITE_EGG_FLAVOR as string) || 'vps-1vcpu-1gb'
 const PROVIDER = ((env.VITE_EGG_PROVIDER as string) || 'digitalocean') as Provider
 const DAYS = Number(env.VITE_EGG_DAYS || 7)
@@ -141,6 +144,7 @@ async function stepLaunch() {
   const userData = renderCloudInit({
     launch: { maker: s.maker!, configHash: configHash(s.config!), boardUrl: BOARD, launchId: s.launchId },
     image: IMAGE,
+    artifact: ARTIFACT,
   })
   s.machineId = await sporestack({ token: s.sporestackToken! }).launch({
     flavor: FLAVOR, operating_system: 'debian-12', provider: PROVIDER, region: null, days: DAYS,
@@ -194,7 +198,7 @@ async function stepHatch() {
 
 async function route() {
   try {
-    if (!BOARD || !IMAGE) return show('<p class="error">Launch page is not configured (VITE_BOARD_URL, VITE_EGG_IMAGE).</p>')
+    if (!IMAGE) return show('<p class="error">Hatching is not configured yet (VITE_EGG_IMAGE).</p>')
     if (!s.maker) return stepConnect()
     if (!s.config) return stepConfigure()
     if (!s.machineId) {

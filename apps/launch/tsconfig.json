@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "module": "ESNext", "moduleResolution": "Bundler", "lib": ["ES2022", "DOM"], "composite": false, "declaration": false, "noEmit": true, "types": ["vite/client"] },
+  "compilerOptions": { "module": "ESNext", "moduleResolution": "Bundler", "lib": ["ES2022", "DOM", "DOM.Iterable"], "composite": false, "declaration": false, "noEmit": true, "types": ["vite/client"] },
   "include": ["src"]
 }
