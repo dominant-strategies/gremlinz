@@ -2,15 +2,12 @@
  * QUAI bridging via Symbiosis. WQUAI on Quai is the origin token; Ethereum, Base and BSC hold synthetic QUAI.
  * The public REST API refuses Quai routes, so we use the JS SDK. Proven on mainnet: research/launch-checks.md §5.
  */
-import { createRequire } from 'node:module'
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
 import { Symbiosis, Token, TokenAmount, type SwapExactInResult } from 'symbiosis-js-sdk'
 
 type Address = `0x${string}`
 import { CHAIN, QUAI_SYNTH, WQUAI, type EvmChainId } from './constants.js'
 
-type CacheData = { tokens: Array<Record<string, unknown> & { id: number; chainId: number; address: string; symbol?: string }>; omniPools: unknown[] }
+export type CacheData = { tokens: Array<Record<string, unknown> & { id: number; chainId: number; address: string; symbol?: string }>; omniPools: unknown[] }
 
 const WQUAI_TOKEN_ID = 108
 
@@ -39,18 +36,14 @@ export function withQuaiSynths(cache: CacheData): CacheData {
   return { ...cache, tokens }
 }
 
-/** Node-only: read the SDK's bundled mainnet cache. Browser builds should import the JSON via their bundler. */
-export function loadMainnetCache(): CacheData {
-  const require = createRequire(import.meta.url)
-  const cjsIndex = require.resolve('symbiosis-js-sdk')
-  const file = join(dirname(cjsIndex), 'crosschain', 'config', 'cache', 'mainnet.json')
-  return JSON.parse(readFileSync(file, 'utf8'))
-}
-
+/**
+ * Pass `cache` (e.g. loadMainnetCache() from './symbiosis-node.js' in Node) to add the synthetic QUAI entries the
+ * npm cache lacks (BSC). Without it, the SDK's bundled cache is used as is — enough for Quai⇄Ethereum/Base, and the
+ * only option in browsers, where the cache file can't be read from disk.
+ */
 export function createSymbiosis(opts: { clientId: string; cache?: CacheData; zeroXApiKey?: string }): Symbiosis {
-  const configCache = withQuaiSynths(opts.cache ?? loadMainnetCache())
   return new Symbiosis('mainnet', opts.clientId, {
-    configCache: configCache as never,
+    ...(opts.cache ? { configCache: withQuaiSynths(opts.cache) as never } : {}),
     ...(opts.zeroXApiKey ? { zeroXConfig: { apiKeys: [opts.zeroXApiKey] } as never } : {}),
   })
 }

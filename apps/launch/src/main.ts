@@ -10,6 +10,8 @@ import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
 import { sporestack, newToken, unusableSshKey, type Currency, type Provider } from '@gremlins/hosting'
 import { boardApi } from './board.js'
 import { connect, signConfigWithPelagus } from './pelagus.js'
+import { FLUENCE_MIN_TOPUP_USD } from '@gremlins/hosting'
+import { formatUnits as fmtUnits } from 'ethers'
 import { clearSession, loadMakerToken, loadSession, newLaunchId, saveMakerToken, saveSession, type Session } from './session.js'
 
 const env = import.meta.env
@@ -138,14 +140,79 @@ async function stepPay() {
   route()
 }
 
-// ── 5. launch ─────────────────────────────────────────────────────────────────
+const eggCloudInit = () =>
+  renderCloudInit({ launch: { maker: s.maker!, configHash: configHash(s.config!), boardUrl: BOARD, launchId: s.launchId }, image: IMAGE, artifact: ARTIFACT })
+
+// ── 3. choose where the egg runs ──────────────────────────────────────────────
+function stepHost() {
+  show(`<h2>Where should the egg hatch?</h2>
+    <p>The egg is a small server that only lives until your gremlin moves to a home it pays for itself.</p>
+    <fieldset>
+      <label><input type="radio" name="host" value="fluence" checked> <span><b>Fluence</b>: from $${FLUENCE_MIN_TOPUP_USD}, pay with QUAI from Pelagus or USDC on Base</span></label>
+      <label><input type="radio" name="host" value="sporestack"> <span><b>SporeStack</b>: USDT, BTC or XMR. New accounts need a $100 first deposit, reused for later eggs</span></label>
+    </fieldset>
+    <button id="go">Continue</button>`)
+  $('#go').onclick = () => {
+    s.host = (document.querySelector('input[name=host]:checked') as HTMLInputElement).value as Session['host']
+    save()
+    route()
+  }
+}
+
+// ── 4. Fluence: egg key → funding → launch ────────────────────────────────────
+async function stepFluence() {
+  // Loaded on demand: it pulls in the Symbiosis SDK (large), which only Fluence eggs funded with QUAI need.
+  show(`<p class="muted">Loading…</p>`)
+  const { eggKey, bridgeQuaiToEgg, swapBridgedQuai, launchOnFluence, quaiNeededFor, usdcBalance, fmtUsd } = await import('./fluence-egg.js')
+  const status = (msg: string) => { const el = document.getElementById('st'); if (el) el.textContent = msg }
+  show(`<h2>Unlock your egg hosting key</h2>
+    <p>Sign a fixed message in Pelagus. It derives a key that only pays for the egg's server, and you can re-derive it later to reach any leftover balance. It never holds your gremlin's money.</p>
+    <button id="key">Sign with Pelagus</button>`)
+  const key = await new Promise<Awaited<ReturnType<typeof eggKey>>>((resolve) => {
+    $('#key').onclick = () => void eggKey(s.maker!).then(resolve, fail)
+  })
+  s.eggKeyAddress = key.address
+  save()
+
+  const target = BigInt(FLUENCE_MIN_TOPUP_USD) * 1_000_000n
+  const have = await usdcBalance(key.address)
+  if (have < target) {
+    if (s.bridgeTx) {
+      show(`<h2>Funding the egg</h2><p id="st" class="muted">Resuming…</p>`)
+      await swapBridgedQuai(key, s.bridgeTx, status)
+    } else {
+      const need = target - have
+      const quaiWei = await quaiNeededFor(need, key.address)
+      show(`<h2>Fund the egg</h2>
+        <p>The egg needs <b>${fmtUsd(target)}</b> of hosting credit.</p>
+        <p><button id="quai">Pay ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI with Pelagus</button></p>
+        <p class="muted">Or send ${fmtUsd(need)} USDC on Base to <code>${esc(key.address)}</code>; this page continues once it arrives.</p>
+        <p id="st" class="muted"></p>`)
+      await new Promise<void>((resolve) => {
+        $('#quai').onclick = async () => {
+          try {
+            s.bridgeTx = await bridgeQuaiToEgg(s.maker!, key.address, quaiWei, status)
+            save()
+            await swapBridgedQuai(key, s.bridgeTx, status)
+            resolve()
+          } catch (e) { fail(e) }
+        }
+        void (async () => { while ((await usdcBalance(key.address).catch(() => 0n)) < target) await sleep(15_000); resolve() })()
+      })
+    }
+  }
+
+  show(`<h2>Launching the egg…</h2><p class="muted">The server locks itself down (no SSH, no passwords) before the egg starts.</p><p id="st" class="muted"></p>`)
+  const vmId = await launchOnFluence(key, { launchId: s.launchId, cloudInit: eggCloudInit() }, status)
+  s.machineId = `fluence:${vmId}`
+  save()
+  route()
+}
+
+// ── 5. launch (SporeStack) ────────────────────────────────────────────────────
 async function stepLaunch() {
   show(`<h2>Launching the egg…</h2><p class="muted">The server locks itself down (no SSH, no passwords) before the egg starts.</p>`)
-  const userData = renderCloudInit({
-    launch: { maker: s.maker!, configHash: configHash(s.config!), boardUrl: BOARD, launchId: s.launchId },
-    image: IMAGE,
-    artifact: ARTIFACT,
-  })
+  const userData = eggCloudInit()
   s.machineId = await sporestack({ token: s.sporestackToken! }).launch({
     flavor: FLAVOR, operating_system: 'debian-12', provider: PROVIDER, region: null, days: DAYS,
     ssh_key: unusableSshKey(), hostname: `egg-${s.launchId.slice(0, 8)}`, user_data: userData,
@@ -201,6 +268,8 @@ async function route() {
     if (!IMAGE) return show('<p class="error">Hatching is not configured yet (VITE_EGG_IMAGE).</p>')
     if (!s.maker) return stepConnect()
     if (!s.config) return stepConfigure()
+    if (!s.host) return stepHost()
+    if (!s.machineId && s.host === 'fluence') return await stepFluence()
     if (!s.machineId) {
       const ss = sporestack({ token: (s.sporestackToken ??= loadMakerToken() ?? newToken()) })
       saveMakerToken(s.sporestackToken)

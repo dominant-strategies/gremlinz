@@ -6,6 +6,11 @@ export interface Session {
   maker?: string
   config?: GremlinConfig
   signed?: SignedConfig & { message: { issuedAt: bigint | string } }
+  /** Where the egg server runs. */
+  host?: 'fluence' | 'sporestack'
+  /** Fluence funding progress (the egg key itself is re-derived from the maker's signature, never stored). */
+  eggKeyAddress?: string
+  bridgeTx?: string
   sporestackToken?: string
   invoiceUri?: string
   machineId?: string

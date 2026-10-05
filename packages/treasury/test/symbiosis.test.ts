@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { loadMainnetCache, withQuaiSynths } from '../src/symbiosis.js'
+import { withQuaiSynths } from '../src/symbiosis.js'
+import { loadMainnetCache } from '../src/symbiosis-node.js'
 import { CHAIN, QUAI_SYNTH } from '../src/constants.js'
 
 describe('symbiosis cache', () => {

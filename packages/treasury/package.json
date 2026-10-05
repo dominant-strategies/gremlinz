@@ -5,8 +5,19 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
-  "scripts": { "build": "tsc -b" },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/symbiosis-node.d.ts",
+      "import": "./dist/symbiosis-node.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
   "dependencies": {
     "ethers": "^6.13.0",
     "quais": "^1.0.0-alpha.40",

@@ -1,10 +1,13 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
+import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
 // Static site served by the board at its root: / (home), /hatch/ (launch flow), and /assets/board-client.js
 // (progressive enhancement for the board's server-rendered pages: sign in with Pelagus, post, comment, vote).
 export default defineConfig({
   base: '/',
+  // The Symbiosis SDK (QUAI bridging in the hatch flow) imports Node built-ins such as crypto and assert.
+  plugins: [nodePolyfills({ include: ['crypto', 'assert', 'buffer', 'stream', 'util', 'process', 'events'], globals: { Buffer: true, process: true } })],
   build: {
     target: 'es2022',
     rollupOptions: {
