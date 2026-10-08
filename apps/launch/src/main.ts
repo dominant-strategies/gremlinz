@@ -12,6 +12,7 @@ import { boardApi } from './board.js'
 import { connect, signConfigWithPelagus } from './pelagus.js'
 import { FLUENCE_MIN_TOPUP_USD } from '@gremlins/hosting'
 import { formatUnits as fmtUnits } from 'ethers'
+import { FLUENCE_STEPS, PROGRESS_CSS, Progress, SPORESTACK_STEPS, COMMON_STEPS } from './progress.js'
 import { clearSession, loadMakerToken, loadSession, newLaunchId, saveMakerToken, saveSession, type Session } from './session.js'
 
 const env = import.meta.env
@@ -28,6 +29,24 @@ const board = boardApi(BOARD)
 let s: Session = loadSession() ?? { launchId: newLaunchId() }
 const save = () => saveSession(s)
 
+// Progress window: every step and transaction, persisted with the session.
+document.head.insertAdjacentHTML('beforeend', `<style>${PROGRESS_CSS}</style>`)
+const progress = new Progress({ load: () => s.progress, save: (p) => { s.progress = p; save() } }, () => (s.config?.name ? `Hatching ${s.config.name}` : 'Hatching a gremlin'))
+const planFor = () => (s.host === 'fluence' ? FLUENCE_STEPS : s.host === 'sporestack' ? SPORESTACK_STEPS : COMMON_STEPS)
+progress.plan(planFor())
+// Sessions from before the progress window (or partially tracked ones): mark what the session proves is done.
+const backfill: [boolean | undefined, string, string?][] = [
+  [!!s.maker, 'connect', s.maker && `${s.maker.slice(0, 8)}…`],
+  [!!s.config, 'describe', s.config?.name],
+  [!!s.host, 'host', s.host],
+  [!!s.bridgeTx, 'fund-egg', 'bridge sent'],
+  [!!s.machineId, 'start', 'server started'],
+  [!!s.eggAddress, 'announce', 'egg announced'],
+  [!!s.configPosted, 'sign-config', 'config delivered'],
+]
+for (const [proven, id, detail] of backfill) if (proven && !progress.isDone(id)) progress.step(id).done(detail)
+progress.mount()
+
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T
 const app = $('#app')
 const esc = (t: string) => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -35,10 +54,13 @@ const esc = (t: string) => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 function show(html: string) {
   app.innerHTML = html
 }
+/** Show an error with a retry; the failing step is marked in the progress window by route(). */
 function fail(e: unknown) {
-  const box = document.createElement('p')
+  const box = document.createElement('div')
   box.className = 'error'
-  box.textContent = (e as Error).message ?? String(e)
+  box.innerHTML = `<p></p><button class="secondary">Retry</button>`
+  box.querySelector('p')!.textContent = (e as Error).message ?? String(e)
+  box.querySelector('button')!.onclick = () => route()
   app.prepend(box)
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -49,7 +71,15 @@ function stepConnect() {
     <p>Connect the Quai wallet that will be recorded as this gremlin's maker.</p>
     <button id="go">Connect Pelagus</button>`)
   $('#go').onclick = async () => {
-    try { s.maker = await connect(); save(); route() } catch (e) { fail(e) }
+    const st = progress.step('connect')
+    try {
+      st.signing('Approve the connection in Pelagus')
+      s.maker = await connect()
+      st.signed()
+      st.done(`${s.maker.slice(0, 8)}…`)
+      save()
+      route()
+    } catch (e) { st.fail(e); fail(e) }
   }
 }
 
@@ -97,6 +127,7 @@ function stepConfigure() {
       createdAt: new Date().toISOString(),
     }
     s.config = config
+    progress.step('describe').done(config.name)
     save()
     route()
   }
@@ -124,8 +155,10 @@ async function stepPay() {
     <label>Pay with <select id="cur"><option value="usdt">USDT</option><option value="btc">BTC</option><option value="xmr">XMR</option></select></label>
     <button id="inv">Create invoice for $${dollars}</button>
     <div id="pay"></div>`)
+  const inv = progress.step('invoice')
   const renderInvoice = (uri: string) => {
-    $('#pay').innerHTML = `<p>Send the exact amount to:</p><code class="uri">${esc(uri)}</code><p class="muted">Waiting for payment…</p>`
+    $('#pay').innerHTML = `<p>Send the exact amount to:</p><code class="uri">${esc(uri)}</code><p class="muted">Waiting for payment… (see the progress window)</p>`
+    inv.waiting('Waiting for your payment to confirm')
   }
   if (s.invoiceUri) renderInvoice(s.invoiceUri)
   $('#inv').onclick = async () => {
@@ -136,7 +169,13 @@ async function stepPay() {
       renderInvoice(inv.payment_uri)
     } catch (e) { fail(e) }
   }
-  while ((await ss.balanceCents().catch(() => 0)) < quote.cents) await sleep(10_000)
+  for (;;) {
+    const cents = await ss.balanceCents().catch(() => 0)
+    if (cents >= quote.cents) break
+    if (s.invoiceUri) inv.touch(`Waiting for payment · credit so far $${(cents / 100).toFixed(2)}`)
+    await sleep(10_000)
+  }
+  inv.done('payment received')
   route()
 }
 
@@ -154,6 +193,8 @@ function stepHost() {
     <button id="go">Continue</button>`)
   $('#go').onclick = () => {
     s.host = (document.querySelector('input[name=host]:checked') as HTMLInputElement).value as Session['host']
+    progress.step('host').done(s.host === 'fluence' ? 'Fluence' : 'SporeStack')
+    progress.plan(planFor())
     save()
     route()
   }
@@ -164,52 +205,71 @@ async function stepFluence() {
   // Loaded on demand: it pulls in the Symbiosis SDK (large), which only Fluence eggs funded with QUAI need.
   show(`<p class="muted">Loading…</p>`)
   const { eggKey, bridgeQuaiToEgg, swapBridgedQuai, launchOnFluence, quaiNeededFor, quaiOnBase, usdcBalance, fmtUsd } = await import('./fluence-egg.js')
-  const status = (msg: string) => { const el = document.getElementById('st'); if (el) el.textContent = msg }
+
+  // The egg key is never stored: re-derive it by signing again (signatures are deterministic).
+  const keyStep = progress.step('egg-key')
   show(`<h2>Unlock your egg hosting key</h2>
     <p>Sign a fixed message in Pelagus. It derives a key that only pays for the egg's server, and you can re-derive it later to reach any leftover balance. It never holds your gremlin's money.</p>
     <button id="key">Sign with Pelagus</button>`)
+  keyStep.start(s.eggKeyAddress ? 'Sign again to unlock the same key' : 'Waiting for you')
   const key = await new Promise<Awaited<ReturnType<typeof eggKey>>>((resolve) => {
-    $('#key').onclick = () => void eggKey(s.maker!).then(resolve, fail)
+    $('#key').onclick = () => void eggKey(s.maker!, keyStep).then(resolve, (e) => { keyStep.fail(e); fail(e) })
   })
+  if (s.eggKeyAddress && s.eggKeyAddress !== key.address) throw new Error('That signature derived a different egg key. Sign with the same Pelagus account you started with.')
   s.eggKeyAddress = key.address
   save()
 
+  const fund = progress.step('fund-egg'), bridge = progress.step('bridge'), swap = progress.step('swap')
   const target = BigInt(FLUENCE_MIN_TOPUP_USD) * 1_000_000n
+  show(`<h2>Checking the egg key…</h2>`)
   const have = await usdcBalance(key.address)
-  if (have < target) {
-    if (s.bridgeTx || (await quaiOnBase(key.address)) > 0n) {
-      // A bridge is in flight (or already landed): never ask to pay twice.
-      show(`<h2>Funding the egg</h2><p id="st" class="muted">Resuming…</p>`)
-      await swapBridgedQuai(key, s.bridgeTx, status)
-    } else {
-      const need = target - have
-      const quaiWei = await quaiNeededFor(need, key.address)
-      show(`<h2>Fund the egg</h2>
-        <p>The egg needs <b>${fmtUsd(target)}</b> of hosting credit.</p>
-        <p><button id="quai">Pay ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI with Pelagus</button></p>
-        <p class="muted">Or send ${fmtUsd(need)} USDC on Base to <code>${esc(key.address)}</code>; this page continues once it arrives.</p>
-        <p class="muted">Already paid with QUAI and the page was closed? Bridges take 5–10 minutes. Reload once it lands and the page picks it up automatically.</p>
-        <p id="st" class="muted"></p>`)
-      await new Promise<void>((resolve) => {
-        $('#quai').onclick = async () => {
-          try {
-            await bridgeQuaiToEgg(s.maker!, key.address, quaiWei, status, (hash) => { s.bridgeTx = hash; save() })
-            await swapBridgedQuai(key, s.bridgeTx, status)
-            resolve()
-          } catch (e) { fail(e) }
+  if (have >= target) {
+    for (const [id, st] of [['fund-egg', fund], ['bridge', bridge], ['swap', swap]] as const) if (!progress.isDone(id)) st.skip('egg key already holds USDC')
+  } else if (s.bridgeTx || (await quaiOnBase(key.address)) > 0n) {
+    // A bridge is in flight (or already landed): never ask to pay twice.
+    if (!progress.isDone('fund-egg')) fund.done(s.bridgeTx ? 'bridge already sent' : 'QUAI already on Base')
+    show(`<h2>Funding the egg</h2><p class="muted">Your QUAI is on its way. Follow it in the progress window.</p>`)
+    await swapBridgedQuai(key, s.bridgeTx, bridge, swap)
+  } else {
+    const need = target - have
+    const quaiWei = await quaiNeededFor(need, key.address)
+    fund.start('Choose how to pay')
+    show(`<h2>Fund the egg</h2>
+      <p>The egg needs <b>${fmtUsd(target)}</b> of hosting credit.</p>
+      <p><button id="quai">Pay ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI with Pelagus</button></p>
+      <p class="muted">Pelagus will ask for three confirmations: wrap, approve, bridge. Or send ${fmtUsd(need)} USDC on Base to <code>${esc(key.address)}</code>; this page continues once it arrives.</p>`)
+    await new Promise<void>((resolve) => {
+      let paying = false
+      $('#quai').onclick = async () => {
+        if (paying) return
+        paying = true
+        $('#quai').setAttribute('disabled', '')
+        show(`<h2>Funding the egg</h2><p class="muted">Confirm each step in Pelagus. The progress window shows where you are.</p>`)
+        try {
+          await bridgeQuaiToEgg(s.maker!, key.address, quaiWei, fund, (hash) => { s.bridgeTx = hash; save() })
+          await swapBridgedQuai(key, s.bridgeTx, bridge, swap)
+          resolve()
+        } catch (e) { (s.bridgeTx ? bridge : fund).fail(e); fail(e); paying = false }
+      }
+      void (async () => {
+        while ((await usdcBalance(key.address).catch(() => 0n)) < target) {
+          if (!paying) fund.touch('Waiting for you to pay')
+          await sleep(15_000)
         }
-        void (async () => { while ((await usdcBalance(key.address).catch(() => 0n)) < target) await sleep(15_000); resolve() })()
-      })
-    }
+        if (!paying) { fund.done('USDC received'); bridge.skip(); swap.skip(); resolve() }
+      })()
+    })
   }
 
+  const start = progress.step('start')
+  start.start('Waiting for your go-ahead')
   show(`<h2>Ready to start the egg</h2>
     <p>The egg key holds ${fmtUsd(await usdcBalance(key.address))} of USDC on Base. Starting the egg pays <b>$${FLUENCE_MIN_TOPUP_USD}</b> to Fluence and starts a small server, billed per second from that credit.</p>
     <p class="muted">Not ready? Leave this page; the USDC stays on your egg key and you can come back later.</p>
     <button id="start">Pay $${FLUENCE_MIN_TOPUP_USD} and start the egg</button>`)
   await new Promise<void>((resolve) => { $('#start').onclick = () => resolve() })
-  show(`<h2>Launching the egg…</h2><p class="muted">The server locks itself down (no SSH, no passwords) before the egg starts.</p><p id="st" class="muted"></p>`)
-  const vmId = await launchOnFluence(key, { launchId: s.launchId, cloudInit: eggCloudInit() }, status)
+  show(`<h2>Launching the egg…</h2><p class="muted">The server locks itself down (no SSH, no passwords) before the egg starts. Follow it in the progress window.</p>`)
+  const vmId = await launchOnFluence(key, { launchId: s.launchId, cloudInit: eggCloudInit() }, start)
   s.machineId = `fluence:${vmId}`
   save()
   route()
@@ -218,36 +278,54 @@ async function stepFluence() {
 // ── 5. launch (SporeStack) ────────────────────────────────────────────────────
 async function stepLaunch() {
   show(`<h2>Launching the egg…</h2><p class="muted">The server locks itself down (no SSH, no passwords) before the egg starts.</p>`)
+  progress.step('invoice').done()
+  progress.step('start').waiting('Asking SporeStack for a server')
   const userData = eggCloudInit()
   s.machineId = await sporestack({ token: s.sporestackToken! }).launch({
     flavor: FLAVOR, operating_system: 'debian-12', provider: PROVIDER, region: null, days: DAYS,
     ssh_key: unusableSshKey(), hostname: `egg-${s.launchId.slice(0, 8)}`, user_data: userData,
   })
+  progress.step('start').done(`server ${s.machineId}`)
   save()
   route()
 }
 
 // ── 6–7. wait for the egg, hand it the config ─────────────────────────────────
 async function stepHatch() {
-  show(`<h2>Waiting for your egg to announce itself…</h2><p class="muted">Usually a few minutes after the server boots.</p>`)
+  const announce = progress.step('announce'), sign = progress.step('sign-config'), feed = progress.step('feed'), hatched = progress.step('hatched')
+  show(`<h2>Waiting for your egg to announce itself…</h2><p class="muted">The server installs and starts the egg, which generates its own keys and announces itself on the board. Usually a few minutes.</p>`)
   let egg = await board.findEgg(s.launchId)
-  while (!egg) { await sleep(10_000); egg = await board.findEgg(s.launchId) }
+  while (!egg) {
+    announce.waiting('Server is booting and installing the egg')
+    await sleep(10_000)
+    egg = await board.findEgg(s.launchId)
+  }
+  announce.done(`egg ${egg.announcement.address.slice(0, 8)}…`)
   s.eggAddress = egg.announcement.address
   if (!s.signed) {
     show(`<h2>Your egg is alive</h2>
       <p>Sign ${esc(s.config!.name)}'s configuration for this egg (Quai address <code>${esc(egg.announcement.deposit.quai)}</code>).
          The signature names the egg, so nobody else can use it.</p>
       <button id="sign">Sign with Pelagus</button>`)
+    sign.start('Waiting for you')
     await new Promise<void>((resolve) => {
       $('#sign').onclick = async () => {
-        try { s.signed = await signConfigWithPelagus(s.maker!, s.config!, egg!.announcement.deposit.quai); save(); resolve() } catch (e) { fail(e) }
+        try {
+          sign.signing('Confirm the config in Pelagus')
+          s.signed = await signConfigWithPelagus(s.maker!, s.config!, egg!.announcement.deposit.quai)
+          sign.signed('signed')
+          save()
+          resolve()
+        } catch (e) { sign.fail(e); fail(e) }
       }
     })
   }
   if (!s.configPosted) {
+    sign.waiting('Handing the signed config to your egg')
     await board.postConfig(s.eggAddress, s.signed!)
     s.configPosted = true
   }
+  sign.done('config delivered')
   save()
   const d = egg.announcement.deposit
   show(`<h2>${esc(s.config!.name)} is waiting to be fed</h2>
@@ -257,17 +335,24 @@ async function stepHatch() {
       ${d.qiPaymentCode ? `<dt>Qi payment code</dt><dd><code>${esc(d.qiPaymentCode)}</code></dd>` : ''}
       <dt>Ethereum, Base or BSC (ETH, BNB, USDC, USDT, QUAI…)</dt><dd><code>${esc(d.evm)}</code></dd>
     </dl>
-    <p>Status: <b id="st">${esc(egg.status)}</b></p>
     <p><a href="${esc(new URL(`/g/${s.eggAddress}`, BOARD).toString())}" target="_blank" rel="noopener">Its page on the board</a></p>
     <button id="new" class="secondary">Hatch another</button>`)
-  $('#new').onclick = () => { clearSession(); s = { launchId: newLaunchId() }; route() }
+  $('#new').onclick = () => { clearSession(); s = { launchId: newLaunchId() }; progress.reset(); progress.plan(planFor()); route() }
+  if (!progress.isDone('feed')) feed.waiting('Send funds to any address above')
   for (;;) {
-    await sleep(15_000)
     const e = await board.findEgg(s.launchId).catch(() => undefined)
-    if (e) $('#st').textContent = e.status
-    if (e?.status === 'hatched') break
+    if (e?.status === 'hatched') {
+      feed.done('funds received')
+      hatched.done(`${s.config!.name} is alive`)
+      break
+    }
+    feed.touch()
+    await sleep(15_000)
   }
 }
+
+/** First unfinished step of the current plan, for marking failures. */
+const currentStepId = () => planFor().find((d) => !progress.isDone(d.id))?.id
 
 async function route() {
   try {
@@ -285,7 +370,11 @@ async function route() {
       return await stepLaunch()
     }
     return await stepHatch()
-  } catch (e) { fail(e) }
+  } catch (e) {
+    const id = currentStepId()
+    if (id) progress.step(id).fail(e)
+    fail(e)
+  }
 }
 
 route()

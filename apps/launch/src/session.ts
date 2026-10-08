@@ -1,5 +1,6 @@
 /** Per-launch progress kept in the browser so the maker can close the tab and resume. */
 import type { GremlinConfig, SignedConfig } from '@gremlins/hatch'
+import type { StepState } from './progress.js'
 
 export interface Session {
   launchId: string
@@ -16,6 +17,8 @@ export interface Session {
   machineId?: string
   eggAddress?: string
   configPosted?: boolean
+  /** Per-step progress (status, timings, signatures, transactions), shown in the progress window. */
+  progress?: Record<string, StepState>
 }
 
 const KEY = 'gremlins.launch'
