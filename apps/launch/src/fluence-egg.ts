@@ -10,6 +10,7 @@
 import { Contract, JsonRpcProvider, Wallet, formatUnits } from 'ethers'
 import { BrowserProvider, Contract as QuaiContract } from 'quais'
 import {
+  quaiProvider,
   CHAIN, QUAI_SYNTH, QUAI_SYNTH_PERMIT_DOMAIN, USDC, WQUAI, buildAppData, bridgeStatus, createSymbiosis, gaslessSell, quoteBridge, quoteSell,
 } from '@gremlins/treasury'
 import { EGG_KEY_MESSAGE, FLUENCE_MIN_TOPUP_USD, deriveEggKey, eggVmName, fluence } from '@gremlins/hosting'
@@ -37,30 +38,61 @@ export async function quaiNeededFor(usdMicro: bigint, eggAddress: string): Promi
   return (usdMicro * probe) / q.buyAmount * 105n / 100n + 5n * 10n ** 18n // +5% for swap fee/slippage, +5 QUAI bridge fee
 }
 
-/** Maker wraps and bridges QUAI to the egg key on Base with Pelagus (three Quai transactions). Returns the bridge tx. */
-export async function bridgeQuaiToEgg(maker: string, eggAddress: string, quaiWei: bigint, status: (s: string) => void): Promise<string> {
+/**
+ * Wait for a Quai transaction through our own RPC connection. Pelagus is only used to *sign and send*: its bundled
+ * quais (1.0.0-alpha.52) can't parse current Quai block headers (primeTerminusNumber), so tx.wait() through it fails
+ * even when the transaction succeeded.
+ */
+export async function waitQuaiTx(hash: string, timeoutMs = 10 * 60_000): Promise<void> {
+  const p = quaiProvider()
+  const end = Date.now() + timeoutMs
+  for (;;) {
+    const r = await p.getTransactionReceipt(hash).catch(() => null)
+    if (r) {
+      if ((r as { status?: number }).status === 0) throw new Error(`Quai transaction ${hash} failed`)
+      return
+    }
+    if (Date.now() > end) throw new Error(`Quai transaction ${hash} not confirmed yet; check quaiscan.io before retrying`)
+    await sleep(4_000)
+  }
+}
+
+/** QUAI (synthetic) already sitting at the egg key on Base, e.g. from a bridge whose page session was lost. */
+export const quaiOnBase = (addr: string) => synthBalance(addr)
+
+/**
+ * Maker wraps and bridges QUAI to the egg key on Base with Pelagus (three Quai transactions). `onSent` receives the
+ * bridge tx hash the moment it is broadcast, so a reload never loses track of money in flight.
+ */
+export async function bridgeQuaiToEgg(maker: string, eggAddress: string, quaiWei: bigint, status: (s: string) => void, onSent: (hash: string) => void): Promise<string> {
   const signer = await new BrowserProvider(pelagus() as never).getSigner(maker)
   const wquai = new QuaiContract(WQUAI, ['function deposit() payable', 'function approve(address,uint256) returns (bool)', 'function balanceOf(address) view returns (uint256)', 'function allowance(address,address) view returns (uint256)'], signer)
   const have: bigint = await wquai.balanceOf(maker)
   if (have < quaiWei) {
     status('Confirm in Pelagus: wrap QUAI (1 of 3)…')
-    await (await wquai.deposit({ value: quaiWei - have })).wait()
+    const tx = await wquai.deposit({ value: quaiWei - have })
+    status('Waiting for the wrap to confirm…')
+    await waitQuaiTx(tx.hash)
   }
   const quote = await quoteBridge({ symbiosis: createSymbiosis({ clientId: 'gremlins-hatch' }), direction: { from: 'quai', to: CHAIN.base }, amount: quaiWei, sender: maker, receiver: eggAddress })
   if ((await wquai.allowance(maker, quote.approveTo)) < quaiWei) {
     status('Confirm in Pelagus: approve the bridge (2 of 3)…')
-    await (await wquai.approve(quote.approveTo, quaiWei)).wait()
+    const tx = await wquai.approve(quote.approveTo, quaiWei)
+    status('Waiting for the approval to confirm…')
+    await waitQuaiTx(tx.hash)
   }
   status('Confirm in Pelagus: bridge to Base (3 of 3)…')
   const req = (quote as unknown as { transactionRequest: { to: string; data: string; value?: { toString(): string } } }).transactionRequest
   const tx = await signer.sendTransaction({ from: maker, to: req.to, data: req.data, value: req.value ? BigInt(req.value.toString()) : 0n })
-  await tx.wait()
+  onSent(tx.hash)
+  status('Waiting for the bridge transaction to confirm…')
+  await waitQuaiTx(tx.hash)
   return tx.hash
 }
 
 /** Wait for the bridge, then swap the egg key's QUAI on Base to USDC gaslessly (CoW, permit). */
-export async function swapBridgedQuai(key: Wallet, bridgeTx: string, status: (s: string) => void): Promise<void> {
-  for (;;) {
+export async function swapBridgedQuai(key: Wallet, bridgeTx: string | undefined, status: (s: string) => void): Promise<void> {
+  for (; bridgeTx; ) {
     const s = await bridgeStatus(CHAIN.quai, bridgeTx).catch(() => ({ status: 'unknown' as const }))
     if (s.status === 'success') break
     if (s.status === 'stuck' || s.status === 'reverted') throw new Error(`bridge ${s.status}; contact Symbiosis support with tx ${bridgeTx}`)

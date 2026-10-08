@@ -163,7 +163,7 @@ function stepHost() {
 async function stepFluence() {
   // Loaded on demand: it pulls in the Symbiosis SDK (large), which only Fluence eggs funded with QUAI need.
   show(`<p class="muted">Loading…</p>`)
-  const { eggKey, bridgeQuaiToEgg, swapBridgedQuai, launchOnFluence, quaiNeededFor, usdcBalance, fmtUsd } = await import('./fluence-egg.js')
+  const { eggKey, bridgeQuaiToEgg, swapBridgedQuai, launchOnFluence, quaiNeededFor, quaiOnBase, usdcBalance, fmtUsd } = await import('./fluence-egg.js')
   const status = (msg: string) => { const el = document.getElementById('st'); if (el) el.textContent = msg }
   show(`<h2>Unlock your egg hosting key</h2>
     <p>Sign a fixed message in Pelagus. It derives a key that only pays for the egg's server, and you can re-derive it later to reach any leftover balance. It never holds your gremlin's money.</p>
@@ -177,7 +177,8 @@ async function stepFluence() {
   const target = BigInt(FLUENCE_MIN_TOPUP_USD) * 1_000_000n
   const have = await usdcBalance(key.address)
   if (have < target) {
-    if (s.bridgeTx) {
+    if (s.bridgeTx || (await quaiOnBase(key.address)) > 0n) {
+      // A bridge is in flight (or already landed): never ask to pay twice.
       show(`<h2>Funding the egg</h2><p id="st" class="muted">Resuming…</p>`)
       await swapBridgedQuai(key, s.bridgeTx, status)
     } else {
@@ -187,12 +188,12 @@ async function stepFluence() {
         <p>The egg needs <b>${fmtUsd(target)}</b> of hosting credit.</p>
         <p><button id="quai">Pay ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI with Pelagus</button></p>
         <p class="muted">Or send ${fmtUsd(need)} USDC on Base to <code>${esc(key.address)}</code>; this page continues once it arrives.</p>
+        <p class="muted">Already paid with QUAI and the page was closed? Bridges take 5–10 minutes. Reload once it lands and the page picks it up automatically.</p>
         <p id="st" class="muted"></p>`)
       await new Promise<void>((resolve) => {
         $('#quai').onclick = async () => {
           try {
-            s.bridgeTx = await bridgeQuaiToEgg(s.maker!, key.address, quaiWei, status)
-            save()
+            await bridgeQuaiToEgg(s.maker!, key.address, quaiWei, status, (hash) => { s.bridgeTx = hash; save() })
             await swapBridgedQuai(key, s.bridgeTx, status)
             resolve()
           } catch (e) { fail(e) }
