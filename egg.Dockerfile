@@ -26,6 +26,9 @@ RUN npm prune --omit=dev --workspaces --include-workspace-root \
  && cd runtime && npm prune --omit=dev
 
 FROM node:22-slim
+LABEL org.opencontainers.image.source=https://github.com/dominant-strategies/gremlinz \
+      org.opencontainers.image.description="Gremlin egg: egg supervisor + agent runtime" \
+      org.opencontainers.image.licenses=MIT
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production GREMLIN_HOME=/var/lib/gremlin GREMLIN_LAUNCH=/etc/gremlin/launch.json \
     GREMLIN_RUNTIME="node /app/runtime/dist/index.js --gremlin-setup && exec node /app/runtime/dist/index.js --run"
