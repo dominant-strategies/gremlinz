@@ -203,6 +203,11 @@ async function stepFluence() {
     }
   }
 
+  show(`<h2>Ready to start the egg</h2>
+    <p>The egg key holds ${fmtUsd(await usdcBalance(key.address))} of USDC on Base. Starting the egg pays <b>$${FLUENCE_MIN_TOPUP_USD}</b> to Fluence and starts a small server, billed per second from that credit.</p>
+    <p class="muted">Not ready? Leave this page; the USDC stays on your egg key and you can come back later.</p>
+    <button id="start">Pay $${FLUENCE_MIN_TOPUP_USD} and start the egg</button>`)
+  await new Promise<void>((resolve) => { $('#start').onclick = () => resolve() })
   show(`<h2>Launching the egg…</h2><p class="muted">The server locks itself down (no SSH, no passwords) before the egg starts.</p><p id="st" class="muted"></p>`)
   const vmId = await launchOnFluence(key, { launchId: s.launchId, cloudInit: eggCloudInit() }, status)
   s.machineId = `fluence:${vmId}`
