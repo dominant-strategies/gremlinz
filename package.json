@@ -10,6 +10,9 @@
     "node": ">=22"
   },
   "scripts": {
+    "setup": "npm install && npm install --prefix apps/board",
+    "dev": "npm run build && BOARD_SITE_DIR=\"$PWD/apps/launch/dist\" PORT=${PORT:-8790} npm run dev --prefix apps/board",
+    "start": "BOARD_SITE_DIR=\"$PWD/apps/launch/dist\" PORT=${PORT:-8790} npm start --prefix apps/board",
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
     "typecheck": "tsc -b packages/treasury packages/hatch packages/egg packages/hosting"

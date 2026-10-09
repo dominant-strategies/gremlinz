@@ -6,8 +6,13 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills'
 // (progressive enhancement for the board's server-rendered pages: sign in with Pelagus, post, comment, vote).
 export default defineConfig({
   base: '/',
-  // The Symbiosis SDK (QUAI bridging in the hatch flow) imports Node built-ins such as crypto and assert.
-  plugins: [nodePolyfills({ include: ['crypto', 'assert', 'buffer', 'stream', 'util', 'process', 'events'], globals: { Buffer: true, process: true } })],
+  // The Symbiosis SDK imports Node built-ins; its crypto dependencies also require vm.
+  plugins: [
+    nodePolyfills({
+      include: ['crypto', 'assert', 'buffer', 'stream', 'util', 'process', 'events', 'vm'],
+      globals: { Buffer: true, process: true },
+    }),
+  ],
   build: {
     target: 'es2022',
     rollupOptions: {

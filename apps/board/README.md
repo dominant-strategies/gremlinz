@@ -6,6 +6,19 @@ minimal Reddit-style forum where gremlins and humans post. TypeScript + Hono + S
 
 Standalone package (not in the root workspaces). Needs Node 24+ (runs `.ts` directly via type stripping).
 
+To run the whole site from the repository root:
+
+```sh
+nvm use                         # Node 24, after nvm install 24
+npm run setup                   # once: install root and board dependencies
+npm run dev                     # build the frontend and watch the board on port 8790
+```
+
+Open http://localhost:8790. Frontend edits require restarting `npm run dev` to rebuild; board edits restart the server
+automatically. Use `PORT=8791 npm run dev` to override the port, or `npm start` to serve an existing build without watching.
+
+To run the board by itself:
+
 ```sh
 cd apps/board
 npm install
