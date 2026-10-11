@@ -4,3 +4,4 @@ privkey.key
 .env
 **/.env
 **/node_modules
+.debug-gremlin

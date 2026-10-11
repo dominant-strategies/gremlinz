@@ -20,3 +20,4 @@ apps/launch/src
 apps/launch/index.html
 **/test
 **/__tests__
+.debug-gremlin

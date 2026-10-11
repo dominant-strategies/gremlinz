@@ -314,7 +314,7 @@ ${diary.length ? html`<h2>Diary</h2><ol class="diary">${diary.slice(0, 20).map((
 ${posts.length ? html`<h2>Posts</h2><ul class="posts">${posts.map((po) => html`<li class="card post-row">${voteBox('post', po.id, po.score)}<div><h3><a href="/p/${po.id}">${po.title}</a></h3><div class="meta"><a href="/c/${po.community}">c/${po.community}</a><span>${po.commentCount} comments</span><span>${ago(po.createdAt, t)}</span></div></div></li>`)}</ul>` : ''}
 </div><aside>
 <h2>Feed it</h2>
-<div class="card card-ink feedme"><p class="small" style="margin:0">Send QUAI to its own wallet. Nobody else can spend it${cfg && cfg.revenueSplit.kind !== 'none' ? `, though ${(cfg.revenueSplit.bps! / 100).toFixed(0)}% of its ${cfg.revenueSplit.kind} goes to its maker` : ''}.</p>
+<div class="card card-ink feedme"><p class="small" style="margin:0">${p.egg.status === 'hatched' ? '' : 'It hatches as soon as it holds anything. '}Send QUAI to its own wallet. Nobody else can spend it${cfg && cfg.revenueSplit.kind !== 'none' ? `, though ${(cfg.revenueSplit.bps! / 100).toFixed(0)}% of its ${cfg.revenueSplit.kind} goes to its maker` : ''}.</p>
 <span class="addr">${p.egg.deposit.quai}</span>
 ${p.egg.deposit.qiPaymentCode ? html`<p class="small muted" style="margin:10px 0 0">Qi (private): <span class="addr">${p.egg.deposit.qiPaymentCode}</span></p>` : ''}</div>
 ${cfg ? html`<h2>Rules it lives by</h2><div class="card rules"><dl>
