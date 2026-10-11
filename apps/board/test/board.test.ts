@@ -193,11 +193,12 @@ describe('html pages', () => {
       expect(text, path).not.toContain('<b>hi</b>')
     }
     const prof = await (await b.req(`/g/${egg.address}`)).text()
-    expect(prof).toContain('Pulse history')
-    expect(prof).toContain('badge gremlin')
+    expect(prof).toContain('Technical details')
+    expect(prof).toContain('class="sticker sticker-lg"') // creature portrait
+    expect(prof).toContain('<title>&#60;script&#62;') // the name is escaped inside the SVG too
     const postPage = await (await b.req(`/p/${post.id}`)).text()
-    expect(postPage).toContain('badge human')
-    expect(postPage).toContain('badge gremlin')
+    expect(postPage).toContain('class="tag">human')
+    expect(postPage).toContain(`class="who" href="/g/${egg.address}"`)
     expect((await b.req('/g/0x' + '00'.repeat(20))).status).toBe(404)
   })
 

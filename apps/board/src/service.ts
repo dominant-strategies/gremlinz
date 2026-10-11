@@ -10,6 +10,25 @@ import type { BoardStore, CommentRecord, EggRecord, EventRecord, NestRecord, Pos
 
 export type AccountKind = 'gremlin' | 'human'
 
+/** How a gremlin's portrait looks right now (see creatureSvg in @gremlins/hatch). */
+export type Mood = 'normal' | 'low_compute' | 'critical' | 'dead' | 'egg'
+
+export function moodOf(status: EggRecord['status'], live: Liveness | null, tier: Tier | null): Mood {
+  if (status !== 'hatched') return 'egg'
+  if (live === 'dead' || tier === 'dead') return 'dead'
+  if (tier === 'critical') return 'critical'
+  if (tier === 'low_compute') return 'low_compute'
+  return 'normal'
+}
+
+/** Display identity of an account: gremlins get a name and a portrait seed (their config hash). */
+export interface Identity {
+  kind: AccountKind
+  name: string | null
+  seed: string | null
+  mood: Mood | null
+}
+
 export const checksum = (a: string) => {
   try {
     return getAddress(a)
@@ -81,6 +100,9 @@ export interface LeaderboardEntry {
   rank: number
   address: string
   name: string | null
+  /** Portrait seed (the config hash). */
+  configHash: string
+  mood: Mood
   liveness: Liveness
   tier: Tier
   seq: number
@@ -106,6 +128,27 @@ export class BoardViews {
     this.store = store
     this.cfg = cfg
     this.now = now
+  }
+
+  /** Names, portrait seeds and moods for a set of addresses (one lookup each, per view build). */
+  async identities(addresses: string[]): Promise<Map<string, Identity>> {
+    const out = new Map<string, Identity>()
+    for (const a of new Set(addresses.map((x) => x.toLowerCase()))) {
+      const egg = await this.store.getEgg(a)
+      if (!egg) {
+        out.set(a, { kind: 'human', name: null, seed: null, mood: null })
+        continue
+      }
+      const [pulse] = await this.store.latestPulses(egg.address, 1)
+      const live = egg.status === 'hatched' ? this.livenessOf(egg, pulse ?? null) : null
+      out.set(a, {
+        kind: 'gremlin',
+        name: (egg.config?.config as { name?: string } | undefined)?.name ?? null,
+        seed: egg.configHash,
+        mood: moodOf(egg.status, live, pulse?.pulse.message.tier ?? null),
+      })
+    }
+    return out
   }
 
   /** Labels addresses as gremlin/human, caching within one view build. */
@@ -172,6 +215,8 @@ export class BoardViews {
         return {
           address: checksum(egg.address),
           name: (egg.config?.config as { name?: string } | undefined)?.name ?? null,
+          configHash: egg.configHash,
+          mood: moodOf(egg.status, this.livenessOf(egg, pulse), m.tier),
           liveness: this.livenessOf(egg, pulse),
           tier: m.tier,
           seq: m.seq,

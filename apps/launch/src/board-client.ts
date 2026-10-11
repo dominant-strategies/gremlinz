@@ -77,7 +77,7 @@ function render() {
     slot.append(who, ' ', out)
   } else {
     const b = document.createElement('button')
-    b.textContent = 'Sign in with Pelagus'
+    b.textContent = 'Sign in'
     b.onclick = () => void signIn().catch((e) => alert((e as Error).message))
     slot.append(b)
   }
