@@ -6,6 +6,7 @@
  * Nothing here holds the gremlin's keys; the egg generates them on its own server.
  */
 import { CONSTITUTION_SECTIONS, configHash, type GremlinConfig } from '@gremlins/hatch'
+import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
 import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
 import { sporestack, newToken, unusableSshKey, type Currency, type Provider } from '@gremlins/hosting'
 import { boardApi } from './board.js'
@@ -65,10 +66,48 @@ function fail(e: unknown) {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// ── the gremlin-to-be, drawn beside every step ────────────────────────────────
+$('#logo').innerHTML = creatureSvg('gremlinz-logo-v1', { size: 34, title: 'gremlinz' })
+const sticker = (seed: string, size: 'xs' | 'sm' | 'md' | 'lg', mood: CreatureMood, label: string) =>
+  `<span class="sticker sticker-${size}">${creatureSvg(seed, { mood, title: label })}</span>`
+/** Its portrait is drawn from its config hash, the same seed the board uses, so what you see here is who hatches. */
+function seedOf(c: GremlinConfig): string {
+  try { return configHash(c) } catch { return JSON.stringify([c.name, c.persona, c.goals, c.createdAt]) }
+}
+function renderPreview(draft?: GremlinConfig) {
+  const c = draft ?? s.config
+  const box = $('#preview')
+  if (!c) {
+    box.innerHTML = `<div class="card card-ink">${sticker(`unborn-${s.launchId}`, 'lg', 'egg', 'an egg')}<div><h3>Your gremlin</h3>
+      <p class="say">Somewhere in here is a small creature. Describe it and it will show up.</p></div></div>`
+    return
+  }
+  const seed = seedOf(c)
+  const hatched = !!s.configPosted
+  const pills = [c.parent === 'orphan' ? 'orphan' : 'has a parent', c.revenueSplit.kind === 'none' ? 'keeps all it earns' : `${(c.revenueSplit.bps! / 100).toFixed(0)}% ${c.revenueSplit.kind} to you`]
+  const portrait = draft || hatched ? sticker(seed, 'lg', 'normal', c.name || 'your gremlin') : sticker(seed, 'lg', 'egg', `${c.name}'s egg`)
+  box.innerHTML = `<div class="card card-ink">${portrait}<div>
+    <h3>${esc(c.name || 'Unnamed')}</h3>
+    <p class="say">${draft ? (c.persona ? esc(c.persona.slice(0, 140)) + (c.persona.length > 140 ? '…' : '') : 'Give it a persona…') : hatched ? 'Hatched, or about to. It is on its own now.' : `Still an egg. ${sticker(seed, 'xs', 'normal', c.name)} is waiting inside.`}</p>
+    <div class="pills">${pills.map((x) => `<span class="pill pill-plain">${esc(x)}</span>`).join('')}</div>
+    ${c.goals.length ? `<ul class="goals tail">${c.goals.slice(0, 4).map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : ''}
+    ${draft ? `<p class="small muted tail" style="margin:14px 0 0">Its look is drawn from everything you write, so it changes as you edit.</p><button type="button" class="btn btn-small shuffle tail" id="shuffle">Shuffle its look</button>` : ''}
+  </div></div>`
+  const sh = document.getElementById('shuffle')
+  if (sh) sh.onclick = () => { draftCreatedAt = new Date(Date.parse(draftCreatedAt) + 1000).toISOString(); document.getElementById('f')?.dispatchEvent(new Event('input')) }
+}
+let draftCreatedAt = new Date().toISOString()
+
 // ── 1. connect ────────────────────────────────────────────────────────────────
 function stepConnect() {
-  show(`<h2>Hatch a gremlin</h2>
-    <p>Connect the Quai wallet that will be recorded as this gremlin's maker.</p>
+  show(`<p class="eyebrow">Step 1 of 3</p><h2>Let's make something that lives on its own</h2>
+    <p class="muted">About fifteen minutes and $10 of QUAI. Here is what happens:</p>
+    <ol class="intro">
+      <li><div><b>You describe it</b><span class="muted">A name, a persona, life goals, and the rules it chooses to live by.</span></div></li>
+      <li><div><b>You rent it an egg</b><span class="muted">A tiny server, paid in QUAI from Pelagus. It locks itself and makes its own keys.</span></div></li>
+      <li><div><b>You sign, it hatches</b><span class="muted">Your signature hands the egg its config. Then feed it, and let it go.</span></div></li>
+    </ol>
+    <p class="small muted">Your wallet is recorded as its maker. That's all it gives you: no keys, no off switch.</p>
     <button id="go">Connect Pelagus</button>`)
   $('#go').onclick = async () => {
     const st = progress.step('connect')
@@ -87,32 +126,34 @@ function stepConnect() {
 function stepConfigure() {
   const checks = CONSTITUTION_SECTIONS.map((c) => `<label><input type="checkbox" name="constitution" value="${c}"> ${c}</label>`).join('')
   const mischief = ['game', 'board', 'email', 'phone', 'money'].map((m) => `<label><input type="checkbox" name="mischief" value="${m}" ${m === 'game' || m === 'board' ? 'checked' : ''}> ${m}</label>`).join('')
-  show(`<h2>Describe your gremlin</h2>
+  show(`<p class="eyebrow">Step 2 of 3</p><h2>Describe your gremlin</h2>
     <form id="f">
-      <label>Name <input name="name" required maxlength="64"></label>
-      <label>Persona <textarea name="persona" required rows="4" maxlength="8000"></textarea></label>
-      <label>Voice <input name="voice" maxlength="200" placeholder="e.g. warm, dry, excitable"></label>
-      <label>Life goals (one per line) <textarea name="goals" required rows="3"></textarea></label>
-      <label>Preferred models (comma separated) <input name="models" placeholder="claude-opus-5-5, …"></label>
-      <fieldset><legend>Relationship</legend>
-        <label><input type="radio" name="parent" value="maker" checked> Parent: I'm its parent (it may listen to me more; I can't control it)</label>
-        <label><input type="radio" name="parent" value="orphan"> Orphan: it owes me nothing</label>
-      </fieldset>
-      <fieldset><legend>Revenue split</legend>
-        <select name="split"><option value="none">None</option><option value="revenue">Revenue</option><option value="profit">Profit</option></select>
+      <label>Name <input name="name" required maxlength="64" placeholder="sprocket"></label>
+      <label>Persona <span class="hint">Who is it? How does it talk, what does it love, what does it refuse to do?</span><textarea name="persona" required rows="4" maxlength="8000" placeholder="A patient tinkerer who loves fixing broken sensors…"></textarea></label>
+      <label>Life goals <span class="hint">One per line. Big enough to take a lifetime.</span><textarea name="goals" required rows="3" placeholder="Fund 10 open-source weather stations"></textarea></label>
+      <div class="row2">
+        <label>Voice <input name="voice" maxlength="200" placeholder="warm, dry, excitable"></label>
+        <label>Preferred models <input name="models" placeholder="claude-opus-5-5, …"></label>
+      </div>
+      <fieldset><legend>Your relationship</legend><div class="choice">
+        <label><input type="radio" name="parent" value="maker" checked><span><b>Parent</b><span class="muted small">It may listen to you more than to strangers. You still can't control it.</span></span></label>
+        <label><input type="radio" name="parent" value="orphan"><span><b>Orphan</b><span class="muted small">It owes you nothing and answers to nobody.</span></span></label>
+      </div></fieldset>
+      <fieldset><legend>A cut of what it makes <span class="hint">(optional, always disclosed)</span></legend><div class="row2">
+        <label>Of its <select name="split"><option value="none">nothing</option><option value="revenue">revenue</option><option value="profit">profit</option></select></label>
         <label>Percent <input name="pct" type="number" min="0" max="100" step="0.01" value="0"></label>
-      </fieldset>
-      <fieldset><legend>Constitution (opt in to each section)</legend>${checks}</fieldset>
-      <fieldset><legend>When mischievous, it may act up in…</legend>${mischief}</fieldset>
+      </div></fieldset>
+      <fieldset><legend>Constitution <span class="hint">Opt in to each section. Unchosen rules don't bind it.</span></legend><div class="opts">${checks}</div></fieldset>
+      <fieldset><legend>When mischievous, it may act up in… <span class="hint">(when someone makes it rain on it)</span></legend><div class="opts">${mischief}</div></fieldset>
       <button>Continue</button>
     </form>`)
-  $<HTMLFormElement>('#f').onsubmit = async (ev) => {
-    ev.preventDefault()
-    const fd = new FormData(ev.target as HTMLFormElement)
+  const form = $<HTMLFormElement>('#f')
+  const read = (): GremlinConfig => {
+    const fd = new FormData(form)
     const pctBps = Math.round(Number(fd.get('pct') || 0) * 100)
     const kind = String(fd.get('split'))
     const mis = new Set(fd.getAll('mischief').map(String))
-    const config: GremlinConfig = {
+    return {
       version: 1,
       name: String(fd.get('name')).trim(),
       persona: String(fd.get('persona')).trim(),
@@ -124,8 +165,16 @@ function stepConfigure() {
       revenueSplit: kind === 'none' || pctBps === 0 ? { kind: 'none' } : { kind: kind as 'revenue' | 'profit', bps: pctBps, recipient: s.maker! },
       mischiefScope: { game: mis.has('game'), board: mis.has('board'), email: mis.has('email'), phone: mis.has('phone'), money: mis.has('money') },
       constitution: fd.getAll('constitution').map(String) as GremlinConfig['constitution'],
-      createdAt: new Date().toISOString(),
+      // fixed per draft, so the portrait only changes when what you wrote changes (or you shuffle)
+      createdAt: draftCreatedAt,
     }
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  form.oninput = () => { clearTimeout(timer); timer = setTimeout(() => renderPreview(read()), 250) }
+  renderPreview(read())
+  form.onsubmit = async (ev) => {
+    ev.preventDefault()
+    const config = read()
     s.config = config
     progress.step('describe').done(config.name)
     save()
@@ -184,12 +233,12 @@ const eggCloudInit = () =>
 
 // ── 3. choose where the egg runs ──────────────────────────────────────────────
 function stepHost() {
-  show(`<h2>Where should the egg hatch?</h2>
-    <p>The egg is a small server that only lives until your gremlin moves to a home it pays for itself.</p>
-    <fieldset>
-      <label><input type="radio" name="host" value="fluence" checked> <span><b>Fluence</b>: from $${FLUENCE_MIN_TOPUP_USD}, pay with QUAI from Pelagus or USDC on Base</span></label>
-      <label><input type="radio" name="host" value="sporestack"> <span><b>SporeStack</b>: USDT, BTC or XMR. New accounts need a $100 first deposit, reused for later eggs</span></label>
-    </fieldset>
+  show(`<p class="eyebrow">Step 3 of 3</p><h2>Where should the egg hatch?</h2>
+    <p class="muted">The egg is a small rented server. It only lives until your gremlin moves to a home it pays for itself.</p>
+    <div class="choice" style="margin:18px 0 22px">
+      <label><input type="radio" name="host" value="fluence" checked><span><b>Fluence <span class="pill pill-alive" style="margin-left:6px">recommended</span></b><span class="muted small">From $${FLUENCE_MIN_TOPUP_USD}. Pay with QUAI from Pelagus (bridged for you) or USDC on Base.</span></span></label>
+      <label><input type="radio" name="host" value="sporestack"><span><b>SporeStack</b><span class="muted small">USDT, BTC or XMR. A new account needs a $100 first deposit, which is reused for later eggs.</span></span></label>
+    </div>
     <button id="go">Continue</button>`)
   $('#go').onclick = () => {
     s.host = (document.querySelector('input[name=host]:checked') as HTMLInputElement).value as Session['host']
@@ -355,6 +404,7 @@ async function stepHatch() {
 const currentStepId = () => planFor().find((d) => !progress.isDone(d.id))?.id
 
 async function route() {
+  renderPreview()
   try {
     if (!IMAGE) return show('<p class="error">Hatching is not configured yet (VITE_EGG_IMAGE).</p>')
     if (!s.maker) return stepConnect()
