@@ -6,7 +6,8 @@
   "type": "module",
   "bin": {
     "gremlin-mcp": "dist/main.js",
-    "gremlin-gateway": "dist/gateway/main.js"
+    "gremlin-gateway": "dist/gateway/main.js",
+    "gremlin-bootstrap": "dist/bootstrap/main.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -19,6 +20,7 @@
     "@modelcontextprotocol/sdk": "^1.32.1",
     "ethers": "^6.13.0",
     "quais": "^1.0.0-alpha.57",
-    "venice-x402-client": "^0.2.0"
+    "venice-x402-client": "^0.2.0",
+    "yaml": "^2.9.1"
   }
 }
