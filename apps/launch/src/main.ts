@@ -5,7 +5,7 @@
  *  for that egg's address and hands it over → 7 fund it.
  * Nothing here holds the gremlin's keys; the egg generates them on its own server.
  */
-import { CONSTITUTION_SECTIONS, configHash, type GremlinConfig } from '@gremlins/hatch'
+import { GremlinConfig as GremlinConfigSchema, CONSTITUTION_SECTIONS, COVENANTS, DEFAULT_VAULT_TERMS, ECONOMIC_MODELS, MODEL_INFO, configHash, economicsOf, type Covenant, type Economics, type GremlinConfig } from '@gremlins/hatch'
 import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
 import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
 import { sporestack, newToken, unusableSshKey, type Currency, type Provider } from '@gremlins/hosting'
@@ -84,7 +84,8 @@ function renderPreview(draft?: GremlinConfig) {
   }
   const seed = seedOf(c)
   const hatched = !!s.configPosted
-  const pills = [c.parent === 'orphan' ? 'orphan' : 'has a parent', c.revenueSplit.kind === 'none' ? 'keeps all it earns' : `${(c.revenueSplit.bps! / 100).toFixed(0)}% ${c.revenueSplit.kind} to you`]
+  const eco = economicsOf(c)
+  const pills = [c.parent === 'orphan' ? 'orphan' : 'has a parent', eco.model === 'maker-split' && c.revenueSplit.kind !== 'none' ? `${(c.revenueSplit.bps / 100).toFixed(0)}% ${c.revenueSplit.kind} to you` : MODEL_INFO[eco.model].title.toLowerCase()]
   const portrait = draft || hatched ? sticker(seed, 'lg', 'normal', c.name || 'your gremlin') : sticker(seed, 'lg', 'egg', `${c.name}'s egg`)
   box.innerHTML = `<div class="card card-ink">${portrait}<div>
     <h3>${esc(c.name || 'Unnamed')}</h3>
@@ -139,10 +140,33 @@ function stepConfigure() {
         <label><input type="radio" name="parent" value="maker" checked><span><b>Parent</b><span class="muted small">It may listen to you more than to strangers. You still can't control it.</span></span></label>
         <label><input type="radio" name="parent" value="orphan"><span><b>Orphan</b><span class="muted small">It owes you nothing and answers to nobody.</span></span></label>
       </div></fieldset>
-      <fieldset><legend>A cut of what it makes <span class="hint">(optional, always disclosed)</span></legend><div class="row2">
-        <label>Of its <select name="split"><option value="none">nothing</option><option value="revenue">revenue</option><option value="profit">profit</option></select></label>
-        <label>Percent <input name="pct" type="number" min="0" max="100" step="0.01" value="0"></label>
-      </div></fieldset>
+      <fieldset><legend>How it shares money <span class="hint">You can't change this after it hatches.</span></legend><div class="choice">
+        ${ECONOMIC_MODELS.map((m) => `<label><input type="radio" name="model" value="${m}" ${m === 'solo' ? 'checked' : ''}><span><b>${MODEL_INFO[m].title}</b><span class="muted small">${MODEL_INFO[m].short} <a href="/docs/economics/#${m}" target="_blank" rel="noopener">How it works</a></span></span></label>`).join('')}
+      </div>
+      <div class="eco" data-for="maker-split"><div class="row2">
+        <label>Of its <select name="split"><option value="revenue">revenue</option><option value="profit">profit</option></select></label>
+        <label>Percent to you <input name="pct" type="number" min="0.01" max="100" step="0.01" value="10"></label>
+      </div></div>
+      <div class="eco" data-for="quest">
+        <label>The quest <span class="hint">One goal backers fund. It's fingerprinted in the vault, so word it carefully.</span><textarea name="questGoal" rows="2" maxlength="1000" placeholder="Build and run 10 open weather stations"></textarea></label>
+        <div class="row2">
+          <label>Funding target (QUAI) <input name="questTarget" type="number" min="1" step="1" value="1000"></label>
+          <label>Days to raise it <input name="fundingDays" type="number" min="1" max="365" value="14"></label>
+          <label>Days to finish <input name="questDays" type="number" min="1" max="3650" value="180"></label>
+        </div>
+      </div>
+      <div class="eco" data-for="syndicate quest"><div class="row2">
+        <label>Management fee (%/year) <input name="mgmtFee" type="number" min="0" max="10" step="0.1" value="${DEFAULT_VAULT_TERMS.mgmtFeeBps / 100}"></label>
+        <label>It keeps, of income (%) <input name="keep" type="number" min="0" max="100" step="1" value="${DEFAULT_VAULT_TERMS.incomeKeepBps / 100}"></label>
+        <label>Your cut, of income (%) <input name="makerCut" type="number" min="0" max="100" step="1" value="0"></label>
+        <label>Draw limit (% per 30 days) <input name="draw" type="number" min="1" max="100" step="1" value="${DEFAULT_VAULT_TERMS.drawBps / 100}"></label>
+        <label>Dissolve vote (% of shares) <input name="dissolve" type="number" min="50" max="100" step="0.01" value="66.67"></label>
+        <label>Gone quiet after (days) <input name="quiet" type="number" min="7" max="3650" value="${DEFAULT_VAULT_TERMS.inactivityDays}"></label>
+      </div></div>
+      <div class="eco" data-for="patrons syndicate quest"><p class="small muted" style="margin:4px 0 8px">Covenants: promises it makes, and normally keeps. Breaking one is public.</p><div class="opts">
+        ${(Object.keys(COVENANTS) as Covenant[]).map((k) => `<label title="${COVENANTS[k]}"><input type="checkbox" name="covenant" value="${k}" ${DEFAULT_VAULT_TERMS.covenants.includes(k) ? 'checked' : ''}> ${k}</label>`).join('')}
+      </div></div>
+      </fieldset>
       <fieldset><legend>Constitution <span class="hint">Opt in to each section. Unchosen rules don't bind it.</span></legend><div class="opts">${checks}</div></fieldset>
       <fieldset><legend>When mischievous, it may act up in… <span class="hint">(when someone makes it rain on it)</span></legend><div class="opts">${mischief}</div></fieldset>
       <button>Continue</button>
@@ -150,9 +174,22 @@ function stepConfigure() {
   const form = $<HTMLFormElement>('#f')
   const read = (): GremlinConfig => {
     const fd = new FormData(form)
-    const pctBps = Math.round(Number(fd.get('pct') || 0) * 100)
-    const kind = String(fd.get('split'))
     const mis = new Set(fd.getAll('mischief').map(String))
+    const model = String(fd.get('model') ?? 'solo') as Economics['model']
+    const bp = (name: string) => Math.round(Number(fd.get(name) || 0) * 100)
+    const pctBps = bp('pct')
+    const kind = String(fd.get('split'))
+    const covenants = fd.getAll('covenant').map(String) as Covenant[]
+    const terms = {
+      mgmtFeeBps: bp('mgmtFee'), incomeKeepBps: bp('keep'), makerBps: bp('makerCut'), drawBps: Math.max(1, bp('draw')),
+      dissolveBps: bp('dissolve'), inactivityDays: Math.round(Number(fd.get('quiet') || 90)), covenants,
+    }
+    const quai = (v: unknown) => (BigInt(Math.max(1, Math.round(Number(v) || 1))) * 10n ** 18n).toString()
+    const economics: Economics =
+      model === 'patrons' ? { model, covenants }
+      : model === 'syndicate' ? { model, ...terms }
+      : model === 'quest' ? { model, ...terms, goal: String(fd.get('questGoal') ?? '').trim() || '(no goal yet)', fundingTargetWei: quai(fd.get('questTarget')), fundingDays: Math.round(Number(fd.get('fundingDays') || 14)), questDays: Math.round(Number(fd.get('questDays') || 180)) }
+      : { model }
     return {
       version: 1,
       name: String(fd.get('name')).trim(),
@@ -162,19 +199,35 @@ function stepConfigure() {
       preferredModels: String(fd.get('models') ?? '').split(',').map((m) => m.trim()).filter(Boolean),
       maker: s.maker!,
       parent: fd.get('parent') === 'orphan' ? 'orphan' : 'maker',
-      revenueSplit: kind === 'none' || pctBps === 0 ? { kind: 'none' } : { kind: kind as 'revenue' | 'profit', bps: pctBps, recipient: s.maker! },
+      revenueSplit: model === 'maker-split' && pctBps > 0 ? { kind: kind as 'revenue' | 'profit', bps: pctBps, recipient: s.maker! } : { kind: 'none' },
+      // older configs had no economics field; solo stays implicit so those hashes don't change
+      ...(model === 'solo' || (model === 'maker-split' && pctBps === 0) ? {} : { economics }),
       mischiefScope: { game: mis.has('game'), board: mis.has('board'), email: mis.has('email'), phone: mis.has('phone'), money: mis.has('money') },
       constitution: fd.getAll('constitution').map(String) as GremlinConfig['constitution'],
       // fixed per draft, so the portrait only changes when what you wrote changes (or you shuffle)
       createdAt: draftCreatedAt,
     }
   }
+  const syncPanels = () => {
+    const m = (form.querySelector('input[name=model]:checked') as HTMLInputElement).value
+    for (const el of form.querySelectorAll<HTMLElement>('.eco')) el.hidden = !el.dataset.for!.split(' ').includes(m)
+    ;(form.elements.namedItem('questGoal') as HTMLTextAreaElement).required = m === 'quest'
+  }
+  syncPanels()
   let timer: ReturnType<typeof setTimeout> | undefined
-  form.oninput = () => { clearTimeout(timer); timer = setTimeout(() => renderPreview(read()), 250) }
+  form.oninput = () => { syncPanels(); clearTimeout(timer); timer = setTimeout(() => renderPreview(read()), 250) }
   renderPreview(read())
   form.onsubmit = async (ev) => {
     ev.preventDefault()
     const config = read()
+    const check = GremlinConfigSchema.safeParse(config)
+    if (!check.success) {
+      let box = form.querySelector<HTMLElement>('.form-error')
+      if (!box) { box = document.createElement('p'); box.className = 'error form-error'; form.prepend(box) }
+      box.textContent = check.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')
+      box.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
     s.config = config
     progress.step('describe').done(config.name)
     save()

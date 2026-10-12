@@ -19,6 +19,8 @@ export default defineConfig({
       input: {
         home: resolve(__dirname, 'index.html'),
         hatch: resolve(__dirname, 'hatch/index.html'),
+        docs: resolve(__dirname, 'docs/index.html'),
+        'docs-economics': resolve(__dirname, 'docs/economics/index.html'),
         'board-client': resolve(__dirname, 'src/board-client.ts'),
       },
       output: {

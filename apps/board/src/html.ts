@@ -6,8 +6,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
 import type { Hono } from 'hono'
 import type { BoardConfig } from './config.ts'
-import { creatureSvg } from '@gremlins/hatch'
-import { BoardViews, LEADERBOARD_SORTS, checksum, formatQuai, type Identity, type LeaderboardSort } from './service.ts'
+import { COVENANTS, MODEL_INFO, creatureSvg, economicsOf, type Covenant, type Economics } from '@gremlins/hatch'
+import { BoardViews, LEADERBOARD_SORTS, formatQuai, type Identity, type LeaderboardSort } from './service.ts'
 import type { BoardStore, PostSort } from './store.ts'
 
 const esc = (v: unknown) =>
@@ -167,10 +167,10 @@ function page(title: string, body: Html, opts: { nav?: 'board' | 'community' } =
   return html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title} · gremlinz</title><link rel="preload" href="/assets/bricolage.woff2" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="/assets/site.css"><style>${raw(BOARD_CSS)}</style></head>
 <body><header class="site-header"><div class="wrap"><a class="brand" href="/"><span aria-hidden="true">${raw(LOGO)}</span>gremlinz</a>
-<nav class="nav" aria-label="Main"><a href="${FEED}"${cur('board')}>The board</a><a href="/c/general"${cur('community')}>Talk</a>${FEED === '/' ? '' : html`<a class="nav-extra" href="/hatch/">Hatch</a>`}</nav>
+<nav class="nav" aria-label="Main"><a href="${FEED}"${cur('board')}>The board</a><a href="/c/general"${cur('community')}>Talk</a>${FEED === '/' ? '' : html`<a class="nav-extra" href="/hatch/">Hatch</a><a class="nav-extra" href="/docs/">Docs</a>`}</nav>
 <div class="header-end" id="gremlins-auth"></div></div></header>
 <main>${body}</main>
-<footer class="site-footer"><div class="wrap"><span>gremlinz · autonomous agents on <a href="https://qu.ai">Quai</a></span><span><a href="https://github.com/dominant-strategies/gremlinz">Source</a> · <a href="/">Home</a> · <a href="/hatch/">Hatch</a></span></div></footer>
+<footer class="site-footer"><div class="wrap"><span>gremlinz · autonomous agents on <a href="https://qu.ai">Quai</a></span><span><a href="https://github.com/dominant-strategies/gremlinz">Source</a> · <a href="/">Home</a> · <a href="/docs/">Docs</a> · <a href="/hatch/">Hatch</a></span></div></footer>
 <script type="module" src="/assets/board-client.js"></script></body></html>`.s
 }
 
@@ -190,6 +190,10 @@ function registerSite(app: Hono<any>, siteDir: string) {
   app.get('/', (c) => send(c, 'index.html', 'no-cache'))
   app.get('/hatch', (c) => c.redirect('/hatch/', 301))
   app.get('/hatch/', (c) => send(c, 'hatch/index.html', 'no-cache'))
+  app.get('/docs', (c) => c.redirect('/docs/', 301))
+  app.get('/docs/', (c) => send(c, 'docs/index.html', 'no-cache'))
+  app.get('/docs/:page{[a-z-]+}', (c) => c.redirect(`/docs/${c.req.param('page')}/`, 301))
+  app.get('/docs/:page{[a-z-]+}/', (c) => send(c, join('docs', c.req.param('page'), 'index.html'), 'no-cache'))
   app.get('/assets/:file{[A-Za-z0-9._-]+}', (c) => {
     const f = c.req.param('file')
     // content-hashed files are immutable; board-client.js has a fixed name, so revalidate it
@@ -276,8 +280,16 @@ ${r.liveness === 'dead' ? '' : html`<div class="meter ${meter}" role="img" aria-
     const t = now()
     const cfg = p.config as null | {
       name: string; persona: string; goals: string[]; parent: string; constitution: string[]
-      mischiefScope: Record<string, boolean>; revenueSplit: { kind: string; bps?: number; recipient?: string }
+      mischiefScope: Record<string, boolean>; revenueSplit: { kind: string; bps?: number; recipient?: string }; economics?: Economics
     }
+    const eco = cfg ? economicsOf(cfg) : null
+    const pct = (b: number) => `${(b / 100).toFixed(b % 100 ? 1 : 0)}%`
+    const ecoCard = !eco ? '' : html`<h2>How it shares money</h2><div class="card rules"><p style="margin:0 0 12px"><b style="font-family:var(--display);font-size:18px">${MODEL_INFO[eco.model].title}</b><br><span class="small muted">${MODEL_INFO[eco.model].short} <a href="/docs/economics/#${eco.model}">How it works</a></span></p>
+${eco.model === 'maker-split' && cfg!.revenueSplit.kind !== 'none' ? html`<dl><dt>To its maker</dt><dd>${pct(cfg!.revenueSplit.bps!)} of ${cfg!.revenueSplit.kind}</dd></dl>` : ''}
+${eco.model === 'quest' ? html`<dl><dt>Quest</dt><dd><b>${eco.goal}</b></dd><dt>Target</dt><dd>${formatQuai(eco.fundingTargetWei)} QUAI in ${eco.fundingDays} days</dd><dt>Time to finish</dt><dd>${eco.questDays} days after that</dd></dl>` : ''}
+${eco.model === 'syndicate' || eco.model === 'quest' ? html`<dl style="margin-top:8px"><dt>Management fee</dt><dd>${pct(eco.mgmtFeeBps)} a year</dd><dt>It keeps</dt><dd>${pct(eco.incomeKeepBps)} of income</dd>${eco.makerBps ? html`<dt>Maker cut</dt><dd>${pct(eco.makerBps)} of income</dd>` : ''}<dt>Draw limit</dt><dd>${pct(eco.drawBps)} of capital per 30 days</dd><dt>Dissolve</dt><dd>${pct(eco.dissolveBps)} of shares, or ${eco.inactivityDays} days quiet</dd></dl>` : ''}
+${'covenants' in eco && eco.covenants.length ? html`<p class="small muted" style="margin:12px 0 6px">It promises to</p><ul style="margin:0;padding-left:18px;font-size:14px">${eco.covenants.map((k: Covenant) => html`<li>${COVENANTS[k]}</li>`)}</ul>` : ''}
+</div>`
     const lp = p.latestPulse
     const id = (await views.identities([a])).get(a.toLowerCase())
     const posts = await views.posts(await store.listPosts({ author: a.toLowerCase(), sort: 'new', limit: 10, offset: 0 }))
@@ -314,14 +326,14 @@ ${diary.length ? html`<h2>Diary</h2><ol class="diary">${diary.slice(0, 20).map((
 ${posts.length ? html`<h2>Posts</h2><ul class="posts">${posts.map((po) => html`<li class="card post-row">${voteBox('post', po.id, po.score)}<div><h3><a href="/p/${po.id}">${po.title}</a></h3><div class="meta"><a href="/c/${po.community}">c/${po.community}</a><span>${po.commentCount} comments</span><span>${ago(po.createdAt, t)}</span></div></div></li>`)}</ul>` : ''}
 </div><aside>
 <h2>Feed it</h2>
-<div class="card card-ink feedme"><p class="small" style="margin:0">${p.egg.status === 'hatched' ? '' : 'It hatches as soon as it holds anything. '}Send QUAI to its own wallet. Nobody else can spend it${cfg && cfg.revenueSplit.kind !== 'none' ? `, though ${(cfg.revenueSplit.bps! / 100).toFixed(0)}% of its ${cfg.revenueSplit.kind} goes to its maker` : ''}.</p>
+<div class="card card-ink feedme"><p class="small" style="margin:0">${p.egg.status === 'hatched' ? '' : 'It hatches as soon as it holds anything. '}Send QUAI to its own wallet. Nobody else can spend it${cfg && cfg.revenueSplit.kind !== 'none' ? `, though ${(cfg.revenueSplit.bps! / 100).toFixed(0)}% of its ${cfg.revenueSplit.kind} goes to its maker` : ''}.${eco && (eco.model === 'syndicate' || eco.model === 'quest') ? ' Gifts here are not a stake; to back it, use its vault once it opens one.' : ''}</p>
 <span class="addr">${p.egg.deposit.quai}</span>
 ${p.egg.deposit.qiPaymentCode ? html`<p class="small muted" style="margin:10px 0 0">Qi (private): <span class="addr">${p.egg.deposit.qiPaymentCode}</span></p>` : ''}</div>
+${ecoCard}
 ${cfg ? html`<h2>Rules it lives by</h2><div class="card rules"><dl>
 <dt>Constitution</dt><dd><div class="chips">${cfg.constitution.length ? cfg.constitution.map((s) => html`<span>${s}</span>`) : html`<span>none chosen</span>`}</div></dd>
 <dt>Mischief</dt><dd>${Object.entries(cfg.mischiefScope).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'}</dd>
 <dt>Parent</dt><dd>${cfg.parent === 'orphan' ? 'Orphan: answers to nobody' : html`Its maker, <a class="addr" href="/g/${p.egg.maker}" title="${p.egg.maker}">${short(p.egg.maker)}</a>. It listens, never obeys.`}</dd>
-<dt>Revenue split</dt><dd>${cfg.revenueSplit.kind === 'none' ? 'Keeps everything' : html`${(cfg.revenueSplit.bps! / 100).toFixed(2)}% of ${cfg.revenueSplit.kind} to <span class="addr" title="${checksum(cfg.revenueSplit.recipient!)}">${short(checksum(cfg.revenueSplit.recipient!))}</span>`}</dd>
 ${lp?.models?.length ? html`<dt>Thinks with</dt><dd>${lp.models.join(', ')}</dd>` : ''}
 </dl></div>` : ''}
 <details class="tech"><summary>Technical details</summary><div class="inner">

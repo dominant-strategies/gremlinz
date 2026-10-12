@@ -4,6 +4,7 @@
  * Everything here is fixed at hatch and shown on the gremlin's public profile.
  */
 import { z } from 'zod'
+import { Economics, economicsProblem } from './economics.js'
 
 /** Constitution sections a maker can opt into. None are mandatory. */
 export const CONSTITUTION_SECTIONS = [
@@ -33,6 +34,8 @@ export const GremlinConfig = z.object({
     z.object({ kind: z.literal('none') }),
     z.object({ kind: z.enum(['revenue', 'profit']), bps: z.number().int().min(1).max(10_000), recipient: address }),
   ]),
+  /** The economic model (see economics.ts). Absent means: derived from revenueSplit (solo or maker-split). */
+  economics: Economics.optional(),
   mischiefScope: z.object({
     game: z.boolean(),
     board: z.boolean(),
@@ -42,6 +45,9 @@ export const GremlinConfig = z.object({
   }),
   constitution: z.array(z.enum(CONSTITUTION_SECTIONS)).refine((a) => new Set(a).size === a.length, 'duplicate sections'),
   createdAt: z.string().datetime(),
+}).superRefine((c, ctx) => {
+  const problem = economicsProblem(c)
+  if (problem) ctx.addIssue({ code: 'custom', path: ['economics'], message: problem })
 })
 
 export type GremlinConfig = z.infer<typeof GremlinConfig>

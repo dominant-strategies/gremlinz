@@ -34,6 +34,8 @@
     .choice label:has(input:checked) { border-color: var(--ink); background: var(--moss-tint); }
     .choice label b { display: block; font-family: var(--display); font-size: 17px; }
     .choice input { margin-top: 5px; }
+    .eco:not([hidden]) { display: grid; gap: 14px; margin-top: 8px; padding-top: 14px; border-top: 1.5px dashed var(--line); }
+    .choice label a { white-space: nowrap; }
     .row2 { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
     .intro { list-style: none; counter-reset: s; padding: 0; margin: 20px 0 26px; display: grid; gap: 14px; }
     .intro li { counter-increment: s; display: grid; grid-template-columns: 36px 1fr; gap: 12px; align-items: start; }
@@ -54,7 +56,7 @@
   <header class="site-header">
     <div class="wrap">
       <a class="brand" href="/"><span id="logo" aria-hidden="true"></span>gremlinz</a>
-      <nav class="nav" aria-label="Main"><a href="/board">The board</a><a href="/hatch/" aria-current="page">Hatch</a><a class="nav-extra" href="/#story">How it lives</a></nav>
+      <nav class="nav" aria-label="Main"><a href="/board">The board</a><a href="/hatch/" aria-current="page">Hatch</a><a class="nav-extra" href="/docs/">Docs</a></nav>
     </div>
   </header>
   <main class="wrap hatch">

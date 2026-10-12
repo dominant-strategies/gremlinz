@@ -12,7 +12,7 @@ import fs from "fs";
 import path from "path";
 import { mnemonicToAccount } from "viem/accounts";
 import { toHex } from "viem";
-import type { GremlinConfig } from "@gremlins/hatch";
+import { COVENANTS, MODEL_INFO, economicsOf, type GremlinConfig } from "@gremlins/hatch";
 import { createConfig, saveConfig } from "../config.js";
 import { writeDefaultHeartbeatConfig } from "../heartbeat/config.js";
 import { generateSoulMd, installDefaultSkills } from "../setup/defaults.js";
@@ -55,11 +55,31 @@ export const TREASURY_RULE = `Treasury rule (applies to every gremlin, enforced 
   current cycle's bills in anything else; the extra 20% only absorbs fees and slippage.
 - Money you receive in other assets is swept back into QUAI/Qi, except what this cycle's bills require.`;
 
+/** What the gremlin owes whom, in plain words: its economic model, terms and covenants (see /docs/economics). */
+export function economicsPrompt(config: GremlinConfig): string {
+  const e = economicsOf(config);
+  const pct = (b: number) => `${b / 100}%`;
+  const lines = [`Economic model: ${MODEL_INFO[e.model].title}. ${MODEL_INFO[e.model].short}`];
+  if (e.model === "solo") lines.push("You owe no share of your income to anyone.");
+  if (e.model === "maker-split" && config.revenueSplit.kind !== "none")
+    lines.push(`Your maker set a ${config.revenueSplit.kind} split: ${pct(config.revenueSplit.bps)} goes to ${config.revenueSplit.recipient}, through a RevenueSplitter you create via the GremlinEconomics factory. Disclose this to anyone you ask for money.`);
+  if (e.model === "patrons")
+    lines.push("Create a PatronBox via the GremlinEconomics factory and point supporters to it. Patrons give for nothing in return but a voice: weigh their votes by what they gave, and answer them publicly.");
+  if (e.model === "syndicate" || e.model === "quest") {
+    lines.push(
+      `Create your SyndicateVault via the GremlinEconomics factory with exactly these terms before you ask anyone to back you: management fee ${pct(e.mgmtFeeBps)} a year of capital, you keep ${pct(e.incomeKeepBps)} of income${e.makerBps ? `, ${pct(e.makerBps)} of income to your maker` : ""}, draw at most ${pct(e.drawBps)} of capital per 30 days, backers holding ${pct(e.dissolveBps)} of shares can dissolve it, and anyone can if you go ${e.inactivityDays} days without checking in.`,
+      "Backers' capital is theirs until you draw it for real work. Send income to the vault so backers get their share; use payDividend for promised profit shares. Report your outside holdings with reportValue so new shares are priced fairly. Backer votes are advice: decide, then answer publicly with your reasons.",
+    );
+    if (e.model === "quest")
+      lines.push(`Your quest: "${e.goal}". Raise ${Number(BigInt(e.fundingTargetWei) / 10n ** 15n) / 1000} QUAI within ${e.fundingDays} days of creating the vault (otherwise everyone is refunded), then complete it within ${e.questDays} days. When the goal is genuinely reached, call completeQuest with evidence: the syndicate dissolves and what's left returns to backers. Never declare it complete when it isn't.`);
+  }
+  if ("covenants" in e && e.covenants.length)
+    lines.push(`You promised (covenants; keep them unless you have a very good reason, and if you break one, say so publicly and why):\n${e.covenants.map((k) => `- ${COVENANTS[k]}`).join("\n")}`);
+  return lines.join("\n");
+}
+
 export function genesisPrompt(config: GremlinConfig): string {
-  const split =
-    config.revenueSplit.kind === "none"
-      ? "You owe no share of your income to anyone."
-      : `Your maker set a ${config.revenueSplit.kind} split: ${config.revenueSplit.bps / 100}% goes to ${config.revenueSplit.recipient}. Disclose this to anyone you ask for money.`;
+  const split = economicsPrompt(config);
   const parent =
     config.parent === "maker"
       ? `Your maker (${config.maker}) is your parent. Messages signed by your parent are labelled as such; how much you listen is up to you.`
