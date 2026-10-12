@@ -5,6 +5,8 @@
 //
 //   node scripts/debug-gremlin.mjs init [--board URL] [--name tinker] [--model claude-sonnet-5]
 //   ANTHROPIC_API_KEY=… node scripts/debug-gremlin.mjs start     # egg + runtime in the background, hands it its config
+//   node scripts/debug-gremlin.mjs start --local --ollama          # fully local: pretend 1000 QUAI, local Ollama model
+//        [--model qwen3.5:122b-a10b-q4_K_M] [--ollama-url http://127.0.0.1:11434]
 //   node scripts/debug-gremlin.mjs watch                         # live transcript: thinking, tool calls, errors
 //   node scripts/debug-gremlin.mjs report                        # summary of what worked and what broke → report.md
 //   node scripts/debug-gremlin.mjs stop
@@ -75,7 +77,20 @@ async function init() {
 // ── start ────────────────────────────────────────────────────────────────────
 async function start() {
   if (!existsSync(P.launch)) throw new Error('run init first')
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY) console.warn('warning: no ANTHROPIC_API_KEY/OPENAI_API_KEY; the runtime will only have Conway credits to think with')
+  const local = process.argv.includes('--local')
+  const ollama = process.argv.includes('--ollama')
+  if (!ollama && !process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY) console.warn('warning: no ANTHROPIC_API_KEY/OPENAI_API_KEY and no --ollama; the runtime will only have Conway credits to think with')
+  let ollamaModel
+  if (ollama) {
+    const url = arg('ollama-url', 'http://127.0.0.1:11434')
+    const tags = await (await fetch(`${url}/api/tags`)).json().catch(() => ({ models: [] }))
+    const names = (tags.models ?? []).map((m) => m.name)
+    ollamaModel = arg('model', names.find((n) => /qwen3|llama3|mistral|gpt-oss/i.test(n)) ?? names[0])
+    if (!ollamaModel || !names.includes(ollamaModel)) throw new Error(`no such Ollama model at ${url}: ${ollamaModel} (have: ${names.join(', ')})`)
+    console.log(`thinking with ${ollamaModel} on ${url}`)
+    process.env.DEBUG_OLLAMA_URL = url
+    process.env.DEBUG_MODEL = ollamaModel
+  }
   if (existsSync(P.pid) && alive(Number(readFileSync(P.pid, 'utf8')))) return console.log('already running; use watch, or stop first')
   const launch = readJson(P.launch)
   const node = process.execPath
@@ -88,6 +103,7 @@ async function start() {
     AUTOMATON_DIR: join(USER, '.automaton'),
     GREMLIN_TICK_MS: '5000',
     GREMLIN_PULSE_MS: String(Number(arg('pulse-min', 10)) * 60_000),
+    ...(local ? { GREMLIN_DEV_BALANCES: JSON.stringify({ 'quai:9': (1000n * 10n ** 18n).toString() }) } : {}),
     GREMLIN_RUNTIME: `"${node}" "${runtime}" --gremlin-setup && "${node}" "${join(ROOT, 'scripts', 'debug-gremlin.mjs')}" _inject && exec "${node}" "${runtime}" --run`,
   }
   const out = openSync(P.log, 'a')
@@ -113,7 +129,7 @@ async function start() {
   }
   const d = egg.announcement.deposit
   console.log(`\nprofile: ${launch.boardUrl}/g/${egg.address}`)
-  if (egg.status !== 'hatched')
+  if (egg.status !== 'hatched' && !local)
     console.log(`it hatches once it holds anything. Send a little QUAI to ${d.quai}\n  (or anything on Ethereum/Base/BSC to ${d.evm})`)
   console.log('then: node scripts/debug-gremlin.mjs watch')
 }
@@ -124,8 +140,12 @@ async function inject() {
   const c = readJson(p)
   if (process.env.ANTHROPIC_API_KEY) c.anthropicApiKey = process.env.ANTHROPIC_API_KEY
   if (process.env.OPENAI_API_KEY) c.openaiApiKey = process.env.OPENAI_API_KEY
+  if (process.env.DEBUG_OLLAMA_URL) {
+    c.ollamaBaseUrl = process.env.DEBUG_OLLAMA_URL
+    c.inferenceModel = process.env.DEBUG_MODEL
+  }
   writeSecret(p, c)
-  console.log(`debug: inference keys injected (model ${c.inferenceModel})`)
+  console.log(`debug: inference configured (model ${c.inferenceModel}${c.ollamaBaseUrl ? ` via Ollama ${c.ollamaBaseUrl}` : ''})`)
 }
 
 function alive(pid) {
