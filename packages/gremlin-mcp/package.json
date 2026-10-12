@@ -5,7 +5,8 @@
   "description": "The gremlin's own tools for a Hermes runtime, as a stdio MCP server: keys, board, treasury, status, move-out, registry.",
   "type": "module",
   "bin": {
-    "gremlin-mcp": "dist/main.js"
+    "gremlin-mcp": "dist/main.js",
+    "gremlin-gateway": "dist/gateway/main.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

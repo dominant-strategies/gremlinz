@@ -1,0 +1,97 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { createServer, type Server } from 'node:http'
+import { GatewayConfig } from '../src/gateway/config.js'
+import { createGateway, type CallRecord } from '../src/gateway/server.js'
+
+// Fake upstreams: "down" always 503, "busy" 429 once, "ok" answers (and streams), "bad" rejects the request (400).
+const hits: Record<string, number> = {}
+let up: Server
+let gw: Server
+let base: string
+const calls: CallRecord[] = []
+let clock = 1_000_000
+
+function upstream() {
+  return createServer((req, res) => {
+    let body = ''
+    req.on('data', (c) => (body += c))
+    req.on('end', () => {
+      const id = req.url!.split('/')[1]!
+      hits[id] = (hits[id] ?? 0) + 1
+      const b = JSON.parse(body)
+      if (id === 'down') { res.statusCode = 503; return res.end('{"error":"down"}') }
+      if (id === 'bad') { res.statusCode = 400; return res.end('{"error":{"message":"bad request"}}') }
+      if (b.stream) {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'hel' } }] })}\n\n`)
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'lo' } }] })}\n\n`)
+        res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 11, completion_tokens: 2 } })}\n\ndata: [DONE]\n\n`)
+        return res.end()
+      }
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ id: 'x', model: b.model, choices: [{ message: { role: 'assistant', content: `from ${id} as ${b.model}` } }], usage: { prompt_tokens: 100, completion_tokens: 50 } }))
+    })
+  })
+}
+
+beforeAll(async () => {
+  up = upstream()
+  await new Promise<void>((r) => up.listen(0, '127.0.0.1', r))
+  const u = `http://127.0.0.1:${(up.address() as { port: number }).port}`
+  const cfg = GatewayConfig.parse({
+    providers: ['down', 'ok', 'bad'].map((id) => ({ id, kind: 'openai', baseUrl: `${u}/${id}/v1` })),
+    routes: {
+      'gremlin-main': [{ provider: 'down', model: 'big' }, { provider: 'ok', model: 'big-ok', inputPerM: 1, outputPerM: 2 }],
+      'gremlin-bad': [{ provider: 'bad', model: 'x' }, { provider: 'ok', model: 'y' }],
+    },
+  })
+  gw = createGateway(cfg, { onCall: (r) => calls.push(r), now: () => clock })
+  await new Promise<void>((r) => gw.listen(0, '127.0.0.1', r))
+  base = `http://127.0.0.1:${(gw.address() as { port: number }).port}/v1`
+})
+afterAll(() => { gw.close(); up.close() })
+
+const chat = (model: string, extra: object = {}) => fetch(`${base}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], ...extra }) })
+
+describe('inference gateway', () => {
+  it('lists aliases as models', async () => {
+    const r = await (await fetch(`${base}/models`)).json()
+    expect(r.data.map((m: { id: string }) => m.id)).toEqual(['gremlin-main', 'gremlin-bad'])
+  })
+
+  it('fails over to the next provider and reports the alias as the model', async () => {
+    const r = await (await chat('gremlin-main')).json()
+    expect(r.choices[0].message.content).toBe('from ok as big-ok')
+    expect(r.model).toBe('gremlin-main')
+    expect(calls.at(-1)).toMatchObject({ provider: 'ok', usage: { promptTokens: 100, completionTokens: 50 } })
+  })
+
+  it('skips a provider in cooldown, then retries it after the cooldown', async () => {
+    const before = hits.down
+    await chat('gremlin-main')
+    expect(hits.down).toBe(before) // still cooling down
+    clock += 31_000
+    await chat('gremlin-main')
+    expect(hits.down).toBe(before! + 1)
+  })
+
+  it('does not fail over on a bad request', async () => {
+    const r = await chat('gremlin-bad')
+    expect(r.status).toBe(400)
+    expect(hits.ok).toBe(3)
+  })
+
+  it('passes streams through and captures usage from the last chunk', async () => {
+    const r = await chat('gremlin-main', { stream: true })
+    const text = await r.text()
+    expect(text).toContain('"hel"')
+    expect(text).toContain('[DONE]')
+    expect(calls.at(-1)!.usage).toEqual({ promptTokens: 11, completionTokens: 2 })
+  })
+
+  it('names the valid aliases for an unknown model', async () => {
+    const r = await chat('gpt-9')
+    expect(r.status).toBe(404)
+    expect((await r.json()).error.message).toContain('gremlin-main')
+  })
+})
