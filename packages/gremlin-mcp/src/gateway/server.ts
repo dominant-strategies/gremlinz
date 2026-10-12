@@ -12,7 +12,7 @@ import { classify, isRefusal, mayRetryRefusal, permissiveRoute, routeFor, type R
 export const AUTO = 'gremlin-auto'
 
 export interface Usage { promptTokens: number; completionTokens: number }
-export interface CallRecord { at: string; alias: string; provider: string; model: string; status: number; usage?: Usage; ms: number; refused?: boolean }
+export interface CallRecord { at: string; alias: string; provider: string; model: string; status: number; usage?: Usage; ms: number; refused?: boolean; incomplete?: boolean }
 
 export interface GatewayDeps {
   /** Per-provider fetchers; defaults built from config (venice needs a signer, injected by the caller). */
@@ -123,7 +123,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         }
         cooldown.delete(p.id)
         const t = target
-        const record = (usage?: Usage, refusal?: boolean) => deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: up.status, usage, ms: now() - started, ...(refusal ? { refused: true } : {}) }, t)
+        const record = (usage?: Usage, refusal?: boolean, incomplete?: boolean) => deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: up.status, usage, ms: now() - started, ...(refusal ? { refused: true } : {}), ...(incomplete ? { incomplete: true } : {}) }, t)
         if (body.stream) return pipeStream(up, res, record)
         const out = (await up.json()) as { usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string; choices?: { message?: { content?: string; tool_calls?: unknown[] } }[] }
         const msg = out.choices?.[0]?.message
@@ -152,28 +152,41 @@ function usageOf(u?: { prompt_tokens?: number; completion_tokens?: number } | nu
   return u ? { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0 } : undefined
 }
 
-/** Pass SSE through untouched, watching for the final usage chunk. */
-async function pipeStream(up: Response, res: ServerResponse, record: (u?: Usage) => void) {
+/**
+ * Pass SSE through untouched, watching for usage and a finish_reason. A stream that ends without a finish_reason is
+ * recorded as incomplete (it counts against the model's rating). If the upstream fails mid-stream, the connection is
+ * destroyed rather than ended cleanly, so the client sees a transport error and retries.
+ */
+async function pipeStream(up: Response, res: ServerResponse, record: (u?: Usage, refusal?: boolean, incomplete?: boolean) => void) {
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
   let usage: Usage | undefined
+  let finished = false
   let buf = ''
   const decoder = new TextDecoder()
-  for await (const chunk of up.body as unknown as AsyncIterable<Uint8Array>) {
-    res.write(chunk)
-    buf += decoder.decode(chunk, { stream: true })
-    let i: number
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i).trim()
-      buf = buf.slice(i + 1)
-      if (!line.startsWith('data:') || line === 'data: [DONE]') continue
-      try {
-        const u = usageOf(JSON.parse(line.slice(5)).usage)
-        if (u) usage = u
-      } catch { /* partial or non-JSON line */ }
+  try {
+    for await (const chunk of up.body as unknown as AsyncIterable<Uint8Array>) {
+      res.write(chunk)
+      buf += decoder.decode(chunk, { stream: true })
+      let i: number
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim()
+        buf = buf.slice(i + 1)
+        if (!line.startsWith('data:') || line === 'data: [DONE]') continue
+        try {
+          const j = JSON.parse(line.slice(5)) as { usage?: Parameters<typeof usageOf>[0]; choices?: { finish_reason?: string | null }[] }
+          const u = usageOf(j.usage)
+          if (u) usage = u
+          if (j.choices?.some((c) => c.finish_reason)) finished = true
+        } catch { /* partial or non-JSON line */ }
+      }
     }
+  } catch (e) {
+    record(usage, false, true)
+    res.destroy(e as Error)
+    return
   }
   res.end()
-  record(usage)
+  record(usage, false, !finished)
 }
 
 function json(res: ServerResponse, status: number, body: unknown) {

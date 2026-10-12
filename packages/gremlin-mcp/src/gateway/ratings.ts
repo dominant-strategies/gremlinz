@@ -46,7 +46,7 @@ export function observe(entries: LedgerEntry[]): Map<string, Observed> {
   for (const e of entries) by.set(`${e.provider}/${e.model}`, [...(by.get(`${e.provider}/${e.model}`) ?? []), e])
   const out = new Map<string, Observed>()
   for (const [k, es] of by) {
-    const ok = es.filter((e) => e.status < 400)
+    const ok = es.filter((e) => e.status < 400 && !(e as LedgerEntry & { incomplete?: boolean }).incomplete)
     const outs = ok.map((e) => e.usage?.completionTokens).filter((n): n is number => typeof n === 'number')
     const ms = ok.map((e) => e.ms).sort((a, b) => a - b)
     out.set(k, {

@@ -96,3 +96,19 @@ describe('inference gateway', () => {
     expect((await r.json()).error.message).toContain('gremlin-main')
   })
 })
+
+describe('incomplete streams', () => {
+  it('records a stream that ends without a finish_reason as incomplete', async () => {
+    const { createServer } = await import('node:http')
+    const up2 = createServer((_q, s) => { s.writeHead(200, { 'content-type': 'text/event-stream' }); s.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'partial' } }] })}\n\n`) })
+    await new Promise<void>((r) => up2.listen(0, '127.0.0.1', r))
+    const recs: CallRecord[] = []
+    const cfg = GatewayConfig.parse({ providers: [{ id: 'p', kind: 'openai', baseUrl: `http://127.0.0.1:${(up2.address() as { port: number }).port}/v1` }], routes: { m: [{ provider: 'p', model: 'x' }] }, glean: { enabled: false } })
+    const g = createGateway(cfg, { onCall: (r) => recs.push(r) })
+    await new Promise<void>((r) => g.listen(0, '127.0.0.1', r))
+    const r = await fetch(`http://127.0.0.1:${(g.address() as { port: number }).port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', stream: true, messages: [] }) })
+    expect(await r.text()).toContain('partial')
+    expect(recs[0]!.incomplete).toBe(true)
+    g.close(); up2.close()
+  })
+})
