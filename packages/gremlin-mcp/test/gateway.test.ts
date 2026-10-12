@@ -44,6 +44,7 @@ beforeAll(async () => {
       'gremlin-main': [{ provider: 'down', model: 'big' }, { provider: 'ok', model: 'big-ok', inputPerM: 1, outputPerM: 2 }],
       'gremlin-bad': [{ provider: 'bad', model: 'x' }, { provider: 'ok', model: 'y' }],
     },
+    glean: { enabled: false },
   })
   gw = createGateway(cfg, { onCall: (r) => calls.push(r), now: () => clock })
   await new Promise<void>((r) => gw.listen(0, '127.0.0.1', r))

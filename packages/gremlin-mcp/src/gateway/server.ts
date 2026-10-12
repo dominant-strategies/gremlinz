@@ -6,6 +6,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { GatewayConfig, RouteTarget } from './config.js'
 import { providerFetch, retryable, type UpstreamFetch } from './providers.js'
+import { gleanRoute, looksSensitive } from './glean.js'
 
 export interface Usage { promptTokens: number; completionTokens: number }
 export interface CallRecord { at: string; alias: string; provider: string; model: string; status: number; usage?: Usage; ms: number }
@@ -19,17 +20,28 @@ export interface GatewayDeps {
   refuse?: () => string | undefined
   now?: () => number
   log?: (...a: unknown[]) => void
+  env?: NodeJS.ProcessEnv
+}
+
+/** Adds the reviewed free endpoints as gremlin-glean (unless the config defines that alias itself). */
+export function withGlean(cfg: GatewayConfig, env: NodeJS.ProcessEnv): GatewayConfig {
+  if (!cfg.glean.enabled || cfg.routes['gremlin-glean']) return cfg
+  const g = gleanRoute(env, cfg.glean.models)
+  if (!g.route.length) return cfg
+  return { ...cfg, providers: [...cfg.providers, ...g.providers.filter((p) => !cfg.providers.some((q) => q.id === p.id))], routes: { ...cfg.routes, 'gremlin-glean': g.route } }
 }
 
 const COOLDOWN_MIN_MS = 30_000
 const COOLDOWN_MAX_MS = 10 * 60_000
 
-export function createGateway(cfg: GatewayConfig, deps: GatewayDeps = {}): Server {
+export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Server {
   const now = deps.now ?? Date.now
   const log = deps.log ?? (() => {})
+  const cfg = withGlean(config, deps.env ?? process.env)
   const providers = new Map(cfg.providers.map((p) => [p.id, p]))
   const fetchers = new Map(cfg.providers.map((p) => [p.id, deps.fetchers?.[p.id] ?? (p.kind === 'openai' ? providerFetch(p) : undefined)]))
   const cooldown = new Map<string, { until: number; ms: number }>()
+  const lastCall = new Map<string, number>()
   const down = (id: string) => {
     const prev = cooldown.get(id)
     const ms = Math.min(COOLDOWN_MAX_MS, prev ? prev.ms * 2 : COOLDOWN_MIN_MS)
@@ -53,12 +65,16 @@ export function createGateway(cfg: GatewayConfig, deps: GatewayDeps = {}): Serve
       if (refused) return json(res, 429, { error: { type: 'budget_exhausted', message: refused } })
 
       const errors: string[] = []
+      const sensitive = looksSensitive(body.messages)
       for (const target of route) {
         const p = providers.get(target.provider)
         const f = fetchers.get(target.provider)
         if (!p || !f) { errors.push(`${target.provider}: not configured`); continue }
         const c = cooldown.get(p.id)
         if (c && c.until > now()) { errors.push(`${p.id}: cooling down`); continue }
+        if (p.free && sensitive) { errors.push(`${p.id}: skipped, the request looks like it contains a secret`); continue }
+        if (p.minIntervalMs && now() - (lastCall.get(p.id) ?? -Infinity) < p.minIntervalMs) { errors.push(`${p.id}: rate limit (one call per ${p.minIntervalMs / 1000}s)`); continue }
+        lastCall.set(p.id, now())
         const started = now()
         const upstreamBody = { ...body, model: target.model, ...(body.stream ? { stream_options: { ...(body.stream_options as object), include_usage: true } } : {}) }
         let up: Response

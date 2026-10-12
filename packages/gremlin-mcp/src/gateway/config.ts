@@ -13,6 +13,10 @@ export const ProviderConfig = z.object({
   /** Name of the environment variable holding the API key (openai kind). */
   apiKeyEnv: z.string().optional(),
   timeoutMs: z.number().int().positive().default(120_000),
+  /** Free endpoint (gleaning): requests that look like they contain secrets are never sent here. */
+  free: z.boolean().default(false),
+  /** Minimum gap between calls to this provider (free tiers). */
+  minIntervalMs: z.number().int().min(0).default(0),
 })
 export type ProviderConfig = z.infer<typeof ProviderConfig>
 
@@ -32,5 +36,7 @@ export const GatewayConfig = z.object({
   routes: z.record(z.string(), z.array(RouteTarget).min(1)),
   /** Spending cap; calls are refused (fail closed) once a UTC day's spend reaches it. */
   budget: z.object({ dailyUsd: z.number().positive() }).optional(),
+  /** Add the reviewed free endpoints as the gremlin-glean route. */
+  glean: z.object({ enabled: z.boolean().default(true), models: z.record(z.string(), z.array(z.string())).default({}) }).default({ enabled: true, models: {} }),
 })
 export type GatewayConfig = z.infer<typeof GatewayConfig>
