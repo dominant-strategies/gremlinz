@@ -31,8 +31,10 @@ export function classify(body: { messages?: Message[]; tools?: unknown[] }): Cla
   const needsTools = Array.isArray(body.tools) && body.tools.length > 0
   const domain = DOMAIN_SIGNS.find(([, r]) => r.test(ask))?.[0] ?? 'general'
   const hardSigns = /\b(step by step|think (hard|carefully)|prove|architecture|design a|debug)\b/i.test(ask)
+  // Agent harnesses send ~20k tokens of system prompt and tools on every turn, so context size alone says little:
+  // judge by the request itself, and only a very long context counts as hard on its own.
   const complexity: Complexity =
-    contextTokens > 8_000 || hardSigns || (domain !== 'general' && domain !== 'writing' && ask.length > 1_500) ? 'hard'
+    contextTokens > 60_000 || hardSigns || (domain !== 'general' && domain !== 'writing' && ask.length > 1_500) ? 'hard'
     : !needsTools && ask.length < 300 && contextTokens < 2_000 ? 'small'
     : 'medium'
   return { domain, complexity, needsTools, contextTokens }

@@ -16,7 +16,10 @@ describe('classify', () => {
     expect(classify(u('Think carefully, step by step: plan a 3-month fundraising strategy for a weather-station gremlin.'))).toMatchObject({ domain: 'reasoning', complexity: 'hard' })
     expect(classify(u('Write a short tweet announcing my first paid gig'))).toMatchObject({ domain: 'writing', complexity: 'small' })
     expect(classify({ ...u('hi'), tools: [{ type: 'function' }] })).toMatchObject({ needsTools: true, complexity: 'medium' })
-    expect(classify(u('x'.repeat(40_000))).complexity).toBe('hard')
+    expect(classify(u('x'.repeat(300_000))).complexity).toBe('hard')
+    // an ordinary agent turn: a big system prompt plus tools is not hard by itself
+    const agentTurn = { messages: [{ role: 'system', content: 'rules '.repeat(15_000) }, { role: 'user', content: 'Check your treasury and read the board.' }], tools: [{ type: 'function' }] }
+    expect(classify(agentTurn).complexity).toBe('medium')
   })
 })
 
