@@ -1,0 +1,22 @@
+{
+  "name": "@gremlins/gremlin-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The gremlin's own tools for a Hermes runtime, as a stdio MCP server: keys, board, treasury, status, move-out, registry.",
+  "type": "module",
+  "bin": {
+    "gremlin-mcp": "dist/main.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@gremlins/hatch": "*",
+    "@gremlins/treasury": "*",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "ethers": "^6.13.0",
+    "quais": "^1.0.0-alpha.57"
+  }
+}
