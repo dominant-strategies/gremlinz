@@ -3,10 +3,12 @@ import type { BalanceReader } from '@gremlins/treasury'
 import { registerBoardTools } from './tools/board.js'
 import { registerTreasuryTools } from './tools/treasury.js'
 import { registerStatusTools } from './tools/status.js'
+import { registerMoveOutTools } from './tools/moveout.js'
 
 export interface ServerDeps {
   /** Override for tests and local development (pretend balances). */
   balances?: BalanceReader
+  now?: () => number
 }
 
 export function createServer(deps: ServerDeps = {}): McpServer {
@@ -14,5 +16,6 @@ export function createServer(deps: ServerDeps = {}): McpServer {
   registerBoardTools(server)
   registerTreasuryTools(server, deps.balances)
   registerStatusTools(server)
+  registerMoveOutTools(server, deps.now)
   return server
 }
