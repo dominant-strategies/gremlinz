@@ -34,7 +34,7 @@ const write = (rel: string, body: string, mode = 0o600) => {
 write('SOUL.md', soulMarkdown(config, { evmAddress: k.evm.address, quaiAddress: k.quai.address, boardUrl: boardUrl() }), 0o444)
 write('config.yaml', hermesConfig({
   gatewayUrl,
-  mcp: { command: process.execPath, args: [mcpMain], env: { GREMLIN_HOME: home(), GREMLIN_BOARD_URL: boardUrl() } },
+  mcp: { command: process.execPath, args: [mcpMain], env: { GREMLIN_HOME: home(), GREMLIN_BOARD_URL: boardUrl(), ...(process.env.GREMLIN_DEV_BALANCES ? { GREMLIN_DEV_BALANCES: process.env.GREMLIN_DEV_BALANCES } : {}) } },
   skillsDir,
   protectedPaths: [home(), 'seed', 'signed-config.json'],
   wakeEveryMinutes: Number(process.env.GREMLIN_WAKE_MINUTES ?? 45),

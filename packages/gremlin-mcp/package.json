@@ -7,7 +7,8 @@
   "bin": {
     "gremlin-mcp": "dist/main.js",
     "gremlin-gateway": "dist/gateway/main.js",
-    "gremlin-bootstrap": "dist/bootstrap/main.js"
+    "gremlin-bootstrap": "dist/bootstrap/main.js",
+    "gremlin-run": "dist/runner/main.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
