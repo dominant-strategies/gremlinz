@@ -4,7 +4,7 @@
  * over on provider-side errors. Streams are passed through as they arrive (failover only before the first byte).
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import type { GatewayConfig, RouteTarget } from './config.js'
+import type { GatewayConfig, ProviderConfig, RouteTarget } from './config.js'
 import { providerFetch, retryable, type UpstreamFetch } from './providers.js'
 import { gleanRoute, looksSensitive } from './glean.js'
 import { classify, isRefusal, mayRetryRefusal, permissiveRoute, routeFor, type RouterInput } from './router.js'
@@ -24,6 +24,8 @@ export interface GatewayDeps {
   now?: () => number
   log?: (...a: unknown[]) => void
   env?: NodeJS.ProcessEnv
+  /** Lent keys usable right now: tried first on every route except free gleaning. */
+  lent?: () => { provider: ProviderConfig; fetch: UpstreamFetch; targets: RouteTarget[] }[]
   /** Ratings and observations for gremlin-auto (read per request, so refreshed ratings apply at once). */
   router?: () => Omit<RouterInput, 'providers' | 'glean' | 'fallback'>
 }
@@ -74,13 +76,17 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         log(`auto: ${c.domain}/${c.complexity}${c.needsTools ? '/tools' : ''} → ${route.map((t) => `${t.provider}/${t.model}`).join(', ') || '(none)'}`)
       }
       if (!route) return json(res, 404, { error: { message: `unknown model "${alias}"; use one of: ${[...Object.keys(cfg.routes), ...(deps.router ? [AUTO] : [])].join(', ')}` } })
-      const refused = deps.refuse?.()
-      if (refused) return json(res, 429, { error: { type: 'budget_exhausted', message: refused } })
 
       const errors: string[] = []
       const sensitive = looksSensitive(body.messages)
       const tried = new Set<string>()
-      let queue = [...route]
+      const lent = alias === 'gremlin-glean' ? [] : deps.lent?.() ?? []
+      for (const l of lent) { providers.set(l.provider.id, l.provider); fetchers.set(l.provider.id, l.fetch) }
+      // Once the gremlin's own budget is spent, only lent keys and free endpoints remain usable.
+      const refused = deps.refuse?.()
+      if (refused && !lent.length && alias !== 'gremlin-glean') return json(res, 429, { error: { type: 'budget_exhausted', message: refused } })
+      const ownRoute = refused ? route.filter((t) => providers.get(t.provider)?.free) : route
+      let queue = [...lent.flatMap((l) => l.targets), ...ownRoute]
       let lastRefusal: Record<string, unknown> | undefined
       for (let target = queue.shift(); target; target = queue.shift()) {
         if (tried.has(`${target.provider}/${target.model}`)) continue

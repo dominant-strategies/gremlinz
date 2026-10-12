@@ -6,7 +6,7 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import type { RouteTarget } from './config.js'
 import type { CallRecord } from './server.js'
 
-export interface LedgerEntry extends CallRecord { usd: number; priced: boolean }
+export interface LedgerEntry extends CallRecord { usd: number; priced: boolean; grantId?: string }
 
 export const costUsd = (r: CallRecord, t: RouteTarget) =>
   r.usage ? (r.usage.promptTokens * t.inputPerM + r.usage.completionTokens * t.outputPerM) / 1_000_000 : 0
@@ -36,7 +36,7 @@ export class Ledger {
       if (!line.startsWith('{')) continue
       try {
         const e = JSON.parse(line) as LedgerEntry
-        if (day(e.at) === d) this.spentToday += e.usd
+        if (day(e.at) === d && !e.grantId) this.spentToday += e.usd
       } catch { /* a torn last line after a crash */ }
     }
   }
@@ -44,9 +44,24 @@ export class Ledger {
   record(r: CallRecord, t: RouteTarget) {
     this.roll()
     const usd = costUsd(r, t)
-    const entry: LedgerEntry = { ...r, usd, priced: t.inputPerM > 0 || t.outputPerM > 0 }
-    if (day(r.at) === this.today) this.spentToday += usd
+    const entry: LedgerEntry = { ...r, usd, priced: t.inputPerM > 0 || t.outputPerM > 0, ...(t.grantId ? { grantId: t.grantId } : {}) }
+    // A lent key's calls are the lender's money: valued for repayment, not counted against the gremlin's budget.
+    if (day(r.at) === this.today && !t.grantId) this.spentToday += usd
     appendFileSync(this.file, JSON.stringify(entry) + '\n', { mode: 0o600 })
+  }
+
+  /** Value used on a lent key since `sinceMs` (for its allowance and for repaying the lender). */
+  grantUsed(grantId: string, sinceMs = 0): number {
+    if (!existsSync(this.file)) return 0
+    let usd = 0
+    for (const line of readFileSync(this.file, 'utf8').split('\n')) {
+      if (!line.includes(grantId)) continue
+      try {
+        const e = JSON.parse(line) as LedgerEntry
+        if (e.grantId === grantId && Date.parse(e.at) >= sinceMs) usd += e.usd
+      } catch { /* torn line */ }
+    }
+    return usd
   }
 
   spent(): number {

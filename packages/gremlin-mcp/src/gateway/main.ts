@@ -5,7 +5,8 @@ import { GatewayConfig } from './config.js'
 import { createGateway } from './server.js'
 import { Ledger, type LedgerEntry } from './ledger.js'
 import { loadRatings, observe, type ModelRating, type Observed } from './ratings.js'
-import { homeFile, keys } from '../env.js'
+import { boardUrl, homeFile, keys } from '../env.js'
+import { allowance, fetchGrants, lentOffers, period, remainingUsd, type OpenGrant } from './grants.js'
 import { veniceFetch } from './venice.js'
 
 const cfg = GatewayConfig.parse(JSON.parse(readFileSync(process.env.GATEWAY_CONFIG ?? '/etc/gremlin/gateway.json', 'utf8')))
@@ -31,5 +32,24 @@ const router = () => {
   return { ratings: cache.ratings, seen: cache.seen }
 }
 
-createGateway(cfg, { log, fetchers, router, onCall: (r, t) => ledger.record(r, t), refuse: () => ledger.refuse(cfg.budget?.dailyUsd) })
+// Lent keys: fetched from the board every 10 minutes (held in memory only), remaining budgets every 2 minutes.
+let grants: OpenGrant[] = []
+const remaining = new Map<string, number | undefined>()
+const refreshGrants = async () => {
+  try {
+    grants = await fetchGrants(boardUrl(), keys().evm)
+    if (grants.length) log(`lent keys: ${grants.map((g) => g.grant.provider.label).join(', ')}`)
+  } catch (e) { log('grants refresh failed:', (e as Error).message) }
+}
+const refreshRemaining = async () => { for (const g of grants) remaining.set(g.grant.grantId, await remainingUsd(g)) }
+void refreshGrants().then(refreshRemaining)
+setInterval(() => void refreshGrants(), 10 * 60_000).unref()
+setInterval(() => void refreshRemaining(), 2 * 60_000).unref()
+const lent = () => lentOffers(grants.map((g) => {
+  const now = Date.now()
+  const used = ledger.grantUsed(g.grant.grantId, period(g.grant.policy.period, now).start)
+  return { g, allow: allowance(g.grant.policy, now, used, remaining.get(g.grant.grantId)) }
+}))
+
+createGateway(cfg, { log, fetchers, router, lent, onCall: (r, t) => ledger.record(r, t), refuse: () => ledger.refuse(cfg.budget?.dailyUsd) })
   .listen(cfg.port, cfg.host, () => log(`gateway on http://${cfg.host}:${cfg.port}/v1 (${Object.keys(cfg.routes).join(', ')}, gremlin-auto)`))
