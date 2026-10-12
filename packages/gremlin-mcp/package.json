@@ -18,6 +18,7 @@
     "@gremlins/treasury": "*",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "ethers": "^6.13.0",
-    "quais": "^1.0.0-alpha.57"
+    "quais": "^1.0.0-alpha.57",
+    "venice-x402-client": "^0.2.0"
   }
 }
