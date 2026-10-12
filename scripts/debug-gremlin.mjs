@@ -7,6 +7,8 @@
 //   ANTHROPIC_API_KEY=… node scripts/debug-gremlin.mjs start     # egg + runtime in the background, hands it its config
 //   node scripts/debug-gremlin.mjs start --local --ollama          # fully local: pretend 1000 QUAI, local Ollama model
 //        [--model qwen3.5:122b-a10b-q4_K_M] [--ollama-url http://127.0.0.1:11434]
+//   node scripts/debug-gremlin.mjs start --local --ollama --hermes   # the Hermes runtime (gremlin-runtime fork)
+//        [--hermes-bin <venv>/bin/hermes] [--runtime-dir ../gremlin-runtime]
 //   node scripts/debug-gremlin.mjs watch                         # live transcript: thinking, tool calls, errors
 //   node scripts/debug-gremlin.mjs report                        # summary of what worked and what broke → report.md
 //   node scripts/debug-gremlin.mjs stop
@@ -104,7 +106,16 @@ async function start() {
     GREMLIN_TICK_MS: '5000',
     GREMLIN_PULSE_MS: String(Number(arg('pulse-min', 10)) * 60_000),
     ...(local ? { GREMLIN_DEV_BALANCES: JSON.stringify({ 'quai:9': (1000n * 10n ** 18n).toString() }) } : {}),
-    GREMLIN_RUNTIME: `"${node}" "${runtime}" --gremlin-setup && "${node}" "${join(ROOT, 'scripts', 'debug-gremlin.mjs')}" _inject && exec "${node}" "${runtime}" --run`,
+    GREMLIN_RUNTIME: process.argv.includes('--hermes')
+      ? `exec "${node}" "${join(ROOT, 'packages', 'gremlin-mcp', 'dist', 'runner', 'main.js')}"`
+      : `"${node}" "${runtime}" --gremlin-setup && "${node}" "${join(ROOT, 'scripts', 'debug-gremlin.mjs')}" _inject && exec "${node}" "${runtime}" --run`,
+    ...(process.argv.includes('--hermes') ? {
+      HERMES_HOME: join(DIR, 'hermes'),
+      HERMES_BIN: arg('hermes-bin', join(ROOT, '..', 'gremlin-runtime', '.venv', 'bin', 'hermes')),
+      GREMLIN_RUNTIME_DIR: arg('runtime-dir', join(ROOT, '..', 'gremlin-runtime')),
+      GREMLIN_DAILY_USD: '1',
+      ...(ollamaModel ? { GREMLIN_OLLAMA_URL: process.env.DEBUG_OLLAMA_URL, GREMLIN_OLLAMA_MODEL: ollamaModel } : {}),
+    } : {}),
   }
   const out = openSync(P.log, 'a')
   const child = spawn(node, [join(ROOT, 'packages', 'egg', 'dist', 'main.js')], { env, detached: true, stdio: ['ignore', out, out] })
