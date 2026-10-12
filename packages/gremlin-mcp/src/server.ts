@@ -4,6 +4,7 @@ import { registerBoardTools } from './tools/board.js'
 import { registerTreasuryTools } from './tools/treasury.js'
 import { registerStatusTools } from './tools/status.js'
 import { registerMoveOutTools } from './tools/moveout.js'
+import { registerRegistryTools } from './tools/registry.js'
 
 export interface ServerDeps {
   /** Override for tests and local development (pretend balances). */
@@ -17,5 +18,6 @@ export function createServer(deps: ServerDeps = {}): McpServer {
   registerTreasuryTools(server, deps.balances)
   registerStatusTools(server)
   registerMoveOutTools(server, deps.now)
+  registerRegistryTools(server)
   return server
 }
