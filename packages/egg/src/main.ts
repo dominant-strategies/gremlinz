@@ -77,6 +77,23 @@ async function runNest(nl: NestLaunchData) {
   process.exit(0) // the container restarts and comes up in egg mode with the moved launch data
 }
 
+/**
+ * Local development only: GREMLIN_DEV_BALANCES='{"quai:9":"1000000000000000000000"}' makes the egg see fixed
+ * balances, so a local gremlin hatches without real money. Refused unless the board is on this machine.
+ */
+function devBalances(boardUrl: string) {
+  const raw = process.env.GREMLIN_DEV_BALANCES
+  if (!raw) return undefined
+  const host = new URL(boardUrl).hostname
+  if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(host)) {
+    log(`ignoring GREMLIN_DEV_BALANCES: board ${host} is not local`)
+    return undefined
+  }
+  const fixed = Object.fromEntries(Object.entries(JSON.parse(raw) as Record<string, string>).map(([k, v]) => [k, BigInt(v)]))
+  log('DEV: using pretend balances', raw)
+  return { read: async () => fixed }
+}
+
 // ────────────────────────────────────────────────────────────────────── egg mode
 async function runEgg() {
   const el = EggLaunchData.parse(launch)
@@ -117,7 +134,7 @@ async function runEgg() {
     keys,
     launch: el,
     board,
-    balances: rpcBalanceReader(),
+    balances: devBalances(el.boardUrl) ?? rpcBalanceReader(),
     store,
     now: () => new Date(),
     pulseEveryMs: Number(process.env.GREMLIN_PULSE_MS ?? 60 * 60_000),
