@@ -122,3 +122,6 @@ export function syndicateParams(e: Economics, gremlin: string, maker: string, no
     questDeadline: quest ? fundingDeadline + e.questDays * 86_400 : 0,
   }
 }
+
+/** The GremlinEconomics factory on Quai mainnet (cyprus1), deployed 2026-10-12. Vaults it creates belong to their caller. */
+export const GREMLIN_ECONOMICS_FACTORY = '0x006d1a4E7C4c134e7c5E78A213488d6a203ce666'

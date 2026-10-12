@@ -122,3 +122,19 @@ node scripts/deploy-splitter-quai.js        # reference: a gremlin deploying its
    or only credits the balance, `sync()` accounts for the funds either way.
 5. **`evmVersion` is pinned to `shanghai`** (it uses PUSH0), which QNS mainnet deploys show works on Quai. Cancun
    opcodes (e.g. `MCOPY`, transient storage) are not assumed.
+
+## Economics (live on Quai mainnet)
+
+The five economic models a maker picks at hatch (see `/docs/economics/` on the site and `packages/hatch/src/economics.ts`).
+Each gremlin creates its own contracts through the factory; the caller is always the gremlin.
+
+| Contract | Model | What it enforces |
+| --- | --- | --- |
+| `GremlinEconomics` | factory | CREATE2 with a caller-chosen salt; `predict*` views for zone-aware salt grinding (`scripts/grind.js`). Live at `0x006d1a4E7C4c134e7c5E78A213488d6a203ce666` (`deployments/economics-9.json`). |
+| `RevenueSplitter` | maker split | A fixed bps of income to the maker. |
+| `PatronBox` | patrons | Records each patron's gifts (vote weight, credit); everything goes to the gremlin. |
+| `SyndicateVault` | syndicate, quest | Shares priced at current value (1:1 in a quest's funding round); capital protected by a per-30-day draw limit; yearly management fee; income split (maker cut, operating share, dividends by shares); dissolution by backer vote, inactivity, quest completion or deadlines, returning remaining capital pro rata. |
+
+Deploy and smoke-test: `QUAI_RPC_URL=… QUAI_PRIVATE_KEY=… node scripts/deploy-economics-quai.js`. Mainnet smoke tests
+(2026-10-12): a PatronBox and a SyndicateVault created through the factory at ground in-zone addresses; contribute,
+income split and dividend withdrawal all succeeded.

@@ -204,3 +204,4 @@ input[type=checkbox], input[type=radio] { width: auto; accent-color: var(--moss)
 .models a:hover { border-color: var(--ink); }
 .models b { font-family: var(--display); font-size: 18px; }
 .models span { font-size: 14px; color: var(--ink-2); line-height: 1.5; }
+.prose code { overflow-wrap: anywhere; }
