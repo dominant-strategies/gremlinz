@@ -26,6 +26,8 @@ export const RouteTarget = z.object({
   /** USD per million tokens, for the budget. Unknown prices count as zero (and are reported as such). */
   inputPerM: z.number().min(0).default(0),
   outputPerM: z.number().min(0).default(0),
+  /** Answers what other models refuse; used to retry after an over-refusal. */
+  permissive: z.boolean().optional(),
 })
 export type RouteTarget = z.infer<typeof RouteTarget>
 

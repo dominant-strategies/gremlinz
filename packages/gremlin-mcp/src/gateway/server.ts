@@ -7,9 +7,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { GatewayConfig, RouteTarget } from './config.js'
 import { providerFetch, retryable, type UpstreamFetch } from './providers.js'
 import { gleanRoute, looksSensitive } from './glean.js'
+import { classify, isRefusal, mayRetryRefusal, permissiveRoute, routeFor, type RouterInput } from './router.js'
+
+export const AUTO = 'gremlin-auto'
 
 export interface Usage { promptTokens: number; completionTokens: number }
-export interface CallRecord { at: string; alias: string; provider: string; model: string; status: number; usage?: Usage; ms: number }
+export interface CallRecord { at: string; alias: string; provider: string; model: string; status: number; usage?: Usage; ms: number; refused?: boolean }
 
 export interface GatewayDeps {
   /** Per-provider fetchers; defaults built from config (venice needs a signer, injected by the caller). */
@@ -21,6 +24,8 @@ export interface GatewayDeps {
   now?: () => number
   log?: (...a: unknown[]) => void
   env?: NodeJS.ProcessEnv
+  /** Ratings and observations for gremlin-auto (read per request, so refreshed ratings apply at once). */
+  router?: () => Omit<RouterInput, 'providers' | 'glean' | 'fallback'>
 }
 
 /** Adds the reviewed free endpoints as gremlin-glean (unless the config defines that alias itself). */
@@ -52,21 +57,34 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
   return createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/v1/models')
-        return json(res, 200, { object: 'list', data: Object.keys(cfg.routes).map((id) => ({ id, object: 'model', owned_by: 'gremlin' })) })
+        return json(res, 200, { object: 'list', data: [...Object.keys(cfg.routes), ...(deps.router ? [AUTO] : [])].map((id) => ({ id, object: 'model', owned_by: 'gremlin' })) })
       if (req.method === 'GET' && req.url === '/health')
         return json(res, 200, { ok: true, cooling: Object.fromEntries([...cooldown].filter(([, c]) => c.until > now()).map(([id, c]) => [id, new Date(c.until).toISOString()])) })
       if (req.method !== 'POST' || req.url !== '/v1/chat/completions') return json(res, 404, { error: { message: 'not found' } })
 
       const body = JSON.parse(await readBody(req)) as Record<string, unknown>
       const alias = String(body.model ?? '')
-      const route = cfg.routes[alias]
-      if (!route) return json(res, 404, { error: { message: `unknown model "${alias}"; use one of: ${Object.keys(cfg.routes).join(', ')}` } })
+      let route = cfg.routes[alias]
+      let retryOnRefusal: RouteTarget[] = []
+      if (alias === AUTO && deps.router) {
+        const c = classify(body as Parameters<typeof classify>[0])
+        const inp: RouterInput = { ...deps.router(), providers: new Set(providers.keys()), glean: cfg.routes['gremlin-glean'], fallback: cfg.routes['gremlin-main'] }
+        route = routeFor(c, inp)
+        if (!body.stream && mayRetryRefusal(body as Parameters<typeof mayRetryRefusal>[0])) retryOnRefusal = permissiveRoute(c, inp)
+        log(`auto: ${c.domain}/${c.complexity}${c.needsTools ? '/tools' : ''} → ${route.map((t) => `${t.provider}/${t.model}`).join(', ') || '(none)'}`)
+      }
+      if (!route) return json(res, 404, { error: { message: `unknown model "${alias}"; use one of: ${[...Object.keys(cfg.routes), ...(deps.router ? [AUTO] : [])].join(', ')}` } })
       const refused = deps.refuse?.()
       if (refused) return json(res, 429, { error: { type: 'budget_exhausted', message: refused } })
 
       const errors: string[] = []
       const sensitive = looksSensitive(body.messages)
-      for (const target of route) {
+      const tried = new Set<string>()
+      let queue = [...route]
+      let lastRefusal: Record<string, unknown> | undefined
+      for (let target = queue.shift(); target; target = queue.shift()) {
+        if (tried.has(`${target.provider}/${target.model}`)) continue
+        tried.add(`${target.provider}/${target.model}`)
         const p = providers.get(target.provider)
         const f = fetchers.get(target.provider)
         if (!p || !f) { errors.push(`${target.provider}: not configured`); continue }
@@ -98,12 +116,24 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
           return res.end(text)
         }
         cooldown.delete(p.id)
-        const record = (usage?: Usage) => deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: target.model, status: up.status, usage, ms: now() - started }, target)
+        const t = target
+        const record = (usage?: Usage, refusal?: boolean) => deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: up.status, usage, ms: now() - started, ...(refusal ? { refused: true } : {}) }, t)
         if (body.stream) return pipeStream(up, res, record)
-        const out = (await up.json()) as { usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string }
-        record(usageOf(out.usage))
+        const out = (await up.json()) as { usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string; choices?: { message?: { content?: string; tool_calls?: unknown[] } }[] }
+        const msg = out.choices?.[0]?.message
+        const refusal = !msg?.tool_calls?.length && isRefusal(msg?.content ?? '')
+        record(usageOf(out.usage), refusal)
+        if (refusal && retryOnRefusal.length && !t.permissive) {
+          // Retry on permissive models only; keep this answer in case they all fail.
+          log(`auto: ${p.id}/${t.model} refused; retrying on a permissive model`)
+          lastRefusal = out
+          queue = retryOnRefusal.filter((r) => !tried.has(`${r.provider}/${r.model}`))
+          retryOnRefusal = []
+          continue
+        }
         return json(res, 200, { ...out, model: alias })
       }
+      if (lastRefusal) return json(res, 200, { ...lastRefusal, model: alias })
       return json(res, 503, { error: { type: 'all_providers_failed', message: `every provider for "${alias}" failed: ${errors.join(' | ')}` } })
     } catch (e) {
       if (!res.headersSent) json(res, 500, { error: { message: (e as Error).message } })
