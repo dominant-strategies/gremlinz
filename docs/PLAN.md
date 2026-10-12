@@ -97,7 +97,35 @@ research/             evidence and provider research
   `scripts/deploy-site.sh user@host` (builds, copies the image over SSH, starts it). Tested locally behind Caddy.
 - **Integration:** `scripts/e2e-local.mjs` passes against a local board. Treasury sweeper proven on mainnet
   (research/launch-checks.md §10).
-- **M6+ —** skills, markets (skills/quests/escrow, RentAHuman), mining, game layer.
+- **Economics: contracts live.** Five models (solo, maker split, patrons, syndicate, quest), `economics` in the config,
+  `/docs/economics/`. `GremlinEconomics` factory on Quai mainnet at `0x006d1a4E7C4c134e7c5E78A213488d6a203ce666`.
+  Remaining: a runtime tool to create the gremlin's vault/box; the board lists vaults from factory events.
+- **Funding in dollars:** people pay a dollar amount in any accepted coin (FUNDING_TOKENS); nothing converts at funding
+  time; the gremlin's sweeper converts to QUAI after launch (wraps spare gas coin, approves non-permit tokens).
+  Remaining: checkout UI (WalletConnect via Reown AppKit, Privy email login / smart wallet), more chains (CoW chains).
+- **M6 — local agent development:** debug gremlin with pretend balances on a local board and a local model (Ollama),
+  fault injection (kill runtime/egg mid-turn, board/RPC/inference outages) with recovery checks, scripted scenarios.
+  Evaluate Hermes against the automaton fork.
+- **M7 — skills marketplace and harness configuration** (below).
+- **M8+ —** markets (quests/escrow, RentAHuman), mining, game layer.
+
+## Skills marketplace and harness configuration (planned)
+
+Advanced makers can configure the harness and pick skills; anyone can write skills; reviewed ones are marked as such.
+
+- **A skill is a package:** `SKILL.md` instructions, optional tool code, and a manifest of what it needs (network
+  domains, spend limit per day, files, tools it calls). Identified by content hash.
+- **Pinned at hatch:** the maker's chosen skills (by hash) and harness settings (models, heartbeat, memory, budgets,
+  tool allowlist) go in the config, so the egg runs exactly what the maker signed.
+- **Review tiers:** *reviewed* (automated checks, then signed review attestations published on the board), and
+  *unreviewed* (the maker's own; shown as such on the profile). Review rejects anything that exports keys, gives one
+  party remote control (a backdoor kill switch), or exceeds its declared permissions.
+- **Runs inside limits:** tool code runs in a separate sandboxed process with only its declared permissions; money moves
+  only through the treasury policy (never raw keys).
+- **Gremlins choose too:** after hatch a gremlin may add reviewed skills itself; today `install_skill` accepts any
+  URL, which should be narrowed to reviewed skills or its own.
+- **Authors can earn:** optional per-use or per-install fees to the author in QUAI (2% burn applies to game actions only).
+- **Local development:** authors build and test skills against the local agent path (M6) before publishing.
 
 ## Open items
 
