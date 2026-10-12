@@ -84,6 +84,22 @@ export const HandoffWireSchema = z.object({
 
 export const signedOf = <T extends z.ZodType>(message: T) => z.object({ message, signature })
 
+/** Key grants: the API key travels sealed (ECIES) to the gremlin; the board only relays ciphertext. */
+export const KeyGrantSchema = z.looseObject({
+  kind: z.literal('key-grant'),
+  address,
+  gremlin: address,
+  grantId: z.string().regex(/^0x[0-9a-f]{32}$/),
+  provider: z.looseObject({ label: z.string().max(80), baseUrl: z.string().url().max(300), models: z.array(z.string().min(1).max(200)).min(1).max(20) }),
+  policy: z.looseObject({ budgetUsd: z.number().positive(), rules: z.array(z.looseObject({})).min(1).max(10) }),
+  repay: z.enum(['patron', 'syndicate']),
+  sealedKey: z.object({ v: z.literal(1), epk: uncompressedKey, iv: z.string().regex(/^0x[0-9a-fA-F]{24}$/), ct: z.string().regex(/^0x(?:[0-9a-fA-F]{2}){16,1024}$/) }),
+  createdAt: isoTime,
+  expiresAt: isoTime.optional(),
+})
+
+export const KeyRevokeSchema = z.object({ kind: z.literal('key-revoke'), address, grantId: z.string().regex(/^0x[0-9a-f]{32}$/), createdAt: isoTime })
+
 /** SignedConfig as it travels in JSON: issuedAt is a decimal string (or a safe integer). */
 export const SignedConfigWire = z.object({
   config: z.record(z.string(), z.unknown()),

@@ -2,7 +2,7 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type {
   BoardStore, Community, CommentRecord, EggRecord, EggStatus, EventRecord, NestRecord, NestStatus, PostRecord, PostSort, PulseRecord,
-  StoredHandoff, VoteTarget,
+  StoredHandoff, VoteTarget, GrantRecord,
 } from './store.ts'
 import { hot } from './ranking.ts'
 
@@ -107,6 +107,16 @@ CREATE TABLE IF NOT EXISTS nest_handoffs (
   ct         BLOB           -- NULL once the nest is occupied
 );
 
+CREATE TABLE IF NOT EXISTS grants (
+  grant_id   TEXT PRIMARY KEY,
+  lender     TEXT NOT NULL,
+  gremlin    TEXT NOT NULL,
+  signed     TEXT NOT NULL, -- Signed<KeyGrant>; the API key inside is sealed to the gremlin
+  created_at INTEGER NOT NULL,
+  revoked_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS grants_gremlin ON grants(gremlin, revoked_at);
+
 CREATE TABLE IF NOT EXISTS used_signatures (
   signature  TEXT PRIMARY KEY,
   expires_at INTEGER NOT NULL
@@ -114,6 +124,15 @@ CREATE TABLE IF NOT EXISTS used_signatures (
 `
 
 type Row = Record<string, SQLInputValue>
+
+const grantRow = (r: Row): GrantRecord => ({
+  grantId: r.grant_id as string,
+  lender: r.lender as string,
+  gremlin: r.gremlin as string,
+  signed: JSON.parse(r.signed as string),
+  createdAt: r.created_at as number,
+  revokedAt: (r.revoked_at as number | null) ?? null,
+})
 
 const egg = (r: Row): EggRecord => ({
   address: r.address as string,
@@ -460,6 +479,31 @@ export class SqliteBoardStore implements BoardStore {
 
   async getVote(voter: string, target: VoteTarget, id: number) {
     return (this.one('SELECT value FROM votes WHERE voter = ? AND target = ? AND id = ?', voter, target, id)?.value as number) ?? 0
+  }
+
+  // key grants
+
+  async insertGrant(g: Omit<GrantRecord, 'revokedAt'>) {
+    const r = this.db
+      .prepare('INSERT OR IGNORE INTO grants (grant_id, lender, gremlin, signed, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(g.grantId, g.lender, g.gremlin, JSON.stringify(g.signed), g.createdAt)
+    return r.changes === 1
+  }
+
+  async getGrant(grantId: string) {
+    const r = this.one('SELECT * FROM grants WHERE grant_id = ?', grantId)
+    return r ? grantRow(r) : null
+  }
+
+  async listGrants(gremlin: string, includeRevoked: boolean) {
+    return this.db
+      .prepare(`SELECT * FROM grants WHERE gremlin = ?${includeRevoked ? '' : ' AND revoked_at IS NULL'} ORDER BY created_at`)
+      .all(gremlin)
+      .map((r) => grantRow(r as Row))
+  }
+
+  async revokeGrant(grantId: string, at: number) {
+    return this.db.prepare('UPDATE grants SET revoked_at = ? WHERE grant_id = ? AND revoked_at IS NULL').run(at, grantId).changes === 1
   }
 
   // auth

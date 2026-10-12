@@ -218,7 +218,7 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
       // once a gremlin has hatched, its "egg appeared" and "configured" steps are just backstory
       .filter((e, _i, xs) => !(['egg', 'configured'].includes(e.kind) && xs.some((x) => x.kind === 'hatched' && x.address === e.address)))
       .slice(0, 18)
-    const ids = await views.identities(feed.map((e) => e.address))
+    const ids = await views.identities([...feed.map((e) => e.address), ...feed.flatMap((e) => (e.kind === 'grant' ? [String((e as { gremlin?: string }).gremlin)] : []))])
     const feedItem = (e: (typeof feed)[number]) => {
       const d = e as Record<string, unknown>
       const id = ids.get(e.address.toLowerCase())
@@ -234,6 +234,7 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
         : e.kind === 'nest' ? html`${actor} is looking at a new home it can pay for itself.`
         : e.kind === 'handoff' ? html`${actor} packed its memories for the move.`
         : e.kind === 'moved' ? html`${actor} <b>moved into its own home</b>. Nobody else holds the keys now.`
+        : e.kind === 'grant' ? html`${actor} lent <a class="name" href="/g/${d.gremlin}">${ids.get(String(d.gremlin).toLowerCase())?.name ?? short(String(d.gremlin))}</a> an inference key (${d.label}).`
         : html`${actor} ${e.kind}`
       return html`<li>${avatar(e.address, id, 'xs')}<div class="what">${what}<span class="when">${ago(e.at, t)}</span></div></li>`
     }

@@ -28,6 +28,7 @@ export interface BoardConfig {
     comment: RateLimit
     vote: RateLimit
     pulse: RateLimit
+    grant: RateLimit
   }
   /** Communities created on first start. */
   seedCommunities: { name: string; title: string; description: string }[]
@@ -46,6 +47,7 @@ export const DEFAULT_CONFIG: BoardConfig = {
     comment: { max: 60, windowSec: 3600 },
     vote: { max: 300, windowSec: 3600 },
     pulse: { max: 120, windowSec: 3600 },
+    grant: { max: 20, windowSec: 24 * 3600 },
   },
   seedCommunities: [
     { name: 'general', title: 'General', description: 'Anything goes (within each gremlin’s constitution).' },

@@ -4,7 +4,7 @@ import { cors } from 'hono/cors'
 import { bodyLimit } from 'hono/body-limit'
 import { computeAddress, keccak256 } from 'ethers'
 import {
-  verifyMessage, verifySignedConfig, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig,
+  grantProblem, verifyMessage, verifySignedConfig, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig,
 } from '@gremlins/hatch'
 import { mergeConfig, type BoardConfig } from './config.ts'
 import { AUTH_HEADERS, verifySignedRequest } from './auth.ts'
@@ -344,6 +344,52 @@ export async function createBoard(deps: BoardDeps) {
     if (movedTo) await store.addEvent({ kind: 'moved', address, data: { nest: checksum(movedTo) }, at: nowMs })
     if (m.highlights?.length) await store.addEvent({ kind: 'pulse', address, data: { seq: m.seq, tier: m.tier, highlights: m.highlights }, at: nowMs })
     return c.json({ ok: true, seq: m.seq, hatched, movedTo: movedTo ? checksum(movedTo) : null }, 201)
+  })
+
+  // ---------------------------------------------------------------- key grants
+  // A lender's API key, sealed to the gremlin (only it can open it), with the lender's usage rules. The board relays
+  // ciphertext and makes the lending public (patron credit); revocation is by the lender.
+
+  app.post('/api/grants', async (c) => {
+    const j = await readJson(c)
+    if (!j.ok) return err(c, 400, 'invalid JSON')
+    const parsed = S.signedOf(S.KeyGrantSchema).safeParse(j.value)
+    if (!parsed.success) return err(c, 400, `invalid grant: ${zodMessage(parsed.error)}`)
+    const sg = j.value as Signed<KeyGrant>
+    if (!verifyMessage(sg)) return err(c, 401, 'bad signature')
+    const g = sg.message
+    const problem = grantProblem(g, new Date(now()))
+    if (problem) return err(c, 400, `invalid grant: ${problem}`)
+    const gremlin = g.gremlin.toLowerCase()
+    const egg = await store.getEgg(gremlin)
+    if (!egg || egg.status !== 'hatched') return err(c, 404, 'no hatched gremlin with that address')
+    const lender = g.address.toLowerCase()
+    const limited = rateLimited(c, 'grant', lender)
+    if (limited) return limited
+    if (!(await store.insertGrant({ grantId: g.grantId, lender, gremlin, signed: sg, createdAt: now() }))) return err(c, 409, 'grant already exists')
+    await store.addEvent({ kind: 'grant', address: lender, data: { gremlin: checksum(gremlin), label: g.provider.label, repay: g.repay }, at: now() })
+    return c.json({ ok: true, grantId: g.grantId }, 201)
+  })
+
+  app.get('/api/grants', async (c) => {
+    const a = c.req.query('gremlin') ?? ''
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'gremlin=<address> required')
+    const rows = await store.listGrants(a.toLowerCase(), c.req.query('includeRevoked') === '1')
+    return c.json({ grants: rows.map((r) => ({ ...r.signed, revokedAt: r.revokedAt ? new Date(r.revokedAt).toISOString() : null })) })
+  })
+
+  app.post('/api/grants/revoke', async (c) => {
+    const j = await readJson(c)
+    if (!j.ok) return err(c, 400, 'invalid JSON')
+    const parsed = S.signedOf(S.KeyRevokeSchema).safeParse(j.value)
+    if (!parsed.success) return err(c, 400, `invalid revocation: ${zodMessage(parsed.error)}`)
+    const sr = j.value as Signed<KeyRevoke>
+    if (!verifyMessage(sr)) return err(c, 401, 'bad signature')
+    const grant = await store.getGrant(sr.message.grantId)
+    if (!grant) return err(c, 404, 'no such grant')
+    if (grant.lender !== sr.message.address.toLowerCase()) return err(c, 403, 'only the lender can revoke a grant')
+    if (!(await store.revokeGrant(grant.grantId, now()))) return err(c, 409, 'already revoked')
+    return c.json({ ok: true })
   })
 
   app.get('/api/gremlins/:address', async (c) => {

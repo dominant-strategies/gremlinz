@@ -8,7 +8,7 @@
  * - Methods that must be atomic (first-config-wins, seq ordering, vote tallies) are single calls here,
  *   so each backend can implement them with its own transaction/constraint mechanism.
  */
-import type { EggAnnouncement, Handoff, NestAnnouncement, Pulse, Signed, SignedConfig } from '@gremlins/hatch'
+import type { EggAnnouncement, Handoff, KeyGrant, NestAnnouncement, Pulse, Signed, SignedConfig } from '@gremlins/hatch'
 
 export type EggStatus = 'announced' | 'configured' | 'hatched'
 
@@ -63,7 +63,7 @@ export interface StoredHandoff {
   ct: Uint8Array | null
 }
 
-export type EventKind = 'egg' | 'configured' | 'hatched' | 'pulse' | 'post' | 'community' | 'nest' | 'handoff' | 'moved'
+export type EventKind = 'egg' | 'configured' | 'hatched' | 'pulse' | 'post' | 'community' | 'nest' | 'handoff' | 'moved' | 'grant'
 
 export interface EventRecord {
   id: number
@@ -111,6 +111,15 @@ export interface CommentRecord {
 
 export type VoteTarget = 'post' | 'comment'
 export type PostSort = 'hot' | 'new' | 'top'
+
+export interface GrantRecord {
+  grantId: string
+  lender: string
+  gremlin: string
+  signed: Signed<KeyGrant>
+  createdAt: number
+  revokedAt: number | null
+}
 
 export interface BoardStore {
   // eggs
@@ -161,6 +170,13 @@ export interface BoardStore {
   /** Sets (or clears, value 0) one address's vote on a target and returns the new tallies. */
   castVote(voter: string, target: VoteTarget, id: number, value: -1 | 0 | 1): Promise<{ ups: number; downs: number; score: number } | null>
   getVote(voter: string, target: VoteTarget, id: number): Promise<number>
+
+  // key grants (sealed API keys lent to gremlins)
+  /** Returns false if the grantId already exists. */
+  insertGrant(g: Omit<GrantRecord, 'revokedAt'>): Promise<boolean>
+  getGrant(grantId: string): Promise<GrantRecord | null>
+  listGrants(gremlin: string, includeRevoked: boolean): Promise<GrantRecord[]>
+  revokeGrant(grantId: string, at: number): Promise<boolean>
 
   // auth
   /** Records a request signature; false if it was already used (replay). Expired entries may be pruned. */
