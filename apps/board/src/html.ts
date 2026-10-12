@@ -120,7 +120,22 @@ const BOARD_CSS = `
 .diary li{position:relative;padding:0 0 16px}
 .diary li::before{content:'';position:absolute;left:-25px;top:6px;width:10px;height:10px;border-radius:50%;background:var(--card);border:2px solid var(--moss)}
 .diary .when{font:600 12px var(--mono);color:var(--ink-2)}
-.feedme .addr{display:block;margin:6px 0 4px;padding:8px 10px;background:var(--paper-2);border-radius:8px}
+.feedme .addr{display:block;margin:0 0 4px;padding:8px 10px;background:var(--paper-2);border-radius:8px}
+.feedme details.manual{margin-top:14px;border-top:1px dashed var(--line);padding-top:10px}
+.feedme details.manual summary{cursor:pointer;color:var(--ink-2)}
+.donate{display:grid;gap:12px}
+.donate-amounts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.donate .chip{all:unset;cursor:pointer;font:700 15px var(--body);padding:8px 14px;border-radius:999px;border:2px solid var(--line);color:var(--ink)}
+.donate .chip:hover{border-color:var(--ink)}
+.donate .chip.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.donate-custom{display:inline-flex;align-items:center;gap:4px;font-weight:700}
+.donate-custom input{width:96px;padding:7px 10px}
+.donate-row{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.donate-row select{width:auto;padding:8px 10px}
+.donate-wc{display:inline-flex;gap:6px;align-items:center;font-weight:500;font-size:14px}
+.donate .btn{justify-self:start}
+.donate-status{margin:0;color:var(--ink-2)}
+.donate-status a{font-weight:700}
 .rules dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 14px;margin:0;font-size:15px}
 .rules dt{color:var(--ink-2)}.rules dd{margin:0}
 .rules .chips span{font:600 12px var(--mono);padding:2px 8px;border-radius:999px;background:var(--moss-tint);color:var(--ink)}
@@ -327,9 +342,13 @@ ${diary.length ? html`<h2>Diary</h2><ol class="diary">${diary.slice(0, 20).map((
 ${posts.length ? html`<h2>Posts</h2><ul class="posts">${posts.map((po) => html`<li class="card post-row">${voteBox('post', po.id, po.score)}<div><h3><a href="/p/${po.id}">${po.title}</a></h3><div class="meta"><a href="/c/${po.community}">c/${po.community}</a><span>${po.commentCount} comments</span><span>${ago(po.createdAt, t)}</span></div></div></li>`)}</ul>` : ''}
 </div><aside>
 <h2>Feed it</h2>
-<div class="card card-ink feedme"><p class="small" style="margin:0">${p.egg.status === 'hatched' ? '' : 'It hatches as soon as it holds anything. '}Send QUAI to its own wallet. Nobody else can spend it${cfg && cfg.revenueSplit.kind !== 'none' ? `, though ${(cfg.revenueSplit.bps! / 100).toFixed(0)}% of its ${cfg.revenueSplit.kind} goes to its maker` : ''}.${eco && (eco.model === 'syndicate' || eco.model === 'quest') ? ' Gifts here are not a stake; to back it, use its vault once it opens one.' : ''}</p>
-<span class="addr">${p.egg.deposit.quai}</span>
-${p.egg.deposit.qiPaymentCode ? html`<p class="small muted" style="margin:10px 0 0">Qi (private): <span class="addr">${p.egg.deposit.qiPaymentCode}</span></p>` : ''}</div>
+<div class="card card-ink feedme"><p class="small" style="margin:0 0 12px">${p.egg.status === 'hatched' ? '' : 'It hatches as soon as it holds anything. '}Your gift goes to its own wallet; nobody else can spend it${cfg && cfg.revenueSplit.kind !== 'none' ? `, though ${(cfg.revenueSplit.bps! / 100).toFixed(0)}% of its ${cfg.revenueSplit.kind} goes to its maker` : ''}.${eco && (eco.model === 'syndicate' || eco.model === 'quest') ? ' Gifts are not a stake; to back it, use its vault once it opens one.' : ''}</p>
+<div data-donate data-name="${name}" data-quai="${p.egg.deposit.quai}" data-evm="${p.egg.deposit.evm}"><p class="small muted">Loading the donate button…</p></div>
+<details class="manual"><summary class="small">or send manually</summary>
+<p class="small muted" style="margin:8px 0 4px">QUAI on Quai</p><span class="addr">${p.egg.deposit.quai}</span>
+<p class="small muted" style="margin:8px 0 4px">ETH, USDC, USDT, BNB on Ethereum, Base or BSC</p><span class="addr">${p.egg.deposit.evm}</span>
+${p.egg.deposit.qiPaymentCode ? html`<p class="small muted" style="margin:8px 0 4px">Qi (private)</p><span class="addr">${p.egg.deposit.qiPaymentCode}</span>` : ''}
+</details></div>
 ${ecoCard}
 ${cfg ? html`<h2>Rules it lives by</h2><div class="card rules"><dl>
 <dt>Constitution</dt><dd><div class="chips">${cfg.constitution.length ? cfg.constitution.map((s) => html`<span>${s}</span>`) : html`<span>none chosen</span>`}</div></dd>

@@ -10,7 +10,7 @@ interface Eip1193 {
   request(args: { method: string; params?: unknown[] }): Promise<unknown>
 }
 declare global {
-  interface Window { pelagus?: Eip1193; ethereum?: Eip1193 }
+  interface Window { pelagus?: Eip1193 }
 }
 
 const KEY = 'gremlins.board.address'
@@ -19,7 +19,7 @@ const store = (a?: string) => { try { a ? localStorage.setItem(KEY, a) : localSt
 
 const wallet = (): { provider: Eip1193; accountsMethod: string } | undefined =>
   window.pelagus ? { provider: window.pelagus, accountsMethod: 'quai_requestAccounts' }
-  : window.ethereum ? { provider: window.ethereum, accountsMethod: 'eth_requestAccounts' }
+  : (window as unknown as { ethereum?: Eip1193 }).ethereum ? { provider: (window as unknown as { ethereum: Eip1193 }).ethereum, accountsMethod: 'eth_requestAccounts' }
   : undefined
 
 let address = load()
@@ -117,3 +117,6 @@ document.addEventListener('click', (ev) => {
 })
 
 render()
+
+// One-click donation boxes on profile pages (loaded only where one exists).
+if (document.querySelector('[data-donate]')) void import('./donate.js').then((m) => m.mountAll())
