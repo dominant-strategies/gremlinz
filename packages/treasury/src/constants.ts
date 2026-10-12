@@ -28,6 +28,13 @@ export const QUAI_SYNTH: Record<EvmChainId, string> = {
   [CHAIN.base]: '0x5c97D726bf5130AE15408cE32bc764e458320D2f',
 }
 
+/** Wrapped gas coin per chain (WETH / WBNB); native funding is wrapped and sold on CoW. */
+export const WRAPPED_NATIVE: Record<EvmChainId, string> = {
+  [CHAIN.ethereum]: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+  [CHAIN.bsc]: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
+  [CHAIN.base]: '0x4200000000000000000000000000000000000006',
+}
+
 export const QUAI_SYNTH_PERMIT_DOMAIN = { name: 'Symbiosis', version: '1' } as const
 
 export const USDC: Partial<Record<EvmChainId, string>> = {

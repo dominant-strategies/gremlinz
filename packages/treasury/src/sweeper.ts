@@ -8,11 +8,11 @@
  * module only plans and executes routes.
  */
 import { Contract, JsonRpcProvider, type Signer } from 'ethers'
-import { CHAIN, QUAI_SYNTH, QUAI_SYNTH_PERMIT_DOMAIN, RPC, type EvmChainId } from './constants.js'
+import { CHAIN, QUAI_SYNTH, QUAI_SYNTH_PERMIT_DOMAIN, RPC, WRAPPED_NATIVE, type EvmChainId } from './constants.js'
 import { gaslessSell, type OrderResult } from './cow.js'
 import { quoteBridge, bridgeStatus, type BridgeStatus } from './symbiosis.js'
 import type { Symbiosis } from 'symbiosis-js-sdk'
-import type { FundingToken } from './tokens.js'
+import { FUNDING_TOKENS, type FundingToken } from './tokens.js'
 
 /** CoW's placeholder for the chain's native coin as a buy token. */
 export const NATIVE = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE'
@@ -24,7 +24,12 @@ export const GAS_FLOAT_WEI: Record<EvmChainId, bigint> = {
   [CHAIN.ethereum]: 3_000_000_000_000_000n, // 0.003 ETH
 }
 
+/** Gas coin above this many gas floats is treated as funding: wrapped and swapped to QUAI. */
+export const NATIVE_RESERVE_FLOATS = 4n
+const MIN_WRAP_FLOATS = 10n
+
 export type SweepAction =
+  | { kind: 'wrap-native'; chainId: EvmChainId; amount: bigint }
   | { kind: 'swap-to-quai'; chainId: EvmChainId; token: FundingToken; amount: bigint }
   | { kind: 'buy-gas'; chainId: EvmChainId; payWith: FundingToken; amount: bigint }
   | { kind: 'bridge-to-quai'; chainId: EvmChainId; amount: bigint }
@@ -37,30 +42,52 @@ export interface ChainHoldings {
 }
 
 /**
- * Plan a sweep for one chain. Only permit tokens can be swapped without gas; others need native gas for an
- * approval and are skipped when there is none (reported so the runtime can decide).
+ * Plan a sweep for one chain. Permit tokens swap gaslessly. Tokens without permit, and spare gas coin (wrapped
+ * first), need gas for an approval: they are swapped when the chain has gas, otherwise skipped (reported so the
+ * runtime can decide). A reserve of gas coin is always kept for the approvals and the bridge.
  */
 export function planSweep(h: ChainHoldings, opts: { gasBudgetToken?: FundingToken; gasBudgetAmount?: bigint } = {}): { actions: SweepAction[]; skipped: FundingToken[] } {
   const actions: SweepAction[] = []
   const skipped: FundingToken[] = []
   const floatNeeded = GAS_FLOAT_WEI[h.chainId]
+  const hasGas = h.native >= floatNeeded
+  const wrapped = WRAPPED_NATIVE[h.chainId].toLowerCase()
 
   let needsBridge = h.quaiSynth > 0n
+  // spare gas coin: keep a reserve, wrap and sell the rest
+  const spare = h.native - floatNeeded * NATIVE_RESERVE_FLOATS
+  if (spare >= floatNeeded * MIN_WRAP_FLOATS) {
+    const wToken = FUNDING_TOKENS.find((t) => t.chainId === h.chainId && t.address.toLowerCase() === wrapped)!
+    actions.push({ kind: 'wrap-native', chainId: h.chainId, amount: spare })
+    // amount resolved at execution time (whole wrapped balance, including any received directly)
+    actions.push({ kind: 'swap-to-quai', chainId: h.chainId, token: wToken, amount: 0n })
+    needsBridge = true
+  }
   for (const { token, amount } of h.tokens) {
     if (amount <= 0n || token.address === 'native' || token.address.toLowerCase() === QUAI_SYNTH[h.chainId].toLowerCase()) continue
-    if (!token.permit) { skipped.push(token); continue }
+    if (!token.permit && !hasGas) { skipped.push(token); continue }
     actions.push({ kind: 'swap-to-quai', chainId: h.chainId, token, amount })
     needsBridge = true
   }
   if (needsBridge) {
-    if (h.native < floatNeeded) {
+    if (!hasGas) {
       if (opts.gasBudgetToken && opts.gasBudgetAmount) actions.unshift({ kind: 'buy-gas', chainId: h.chainId, payWith: opts.gasBudgetToken, amount: opts.gasBudgetAmount })
       else skipped.push({ chainId: h.chainId, symbol: 'native-gas', address: 'native', decimals: 18 })
     }
     // amount is resolved at execution time (whole synthetic QUAI balance after swaps fill)
     actions.push({ kind: 'bridge-to-quai', chainId: h.chainId, amount: 0n })
   }
-  return { actions, skipped }
+  // a directly received wrapped token and a wrap of spare gas coin are one swap
+  const seen = new Set<string>()
+  return {
+    actions: actions.filter((a) => {
+      if (a.kind !== 'swap-to-quai' || a.token.address.toLowerCase() !== wrapped) return true
+      if (seen.has(wrapped)) return false
+      seen.add(wrapped)
+      return true
+    }).map((a) => (a.kind === 'swap-to-quai' && a.token.address.toLowerCase() === wrapped ? { ...a, amount: 0n } : a)),
+    skipped,
+  }
 }
 
 const ERC20 = [
@@ -79,6 +106,7 @@ export interface SweepContext {
 }
 
 export type SweepResult =
+  | { action: SweepAction }
   | { action: SweepAction; order: OrderResult & { uid: string } }
   | { action: SweepAction; bridgeTx: string; status: BridgeStatus }
 
@@ -91,16 +119,27 @@ export async function executeSweep(ctx: SweepContext, actions: SweepAction[]): P
     const signer = ctx.signer.connect(provider)
     const me = await signer.getAddress()
 
+    if (action.kind === 'wrap-native') {
+      log(`wrap-native: ${action.amount} on ${action.chainId}`)
+      const w = new Contract(WRAPPED_NATIVE[action.chainId], ['function deposit() payable'], signer)
+      await (await w.deposit({ value: action.amount })).wait()
+      done.push({ action })
+      continue
+    }
+
     if (action.kind === 'buy-gas' || action.kind === 'swap-to-quai') {
       const token = action.kind === 'buy-gas' ? action.payWith : action.token
+      let amount = action.amount
+      if (amount === 0n) amount = await new Contract(token.address, ERC20, signer).balanceOf(me) // resolved now (wrapped coin)
+      if (amount === 0n) continue
       const buyToken = action.kind === 'buy-gas' ? NATIVE : QUAI_SYNTH[action.chainId]
-      log(`${action.kind}: ${action.amount} ${token.symbol} on ${action.chainId} → ${action.kind === 'buy-gas' ? 'native gas' : 'QUAI'}`)
+      log(`${action.kind}: ${amount} ${token.symbol} on ${action.chainId} → ${action.kind === 'buy-gas' ? 'native gas' : 'QUAI'}`)
       const order = await gaslessSell({
-        signer, provider, chainId: action.chainId, sellToken: token.address, sellTokenPermitDomain: token.permit!,
-        buyToken, amount: action.amount, appCode: 'gremlins-sweeper',
+        signer, provider, chainId: action.chainId, sellToken: token.address, sellTokenPermitDomain: token.permit,
+        buyToken, amount, appCode: 'gremlins-sweeper',
       })
       if (order.status !== 'fulfilled') throw new Error(`CoW order ${order.uid} ended ${order.status}`)
-      done.push({ action, order })
+      done.push({ action: { ...action, amount }, order })
       continue
     }
 

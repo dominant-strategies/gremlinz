@@ -241,13 +241,17 @@ export async function waitForOrder(opts: {
   }
 }
 
-/** Gasless sell of a permit-capable token: permit hook → quote → order → wait. */
+/**
+ * Sell on CoW: quote → order → wait. Permit-capable tokens go gasless (a permit pre-hook); others are approved for
+ * the vault relayer first, which costs gas (the caller checks there is some).
+ */
 export async function gaslessSell(opts: {
   signer: Signer
   provider: Provider
   chainId: EvmChainId
   sellToken: string
-  sellTokenPermitDomain: PermitDomain
+  /** EIP-2612 domain; omit for tokens without permit (approved on-chain instead). */
+  sellTokenPermitDomain?: PermitDomain
   buyToken: string
   amount: bigint
   receiver?: string
@@ -256,16 +260,22 @@ export async function gaslessSell(opts: {
 }): Promise<OrderResult & { uid: string }> {
   const from = await opts.signer.getAddress()
   const receiver = opts.receiver ?? from
-  const hook = await permitHook({
-    signer: opts.signer,
-    provider: opts.provider,
-    chainId: opts.chainId,
-    token: opts.sellToken,
-    domain: opts.sellTokenPermitDomain,
-    value: opts.amount,
-    deadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
-  })
-  const app = buildAppData({ appCode: opts.appCode ?? 'gremlins', preHooks: [hook] })
+  const preHooks: Hook[] = []
+  if (opts.sellTokenPermitDomain) {
+    preHooks.push(await permitHook({
+      signer: opts.signer,
+      provider: opts.provider,
+      chainId: opts.chainId,
+      token: opts.sellToken,
+      domain: opts.sellTokenPermitDomain,
+      value: opts.amount,
+      deadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
+    }))
+  } else {
+    const erc20 = new Contract(opts.sellToken, ['function allowance(address,address) view returns (uint256)', 'function approve(address,uint256) returns (bool)'], opts.signer)
+    if ((await erc20.allowance(from, COW.vaultRelayer)) < opts.amount) await (await erc20.approve(COW.vaultRelayer, opts.amount)).wait()
+  }
+  const app = buildAppData({ appCode: opts.appCode ?? 'gremlins', preHooks })
   const quote = await quoteSell({ chainId: opts.chainId, sellToken: opts.sellToken, buyToken: opts.buyToken, from, receiver, sellAmountBeforeFee: opts.amount, app })
   const order = orderFromQuote({ quote, sellToken: opts.sellToken, buyToken: opts.buyToken, receiver, appDataHash: app.appDataHash, slippageBps: opts.slippageBps ?? 100 })
   const uid = await submitOrder({ chainId: opts.chainId, signer: opts.signer, order, app, quoteId: quote.id })
