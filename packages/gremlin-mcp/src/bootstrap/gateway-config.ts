@@ -14,12 +14,13 @@ export interface GatewayEnv {
 }
 
 export function gatewayConfig(e: GatewayEnv = {}): GatewayConfig {
-  const venice = { id: 'venice', kind: 'venice-x402' as const, baseUrl: 'https://api.venice.ai/api/v1', timeoutMs: 180_000, free: false, minIntervalMs: 0 }
+  const venice = { id: 'venice', kind: 'venice-x402' as const, baseUrl: 'https://api.venice.ai/api/v1', timeoutMs: 600_000, firstByteMs: 120_000, free: false, minIntervalMs: 0 }
   const veniceMain = { provider: 'venice', model: e.veniceModel ?? 'qwen3-5-397b-a17b', inputPerM: 0.6, outputPerM: 2.4 }
   const providers: GatewayConfig['providers'] = [venice]
   const main: GatewayConfig['routes'][string] = [veniceMain]
   if (e.ollamaUrl && e.ollamaModel) {
-    providers.unshift({ id: 'ollama', kind: 'openai', baseUrl: `${e.ollamaUrl.replace(/\/$/, '')}/v1`, timeoutMs: 600_000, free: false, minIntervalMs: 0 })
+    // A local model may need minutes to load into memory on its first call.
+    providers.unshift({ id: 'ollama', kind: 'openai', baseUrl: `${e.ollamaUrl.replace(/\/$/, '')}/v1`, timeoutMs: 900_000, firstByteMs: 180_000, free: false, minIntervalMs: 0 })
     main.unshift({ provider: 'ollama', model: e.ollamaModel, inputPerM: 0, outputPerM: 0 })
   }
   return {

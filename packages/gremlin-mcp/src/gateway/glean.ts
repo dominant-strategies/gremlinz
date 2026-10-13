@@ -85,7 +85,7 @@ export function gleanRoute(env: NodeJS.ProcessEnv = process.env, models: Record<
     if (e.apiKeyEnv && !env[e.apiKeyEnv]) continue
     const ms = models[e.id] ?? e.models
     if (!ms.length) continue
-    providers.push({ id: `glean-${e.id}`, kind: 'openai', baseUrl: e.baseUrl, apiKeyEnv: e.apiKeyEnv, timeoutMs: 60_000, free: true, minIntervalMs: e.minIntervalMs })
+    providers.push({ id: `glean-${e.id}`, kind: 'openai', baseUrl: e.baseUrl, apiKeyEnv: e.apiKeyEnv, timeoutMs: 60_000, firstByteMs: 30_000, free: true, minIntervalMs: e.minIntervalMs })
     for (const m of ms) route.push({ provider: `glean-${e.id}`, model: m, inputPerM: 0, outputPerM: 0 })
   }
   return { providers, route }

@@ -40,6 +40,8 @@ export function withGlean(cfg: GatewayConfig, env: NodeJS.ProcessEnv): GatewayCo
 
 const COOLDOWN_MIN_MS = 30_000
 const COOLDOWN_MAX_MS = 10 * 60_000
+/** A provider that wants payment stays out until a top-up is likely (the funding job runs every few minutes). */
+const NO_BALANCE_MS = 30 * 60_000
 
 export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Server {
   const now = deps.now ?? Date.now
@@ -49,9 +51,10 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
   const fetchers = new Map(cfg.providers.map((p) => [p.id, deps.fetchers?.[p.id] ?? (p.kind === 'openai' ? providerFetch(p) : undefined)]))
   const cooldown = new Map<string, { until: number; ms: number }>()
   const lastCall = new Map<string, number>()
-  const down = (id: string) => {
+  /** Take a provider out of rotation: exponential for transient trouble; 30 minutes when it wants payment. */
+  const down = (id: string, status?: number) => {
     const prev = cooldown.get(id)
-    const ms = Math.min(COOLDOWN_MAX_MS, prev ? prev.ms * 2 : COOLDOWN_MIN_MS)
+    const ms = status === 402 ? NO_BALANCE_MS : Math.min(COOLDOWN_MAX_MS, prev ? prev.ms * 2 : COOLDOWN_MIN_MS)
     cooldown.set(id, { until: now() + ms, ms })
     log(`provider ${id} cooling down for ${ms / 1000}s`)
   }
@@ -102,14 +105,22 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         const started = now()
         const upstreamBody = { ...body, model: target.model, ...(body.stream ? { stream_options: { ...(body.stream_options as object), include_usage: true } } : {}) }
         let up: Response
+        const abort = new AbortController()
+        const total = setTimeout(() => abort.abort(new Error(`no complete answer in ${p.timeoutMs / 1000}s`)), p.timeoutMs)
+        total.unref?.()
         try {
-          up = await f(`${p.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(upstreamBody),
-            signal: AbortSignal.timeout(p.timeoutMs),
-          })
+          // fetch resolves when the response starts, so this bounds the time to first byte (a hung provider).
+          up = await Promise.race([
+            f(`${p.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(upstreamBody),
+              signal: abort.signal,
+            }),
+            new Promise<never>((_, reject) => setTimeout(() => { const e = new Error(`no response in ${p.firstByteMs / 1000}s`); abort.abort(e); reject(e) }, p.firstByteMs).unref?.()),
+          ])
         } catch (e) {
+          clearTimeout(total)
           errors.push(`${p.id}: ${(e as Error).message}`)
           down(p.id)
           continue
@@ -117,7 +128,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         if (!up.ok) {
           const text = await up.text().catch(() => '')
           deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: target.model, status: up.status, ms: now() - started }, target)
-          if (retryable(up.status)) { errors.push(`${p.id}: ${up.status} ${text.slice(0, 160)}`); down(p.id); continue }
+          if (retryable(up.status)) { errors.push(`${p.id}: ${up.status} ${text.slice(0, 160)}`); down(p.id, up.status); continue }
           res.writeHead(up.status, { 'content-type': up.headers.get('content-type') ?? 'application/json' })
           return res.end(text)
         }

@@ -12,7 +12,10 @@ export const ProviderConfig = z.object({
   baseUrl: z.string().url(),
   /** Name of the environment variable holding the API key (openai kind). */
   apiKeyEnv: z.string().optional(),
-  timeoutMs: z.number().int().positive().default(120_000),
+  /** Whole request (including a long streamed answer). */
+  timeoutMs: z.number().int().positive().default(600_000),
+  /** Until the response starts (headers): a hung or overloaded provider is abandoned after this. */
+  firstByteMs: z.number().int().positive().default(120_000),
   /** Free endpoint (gleaning): requests that look like they contain secrets are never sent here. */
   free: z.boolean().default(false),
   /** Minimum gap between calls to this provider (free tiers). */

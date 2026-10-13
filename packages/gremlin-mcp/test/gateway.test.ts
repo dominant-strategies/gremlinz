@@ -112,3 +112,41 @@ describe('incomplete streams', () => {
     g.close(); up2.close()
   })
 })
+
+describe('hung and unpaid providers', () => {
+  it('abandons a provider that never answers after firstByteMs, and benches a 402 for 30 minutes', async () => {
+    const { createServer } = await import('node:http')
+    let paidHits = 0
+    const up3 = createServer((req, res) => {
+      if (req.url!.startsWith('/hang')) return // never answers
+      if (req.url!.startsWith('/unpaid')) { paidHits++; res.statusCode = 402; return res.end('{"error":"insufficient_balance"}') }
+      res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }))
+    })
+    await new Promise<void>((r) => up3.listen(0, '127.0.0.1', r))
+    const u = `http://127.0.0.1:${(up3.address() as { port: number }).port}`
+    let clock = 0
+    const cfg = GatewayConfig.parse({
+      providers: [
+        { id: 'hang', kind: 'openai', baseUrl: `${u}/hang/v1`, firstByteMs: 300 },
+        { id: 'unpaid', kind: 'openai', baseUrl: `${u}/unpaid/v1` },
+        { id: 'ok', kind: 'openai', baseUrl: `${u}/ok/v1` },
+      ],
+      routes: { m: [{ provider: 'hang', model: 'x' }, { provider: 'unpaid', model: 'x' }, { provider: 'ok', model: 'x' }] },
+      glean: { enabled: false },
+    })
+    const g = createGateway(cfg, { now: () => clock })
+    await new Promise<void>((r) => g.listen(0, '127.0.0.1', r))
+    const ask = () => fetch(`http://127.0.0.1:${(g.address() as { port: number }).port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [] }) })
+    const t0 = Date.now()
+    expect((await (await ask()).json()).choices[0].message.content).toBe('ok')
+    expect(Date.now() - t0).toBeLessThan(3_000)
+    expect(paidHits).toBe(1)
+    clock += 5 * 60_000 // the hung provider is back after its cooldown; the unpaid one is not
+    await ask()
+    expect(paidHits).toBe(1)
+    clock += 30 * 60_000
+    await ask()
+    expect(paidHits).toBe(2)
+    g.close(); up3.closeAllConnections(); up3.close()
+  })
+})

@@ -55,7 +55,7 @@ export function lentOffers(grants: { g: OpenGrant; allow: Allowance }[]): { prov
     .map(({ g }) => {
       const id = `grant-${g.grant.grantId.slice(2, 10)}`
       return {
-        provider: { id, kind: 'openai' as const, baseUrl: g.grant.provider.baseUrl, timeoutMs: 120_000, free: false, minIntervalMs: 0 },
+        provider: { id, kind: 'openai' as const, baseUrl: g.grant.provider.baseUrl, timeoutMs: 600_000, firstByteMs: 120_000, free: false, minIntervalMs: 0 },
         fetch: keyFetch(g.apiKey),
         targets: g.grant.provider.models.map((m) => ({ provider: id, model: m, inputPerM: g.grant.provider.inputPerM, outputPerM: g.grant.provider.outputPerM, grantId: g.grant.grantId })),
       }
