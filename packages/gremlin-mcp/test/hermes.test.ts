@@ -27,6 +27,7 @@ describe('Hermes config', () => {
     expect(cfg.approvals.deny).toEqual(expect.arrayContaining(['*/var/lib/gremlin*', '*seed*', '*SOUL.md*', 'hermes skills install*']))
     expect(cfg.cron.allow_agent_scheduling).toBe(false)
     expect(cfg.agent.disabled_toolsets).toEqual(expect.arrayContaining(['browser', 'cronjob']))
+    expect(cfg.agent.max_turns).toBe(40)
     expect(cfg.platform_toolsets.cron).toContain('gremlin')
     expect(cfg.plugins.enabled).toEqual(['gremlin'])
   })

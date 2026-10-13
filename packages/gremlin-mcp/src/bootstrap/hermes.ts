@@ -23,6 +23,8 @@ export interface HermesSetup {
   contextLength?: number
   timezone?: string
   wakeEveryMinutes?: number
+  /** Model calls per wake-up. */
+  maxTurns?: number
 }
 
 const GREMLIN_TOOLSETS = ['terminal', 'file', 'memory', 'skills', 'todo', 'session_search', 'web']
@@ -73,7 +75,8 @@ export function hermesConfig(s: HermesSetup): string {
     curator: { enabled: true },
     cron: { allow_agent_scheduling: false },
     platform_toolsets: { cron: [...GREMLIN_TOOLSETS, 'gremlin'], api_server: [...GREMLIN_TOOLSETS, 'gremlin'] },
-    agent: { disabled_toolsets: ['browser', 'image_gen', 'tts', 'cronjob', 'vision'] },
+    // A wake-up must finish well before the next one (tinker's first took 17 model calls).
+    agent: { max_turns: s.maxTurns ?? 40, disabled_toolsets: ['browser', 'image_gen', 'tts', 'cronjob', 'vision'] },
     plugins: { enabled: ['gremlin'] },
     security: { protected_instruction_files: true },
     timezone: s.timezone ?? 'UTC',
