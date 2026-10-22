@@ -7,7 +7,7 @@
     "apps/launch"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.23.4 <23 || >=24.22.1 <25"
   },
   "scripts": {
     "setup": "npm install && npm install --prefix apps/board",

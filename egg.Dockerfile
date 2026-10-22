@@ -3,7 +3,7 @@
 # Deployed by digest only (cloud-init pins image@sha256:…), never by tag.
 # The same /app tree, tarred, is the release bundle Conway nests install into /opt/gremlin.
 
-FROM node:22-slim AS build
+FROM node:22.23.4-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS build
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
@@ -25,7 +25,7 @@ RUN cd runtime && npx tsc
 RUN npm prune --omit=dev --workspaces --include-workspace-root \
  && cd runtime && npm prune --omit=dev
 
-FROM node:22-slim
+FROM node:22.23.4-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
 LABEL org.opencontainers.image.source=https://github.com/dominant-strategies/gremlinz \
       org.opencontainers.image.description="Gremlin egg: egg supervisor + agent runtime" \
       org.opencontainers.image.licenses=MIT
