@@ -1,6 +1,6 @@
 # Site image: the board (API + pages) serving the static site (home, /hatch/) on one origin. Build:
 #   docker buildx build -f site.Dockerfile --build-arg VITE_EGG_IMAGE=<registry>/egg@sha256:… -t gremlins/site .
-FROM node:24-slim AS build
+FROM node:24.22.1-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages packages
@@ -19,7 +19,7 @@ COPY apps/board apps/board
 # --install-links copies @gremlins/hatch (built above) into the board's node_modules with its dependencies.
 RUN cd apps/board && npm install --omit=dev --install-links --no-audit --no-fund
 
-FROM node:24-slim
+FROM node:24.22.1-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 WORKDIR /app/board
 COPY --from=build /app/apps/board /app/board
 COPY --from=build /app/apps/launch/dist /app/site

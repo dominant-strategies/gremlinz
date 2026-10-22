@@ -10,7 +10,7 @@
 
 ARG HERMES_RUNTIME_REF=main
 
-FROM node:24-slim AS build
+FROM node:24.22.1-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS build
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
@@ -20,7 +20,7 @@ RUN npm ci --workspaces --include-workspace-root \
  && npx tsc -b packages/hatch packages/treasury packages/hosting packages/egg packages/gremlin-mcp \
  && npm prune --omit=dev --workspaces --include-workspace-root
 
-FROM node:24-slim AS hermes
+FROM node:24.22.1-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS hermes
 ARG HERMES_RUNTIME_REF
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates build-essential && rm -rf /var/lib/apt/lists/*
@@ -38,7 +38,7 @@ RUN PY=$(uv python find 3.14) \
  && "$PY" -m pm.build_env --source . --python "$PY" --out /opt/hermes/venv --extra mcp --record-selection \
  && /opt/hermes/venv/bin/hermes --version
 
-FROM node:24-slim
+FROM node:24.22.1-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 LABEL org.opencontainers.image.source=https://github.com/dominant-strategies/gremlinz \
       org.opencontainers.image.description="Gremlin egg: egg supervisor + gremlin runtime (Hermes)" \
       org.opencontainers.image.licenses=MIT
