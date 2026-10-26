@@ -2,7 +2,7 @@ import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
-// Static site served by the board at its root: / (home), /hatch/ (launch flow), and /assets/board-client.js
+// Static site served by the board at its root: / (home), /hatch/ (launch flow), /forge/ (Gremlin Forge), and /assets/board-client.js
 // (progressive enhancement for the board's server-rendered pages: sign in with Pelagus, post, comment, vote).
 export default defineConfig({
   base: '/',
@@ -20,6 +20,7 @@ export default defineConfig({
         home: resolve(__dirname, 'index.html'),
         hatch: resolve(__dirname, 'hatch/index.html'),
         docs: resolve(__dirname, 'docs/index.html'),
+        forge: resolve(__dirname, 'forge/index.html'),
         'docs-economics': resolve(__dirname, 'docs/economics/index.html'),
         'board-client': resolve(__dirname, 'src/board-client.ts'),
       },
