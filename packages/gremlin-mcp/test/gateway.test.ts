@@ -150,3 +150,44 @@ describe('hung and unpaid providers', () => {
     g.close(); up3.closeAllConnections(); up3.close()
   })
 })
+
+describe('stalled streams', () => {
+  it('cuts a stream that goes silent and benches the provider', async () => {
+    const { createServer } = await import('node:http')
+    const up4 = createServer((_q, s) => { s.writeHead(200, { 'content-type': 'text/event-stream' }); s.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'start' } }] })}\n\n`) /* then silence */ })
+    await new Promise<void>((r) => up4.listen(0, '127.0.0.1', r))
+    const recs: CallRecord[] = []
+    const cfg = GatewayConfig.parse({ providers: [{ id: 'p', kind: 'openai', baseUrl: `http://127.0.0.1:${(up4.address() as { port: number }).port}/v1`, firstByteMs: 300 }], routes: { m: [{ provider: 'p', model: 'x' }] }, glean: { enabled: false } })
+    const g = createGateway(cfg, { onCall: (r) => recs.push(r) })
+    await new Promise<void>((r) => g.listen(0, '127.0.0.1', r))
+    const base = `http://127.0.0.1:${(g.address() as { port: number }).port}`
+    const r = await fetch(`${base}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', stream: true, messages: [] }) })
+    await expect(r.text()).rejects.toThrow() // the client sees a broken stream, not a clean end
+    expect(recs[0]!.incomplete).toBe(true)
+    expect(Object.keys((await (await fetch(`${base}/health`)).json()).cooling)).toEqual(['p'])
+    g.close(); up4.closeAllConnections(); up4.close()
+  })
+})
+
+describe('long healthy streams', () => {
+  it('are not cut by the first-response limit once data is flowing', async () => {
+    const { createServer } = await import('node:http')
+    const up5 = createServer((_q, s) => {
+      s.writeHead(200, { 'content-type': 'text/event-stream' })
+      let n = 0
+      const t = setInterval(() => {
+        s.write(`data: ${JSON.stringify({ choices: [{ delta: { content: `${n}` }, finish_reason: n === 5 ? 'stop' : null }] })}\n\n`)
+        if (++n > 5) { clearInterval(t); s.end('data: [DONE]\n\n') }
+      }, 150) // 900 ms in total, well past firstByteMs, but never silent for long
+    })
+    await new Promise<void>((r) => up5.listen(0, '127.0.0.1', r))
+    const recs: CallRecord[] = []
+    const cfg = GatewayConfig.parse({ providers: [{ id: 'p', kind: 'openai', baseUrl: `http://127.0.0.1:${(up5.address() as { port: number }).port}/v1`, firstByteMs: 400 }], routes: { m: [{ provider: 'p', model: 'x' }] }, glean: { enabled: false } })
+    const g = createGateway(cfg, { onCall: (r) => recs.push(r) })
+    await new Promise<void>((r) => g.listen(0, '127.0.0.1', r))
+    const r = await fetch(`http://127.0.0.1:${(g.address() as { port: number }).port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', stream: true, messages: [] }) })
+    expect(await r.text()).toContain('[DONE]')
+    expect(recs[0]!.incomplete).toBeFalsy()
+    g.close(); up5.close()
+  })
+})

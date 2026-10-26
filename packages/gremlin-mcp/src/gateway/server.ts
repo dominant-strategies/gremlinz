@@ -106,6 +106,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         const upstreamBody = { ...body, model: target.model, ...(body.stream ? { stream_options: { ...(body.stream_options as object), include_usage: true } } : {}) }
         let up: Response
         const abort = new AbortController()
+        let firstByte: ReturnType<typeof setTimeout> | undefined
         const total = setTimeout(() => abort.abort(new Error(`no complete answer in ${p.timeoutMs / 1000}s`)), p.timeoutMs)
         total.unref?.()
         try {
@@ -117,9 +118,12 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
               body: JSON.stringify(upstreamBody),
               signal: abort.signal,
             }),
-            new Promise<never>((_, reject) => setTimeout(() => { const e = new Error(`no response in ${p.firstByteMs / 1000}s`); abort.abort(e); reject(e) }, p.firstByteMs).unref?.()),
+            new Promise<never>((_, reject) => { firstByte = setTimeout(() => { const e = new Error(`no response in ${p.firstByteMs / 1000}s`); abort.abort(e); reject(e) }, p.firstByteMs) }),
           ])
+          // The response has started: from here the stream watchdog (stalls) and the whole-request limit apply.
+          clearTimeout(firstByte)
         } catch (e) {
+          clearTimeout(firstByte)
           clearTimeout(total)
           errors.push(`${p.id}: ${(e as Error).message}`)
           down(p.id)
@@ -135,7 +139,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         cooldown.delete(p.id)
         const t = target
         const record = (usage?: Usage, refusal?: boolean, incomplete?: boolean) => deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: up.status, usage, ms: now() - started, ...(refusal ? { refused: true } : {}), ...(incomplete ? { incomplete: true } : {}) }, t)
-        if (body.stream) return pipeStream(up, res, record)
+        if (body.stream) return pipeStream(up, res, record, p.firstByteMs, () => down(p.id))
         const out = (await up.json()) as { usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string; choices?: { message?: { content?: string; tool_calls?: unknown[] } }[] }
         const msg = out.choices?.[0]?.message
         const refusal = !msg?.tool_calls?.length && isRefusal(msg?.content ?? '')
@@ -168,14 +172,21 @@ function usageOf(u?: { prompt_tokens?: number; completion_tokens?: number } | nu
  * recorded as incomplete (it counts against the model's rating). If the upstream fails mid-stream, the connection is
  * destroyed rather than ended cleanly, so the client sees a transport error and retries.
  */
-async function pipeStream(up: Response, res: ServerResponse, record: (u?: Usage, refusal?: boolean, incomplete?: boolean) => void) {
+async function pipeStream(up: Response, res: ServerResponse, record: (u?: Usage, refusal?: boolean, incomplete?: boolean) => void, stallMs = 120_000, onStall?: () => void) {
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
   let usage: Usage | undefined
   let finished = false
   let buf = ''
   const decoder = new TextDecoder()
+  // A stream that goes silent for stallMs is cut (the provider is benched) so the client can retry elsewhere.
+  const reader = (up.body as ReadableStream<Uint8Array>).getReader()
+  const next = () => new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
+    const t = setTimeout(() => { onStall?.(); reject(new Error(`stream stalled: no data for ${stallMs / 1000}s`)) }, stallMs)
+    reader.read().then((r) => { clearTimeout(t); resolve(r) }, (e) => { clearTimeout(t); reject(e) })
+  })
   try {
-    for await (const chunk of up.body as unknown as AsyncIterable<Uint8Array>) {
+    for (let r = await next(); !r.done; r = await next()) {
+      const chunk = r.value
       res.write(chunk)
       buf += decoder.decode(chunk, { stream: true })
       let i: number
@@ -192,6 +203,7 @@ async function pipeStream(up: Response, res: ServerResponse, record: (u?: Usage,
       }
     }
   } catch (e) {
+    reader.cancel().catch(() => {})
     record(usage, false, true)
     res.destroy(e as Error)
     return
