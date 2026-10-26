@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { renderCloudInit } from './cloud-init.js'
 import { httpBoardClient } from './board-client.js'
 import { rpcBalanceReader } from '@gremlins/treasury'
-import { conway, nestBootstrapScript, sporestack, unusableSshKey, SANDBOX_TIERS, type Provider } from '@gremlins/hosting'
+import { sporestack, unusableSshKey, type Provider } from '@gremlins/hosting'
 import { step } from './egg.js'
 import { loadOrCreateKeys } from './keys.js'
 import { readLaunchData, EggLaunchData, type NestLaunchData } from './launch.js'
@@ -158,7 +158,7 @@ async function runEgg() {
     launchNest: (nest) => {
       // Nests carry the same build forward so they can move again later.
       const n = { ...nest, image: el.image, artifact: el.artifact }
-      return req.host === 'conway' ? launchNestOnConway(req, n) : launchNestOnSporeStack(req, n, el.image, el.artifact)
+      return launchNestOnSporeStack(req, n, el.image, el.artifact)
     },
     stopRuntime,
     startRuntime: () => { paused = false; nextStartAt = 0; startRuntime() },
@@ -209,29 +209,11 @@ async function runEgg() {
 /**
  * Written by the runtime's move_out tool.
  * - sporestack: the token must already hold enough credit (new tokens need a $100 first deposit).
- * - conway: paid from the gremlin's own Conway credits; uses the gremlin's SIWE-provisioned API key.
+ * (Conway was a host until it discontinued its service.)
  */
-type MoveOutRequest =
-  | { host: 'sporestack'; token: string; flavor?: string; provider?: Provider; days?: number }
-  | { host: 'conway'; memoryMb?: number; region?: string }
+type MoveOutRequest = { host: 'sporestack'; token: string; flavor?: string; provider?: Provider; days?: number }
 
 type NestLaunch = Parameters<MoveOutDeps['launchNest']>[0]
-
-async function launchNestOnConway(req: Extract<MoveOutRequest, { host: 'conway' }>, nest: NestLaunch): Promise<string> {
-  if (!nest.artifact) throw new Error('launch data has no release artifact; cannot install the same build on a Conway sandbox')
-  const apiKey = readJson<{ conwayApiKey?: string }>(join(runtimeDir, 'automaton.json'))?.conwayApiKey
-  if (!apiKey) throw new Error('no Conway API key yet (the runtime provisions one with the gremlin wallet)')
-  const c = conway({ apiKey })
-  const tier = SANDBOX_TIERS.find((t) => t.memoryMb >= (req.memoryMb ?? 1024)) ?? SANDBOX_TIERS[SANDBOX_TIERS.length - 1]
-  const id = await c.createSandbox({ name: `nest-${nest.launchId.slice(5, 13)}`, ...tier, region: req.region })
-  // Launch data (with the nest secret) goes through the files API, not into the shell script.
-  await c.exec(id, 'mkdir -p /etc/gremlin && chmod 700 /etc/gremlin', 30_000)
-  await c.writeFile(id, '/etc/gremlin/launch.json', JSON.stringify(nest))
-  await c.exec(id, 'chmod 600 /etc/gremlin/launch.json', 30_000)
-  const r = await c.exec(id, nestBootstrapScript(nest.artifact), 600_000)
-  if (r.exitCode !== 0 || !r.stdout.includes('gremlin-nest-started')) throw new Error(`nest bootstrap failed (exit ${r.exitCode}): ${(r.stderr || r.stdout).slice(-300)}`)
-  return `conway:${id}`
-}
 
 async function launchNestOnSporeStack(req: Extract<MoveOutRequest, { host: 'sporestack' }>, nest: NestLaunch, image: string | undefined, artifact: { url: string; sha256: string } | undefined): Promise<string> {
   if (!image) throw new Error('launch data has no image digest; cannot launch a nest from the same build')
