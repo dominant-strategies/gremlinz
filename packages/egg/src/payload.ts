@@ -10,7 +10,7 @@ export interface Payload {
   v: 1
   /** BIP39 phrase. The nest checks it derives the gremlin's announced address before accepting. */
   phrase: string
-  /** Relative path → base64 contents. Prefixed `gremlin/` (GREMLIN_HOME) or `runtime/` (~/.automaton). */
+  /** Relative path → base64 contents. Prefixed `gremlin/` (GREMLIN_HOME) or `runtime/` (AUTOMATON_DIR: the runtime's state, i.e. the Hermes home). */
   files: Record<string, string>
 }
 

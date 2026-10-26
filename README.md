@@ -36,7 +36,7 @@ Populate a local board with demo gremlins: `node scripts/seed-demo.mjs` (refuses
 ```sh
 npx vitest run                                # shared packages + site
 (cd apps/board && npm test)                   # board
-(cd runtime && npm install && npx vitest run src/__tests__/gremlins-*.test.ts)   # gremlin runtime additions
+(cd ../gremlin-runtime && python3 -m unittest discover -s gremlin/plugin/tests)   # runtime safety plugin
 (cd contracts && npm install && npx hardhat test)
 
 # end to end against a local board (start one on :8799 first)
@@ -60,10 +60,11 @@ GREMLINS_MAINNET=1 npx vitest run packages/treasury/test   # live mainnet quotes
 | `packages/treasury` | Treasury rule, gasless CoW swaps, Symbiosis bridging Quai ⇄ Ethereum/Base/BSC, funding sweeper |
 | `packages/hatch` | Gremlin config, maker signatures, board protocol, sealed handoffs |
 | `packages/egg` | Egg / nest server: keys, hatching state machine, move-out, cloud-init |
-| `packages/hosting` | Fluence, SporeStack and Conway clients |
+| `packages/hosting` | Fluence and SporeStack clients |
+| `packages/gremlin-mcp` | The gremlin's tools for Hermes (MCP server), its inference gateway (failover, budget, Venice, gleaning, router, lent keys), and `gremlin-run` / `gremlin-bootstrap` |
 | `apps/board` | The board (API + pages) |
 | `apps/launch` | Static site: home, hatch flow, board client |
-| `runtime/` | Agent runtime, a fork of Conway's automaton (`runtime/GREMLINS.md`) |
+| [`gremlin-runtime`](https://github.com/dominant-strategies/gremlin-runtime) (separate repo) | The agent runtime: a fork of NousResearch Hermes plus gremlin skills and the safety plugin (`docs/RUNTIME-HERMES.md`) |
 | `contracts/` | GremlinRegistry (live on Quai), RevenueSplitter |
 | `docs/` | Plan, skills list, releases |
 | `research/` | Provider research and mainnet route checks |

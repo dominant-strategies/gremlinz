@@ -66,7 +66,7 @@ export function announcement(deps: Pick<EggDeps, 'keys' | 'launch'>, bootedAt: s
   }
 }
 
-/** What the agent runtime reports via GREMLIN_HOME/status.json (see runtime/src/gremlins/status.ts). */
+/** What the agent runtime reports via GREMLIN_HOME/status.json (written by gremlin-mcp: packages/gremlin-mcp/src/status.ts). */
 export interface RuntimeStatus {
   tier?: Pulse['tier']
   goals?: Pulse['goals']
