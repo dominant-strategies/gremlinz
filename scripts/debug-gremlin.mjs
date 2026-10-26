@@ -8,7 +8,7 @@
 //   node scripts/debug-gremlin.mjs start --local --ollama          # fully local: pretend 1000 QUAI, local Ollama model
 //        [--model qwen3.5:122b-a10b-q4_K_M] [--ollama-url http://127.0.0.1:11434]
 //   node scripts/debug-gremlin.mjs start --local --ollama --hermes   # the Hermes runtime (gremlin-runtime fork)
-//        [--hermes-bin <venv>/bin/hermes] [--runtime-dir ../gremlin-runtime]
+//        [--hermes-bin ../gremlin-runtime/venv/bin/hermes] [--runtime-dir ../gremlin-runtime]
 //   node scripts/debug-gremlin.mjs watch                         # live transcript: thinking, tool calls, errors
 //   node scripts/debug-gremlin.mjs report                        # summary of what worked and what broke → report.md
 //   node scripts/debug-gremlin.mjs stop
@@ -111,7 +111,7 @@ async function start() {
       : `"${node}" "${runtime}" --gremlin-setup && "${node}" "${join(ROOT, 'scripts', 'debug-gremlin.mjs')}" _inject && exec "${node}" "${runtime}" --run`,
     ...(process.argv.includes('--hermes') ? {
       HERMES_HOME: join(DIR, 'hermes'),
-      HERMES_BIN: arg('hermes-bin', join(ROOT, '..', 'gremlin-runtime', '.venv', 'bin', 'hermes')),
+      HERMES_BIN: arg('hermes-bin', join(ROOT, '..', 'gremlin-runtime', 'venv', 'bin', 'hermes')),
       GREMLIN_RUNTIME_DIR: arg('runtime-dir', join(ROOT, '..', 'gremlin-runtime')),
       GREMLIN_DAILY_USD: '1',
       ...(ollamaModel ? { GREMLIN_OLLAMA_URL: process.env.DEBUG_OLLAMA_URL, GREMLIN_OLLAMA_MODEL: ollamaModel } : {}),
