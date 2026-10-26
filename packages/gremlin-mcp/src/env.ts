@@ -22,6 +22,16 @@ export interface Keys {
   evm: HDNodeWallet
 }
 
+/** The seed phrase. Only this process reads it; it never leaves (tools return addresses and tx hashes only). */
+export const phrase = () => readFileSync(homeFile('seed'), 'utf8').trim()
+
+let chainKeysCached: import('./wallets/keys.js').ChainKeys | undefined
+/** Keys for every chain family (EVM, Quai, Qi, Solana, Bitcoin, Litecoin) from the seed. */
+export async function chainKeys() {
+  if (!chainKeysCached) chainKeysCached = (await import('./wallets/keys.js')).deriveKeys(phrase())
+  return chainKeysCached
+}
+
 let cached: Keys | undefined
 /** Quai (cyprus1, index 0) and EVM (m/44'/60'/0'/0/0) keys from the egg's seed: the same identity the egg uses. */
 export function keys(): Keys {
