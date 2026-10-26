@@ -34,10 +34,14 @@ const write = (rel: string, body: string, mode = 0o600) => {
 write('SOUL.md', soulMarkdown(config, { evmAddress: k.evm.address, quaiAddress: k.quai.address, boardUrl: boardUrl() }), 0o444)
 write('config.yaml', hermesConfig({
   gatewayUrl,
-  mcp: { command: process.execPath, args: [mcpMain], env: { GREMLIN_HOME: home(), GREMLIN_BOARD_URL: boardUrl(), ...(process.env.GREMLIN_DEV_BALANCES ? { GREMLIN_DEV_BALANCES: process.env.GREMLIN_DEV_BALANCES } : {}) } },
+  mcp: process.env.GREMLIN_MCP_URL
+    ? { url: process.env.GREMLIN_MCP_URL }
+    : { command: process.execPath, args: [mcpMain], env: { GREMLIN_HOME: home(), GREMLIN_BOARD_URL: boardUrl(), ...(process.env.GREMLIN_DEV_BALANCES ? { GREMLIN_DEV_BALANCES: process.env.GREMLIN_DEV_BALANCES } : {}) } },
   skillsDir,
   protectedPaths: [home(), 'seed', 'signed-config.json'],
   wakeEveryMinutes: Number(process.env.GREMLIN_WAKE_MINUTES ?? 45),
 }))
+// The MCP token for HTTP mode goes in Hermes' .env (config.yaml refers to it as ${GREMLIN_MCP_TOKEN}).
+if (process.env.GREMLIN_MCP_TOKEN) write('.env', `GREMLIN_MCP_TOKEN=${process.env.GREMLIN_MCP_TOKEN}\n`)
 if (!existsSync(join(hermesHome, 'cron', 'jobs.json'))) write('cron/jobs.json', cronJobs({ wakeEveryMinutes: Number(process.env.GREMLIN_WAKE_MINUTES ?? 45) }))
 console.log(`gremlin-bootstrap: ${config.name} ready in ${hermesHome}`)

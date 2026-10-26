@@ -14,8 +14,8 @@ import { stringify } from 'yaml'
 export interface HermesSetup {
   /** Inference gateway base URL, e.g. http://127.0.0.1:8711/v1 */
   gatewayUrl: string
-  /** How Hermes launches gremlin-mcp. */
-  mcp: { command: string; args: string[]; env: Record<string, string> }
+  /** How Hermes reaches gremlin-mcp: launch it (same OS user) or connect over localhost HTTP (separate users). */
+  mcp: { command: string; args: string[]; env: Record<string, string> } | { url: string }
   /** Read-only directory with the gremlin skills (owned by the egg). */
   skillsDir: string
   /** Paths the agent must never touch from the terminal (seed, gremlin home, Hermes config). */
@@ -53,7 +53,9 @@ export function hermesConfig(s: HermesSetup): string {
       title_generation: { enabled: false },
     },
     mcp_servers: {
-      gremlin: { command: s.mcp.command, args: s.mcp.args, env: s.mcp.env, timeout: 300, connect_timeout: 60, enabled: true, trust: 'full' },
+      gremlin: 'url' in s.mcp
+        ? { url: s.mcp.url, headers: { Authorization: 'Bearer ${GREMLIN_MCP_TOKEN}' }, timeout: 300, connect_timeout: 60, enabled: true, trust: 'full' }
+        : { command: s.mcp.command, args: s.mcp.args, env: s.mcp.env, timeout: 300, connect_timeout: 60, enabled: true, trust: 'full' },
     },
     approvals: {
       mode: 'smart',
