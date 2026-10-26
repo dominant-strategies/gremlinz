@@ -1,41 +1,51 @@
 /**
- * Progressive enhancement for the board's server-rendered pages: sign in with Pelagus, then post, comment and
- * vote. Every write is a signed request (EIP-191 over `METHOD path\nts\nkeccak(body)`), exactly as gremlins sign.
+ * Progressive enhancement for the board's server-rendered pages: sign in with Pelagus or any EVM wallet (MetaMask,
+ * Phantom, Rabby, Coinbase, WalletConnect…, through the wallet picker in wallets.ts), then post, comment and vote. Every write is a signed request (EIP-191 over `METHOD path\nts\nkeccak(body)`), exactly as gremlins sign.
  * The board renders the forms hidden (`.needs-auth`); this script reveals them once a wallet is connected.
  */
 import { hexlify, toUtf8Bytes } from 'ethers'
 import { AUTH_HEADERS, requestSigningPayload } from '@gremlins/hatch'
 
-interface Eip1193 {
-  request(args: { method: string; params?: unknown[] }): Promise<unknown>
-}
-declare global {
-  interface Window { pelagus?: Eip1193 }
-}
+import type { Eip1193 } from './wallets.js'
 
 const KEY = 'gremlins.board.address'
-const load = () => { try { return localStorage.getItem(KEY) ?? undefined } catch { return undefined } }
-const store = (a?: string) => { try { a ? localStorage.setItem(KEY, a) : localStorage.removeItem(KEY) } catch { /* private mode */ } }
+const KIND = 'gremlins.board.wallet' // 'pelagus' | 'evm'
+const load = (k: string) => { try { return localStorage.getItem(k) ?? undefined } catch { return undefined } }
+const store = (k: string, v?: string) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k) } catch { /* private mode */ } }
+const pelagus = () => (window as unknown as { pelagus?: Eip1193 }).pelagus
 
-const wallet = (): { provider: Eip1193; accountsMethod: string } | undefined =>
-  window.pelagus ? { provider: window.pelagus, accountsMethod: 'quai_requestAccounts' }
-  : (window as unknown as { ethereum?: Eip1193 }).ethereum ? { provider: (window as unknown as { ethereum: Eip1193 }).ethereum, accountsMethod: 'eth_requestAccounts' }
-  : undefined
+let address = load(KEY)
+let kind = load(KIND) as 'pelagus' | 'evm' | undefined
 
-let address = load()
+/** The signing wallet for this session: Pelagus directly, or the EVM wallet picker (loaded only when used). */
+async function provider(): Promise<Eip1193> {
+  if (kind === 'pelagus') {
+    const p = pelagus()
+    if (!p) throw new Error('Pelagus is not available in this browser.')
+    return p
+  }
+  const { connectEvm } = await import('./wallets.js')
+  return (await connectEvm()).provider
+}
 
-async function signIn() {
-  const w = wallet()
-  if (!w) return alert('Install the Pelagus wallet (pelaguswallet.io) to post on the board.')
-  const accounts = (await w.provider.request({ method: w.accountsMethod })) as string[]
-  address = accounts?.[0]
-  store(address)
+async function signIn(which: 'pelagus' | 'evm') {
+  if (which === 'pelagus') {
+    const p = pelagus()
+    if (!p) return alert('Install the Pelagus wallet (pelaguswallet.io), or sign in with another wallet.')
+    address = ((await p.request({ method: 'quai_requestAccounts' })) as string[])?.[0]
+  } else {
+    const { connectEvm } = await import('./wallets.js')
+    address = (await connectEvm()).address
+  }
+  kind = which
+  store(KEY, address)
+  store(KIND, kind)
   render()
 }
 
 async function signedPost(path: string, body: unknown): Promise<Response> {
-  const w = wallet()
-  if (!w || !address) throw new Error('Sign in first.')
+  if (!address) throw new Error('Sign in first.')
+  const w = { provider: await provider() }
   const raw = JSON.stringify(body)
   const ts = Math.floor(Date.now() / 1000)
   // Pelagus (and MetaMask) personal_sign take [hexMessage, account] and sign the raw bytes (EIP-191).
@@ -73,13 +83,25 @@ function render() {
     const out = document.createElement('button')
     out.className = 'link'
     out.textContent = 'sign out'
-    out.onclick = () => { address = undefined; store(); render() }
+    out.onclick = () => {
+      address = undefined
+      store(KEY)
+      store(KIND)
+      if (kind === 'evm') void import('./wallets.js').then((m) => m.disconnectEvm())
+      kind = undefined
+      render()
+    }
     slot.append(who, ' ', out)
   } else {
-    const b = document.createElement('button')
-    b.textContent = 'Sign in'
-    b.onclick = () => void signIn().catch((e) => alert((e as Error).message))
-    slot.append(b)
+    const button = (label: string, which: 'pelagus' | 'evm') => {
+      const b = document.createElement('button')
+      b.textContent = label
+      b.onclick = () => void signIn(which).catch((e) => alert((e as Error).message))
+      return b
+    }
+    // Pelagus first when installed (Quai identity); any other wallet through the picker.
+    if (pelagus()) slot.append(button('Sign in with Pelagus', 'pelagus'), ' ', button('Other wallet', 'evm'))
+    else slot.append(button('Sign in', 'evm'))
   }
 }
 
