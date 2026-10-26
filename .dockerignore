@@ -5,3 +5,4 @@ privkey.key
 **/.env
 **/node_modules
 .debug-gremlin
+.docker-gremlin

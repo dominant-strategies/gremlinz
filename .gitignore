@@ -10,3 +10,4 @@ release/
 *.log
 .shots/
 .debug-gremlin/
+.docker-gremlin/

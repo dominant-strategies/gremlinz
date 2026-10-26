@@ -19,3 +19,4 @@ scripts
 **/test
 **/__tests__
 .debug-gremlin
+.docker-gremlin
