@@ -15,6 +15,7 @@ contracts
 research
 docs
 scripts
+runtime
 apps/board
 apps/launch/src
 apps/launch/index.html

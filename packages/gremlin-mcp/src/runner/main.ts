@@ -15,7 +15,7 @@
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { chownSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, chownSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gatewayConfig } from '../bootstrap/gateway-config.js'
@@ -58,6 +58,12 @@ const chownTree = (p: string, ids: Ids) => {
   if (statSync(p).isDirectory()) for (const f of readdirSync(p)) chownTree(join(p, f), ids)
 }
 if (hermesIds) chownTree(hermesHome, hermesIds)
+// The egg (root) writes the seed and its state into GREMLIN_HOME; the gremlin user must own it and nobody else read it.
+if (gremlinIds) {
+  chownTree(home(), gremlinIds)
+  const lockDown = (p: string) => { const d = statSync(p).isDirectory(); chmodSync(p, d ? 0o700 : 0o600); if (d) for (const f of readdirSync(p)) lockDown(join(p, f)) }
+  lockDown(home()) // owner-only, whatever mode each file was created with
+}
 
 // 3. the inference gateway
 let gatewayConfigPath = process.env.GATEWAY_CONFIG
