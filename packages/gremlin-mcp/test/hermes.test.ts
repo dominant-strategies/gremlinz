@@ -30,6 +30,7 @@ describe('Hermes config', () => {
     expect(cfg.agent.max_turns).toBe(40)
     expect(cfg.platform_toolsets.cron).toContain('gremlin')
     expect(cfg.plugins.enabled).toEqual(['gremlin'])
+    expect(cfg.tools.tool_search.enabled).toBe('off')
   })
 })
 

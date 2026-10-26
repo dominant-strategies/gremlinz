@@ -79,6 +79,9 @@ export function hermesConfig(s: HermesSetup): string {
     platform_toolsets: { cron: [...GREMLIN_TOOLSETS, 'gremlin'], api_server: [...GREMLIN_TOOLSETS, 'gremlin'] },
     // A wake-up must finish well before the next one (tinker's first took 17 model calls).
     agent: { max_turns: s.maxTurns ?? 40, disabled_toolsets: ['browser', 'image_gen', 'tts', 'cronjob', 'vision'] },
+    // A gremlin has ~25 tools: keep them all directly callable. Hermes' tool_search bridge (hidden tools reached via a
+    // tool_call wrapper) tripped up a local model 7 times in one wake-up during the egg image test.
+    tools: { tool_search: { enabled: 'off' } },
     plugins: { enabled: ['gremlin'] },
     security: { protected_instruction_files: true },
     timezone: s.timezone ?? 'UTC',
