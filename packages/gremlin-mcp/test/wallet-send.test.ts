@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Transaction, Address, NETWORK, OutScript } from '@scure/btc-signer'
@@ -8,7 +8,7 @@ import { base58, base64 } from '@scure/base'
 import { deriveKeys } from '../src/wallets/keys.js'
 import { asset } from '../src/wallets/chains.js'
 import { buildSolanaTransfer, buildUtxoTransfer, destinationProblem } from '../src/wallets/send.js'
-import { SendPolicy, priceFn } from '../src/wallets/policy.js'
+import { priceFn, recordSend } from '../src/wallets/policy.js'
 
 const ABANDON = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 const OTHER = 'legal winner thank year wave sausage worth useful legal winner thank yellow'
@@ -72,22 +72,15 @@ describe('solana transfer', () => {
   })
 })
 
-describe('spending policy', () => {
-  it('values stables 1:1, refuses unknown prices, and enforces per-send and rolling daily caps', async () => {
-    let clock = Date.parse('2026-10-26T12:00:00Z')
-    const p = new SendPolicy(join(mkdtempSync(join(tmpdir(), 'sends-')), 'sends.jsonl'), { perSendUsd: 10, dailyUsd: 25 }, () => clock)
+describe('send log and prices', () => {
+  it('values stables 1:1 and other coins at live prices, and logs sends', async () => {
     const price = priceFn({ fetchImpl: (async () => new Response(JSON.stringify({ coins: { 'coingecko:solana': { price: 150 } } }))) as typeof fetch })
     expect(await price(asset('usdc:base')!, 7_500_000n)).toBe(7.5)
     expect(await price(asset('sol:solana')!, 50_000_000n)).toBeCloseTo(7.5)
-    expect(p.check(undefined)).toMatch(/no live price/)
-    expect(p.check(12)).toMatch(/per-send limit/)
-    p.record({ asset: 'usdc:base', to: 'x', amount: '9', usd: 9, tx: '0x1' })
-    p.record({ asset: 'usdc:base', to: 'x', amount: '9', usd: 9, tx: '0x2' })
-    p.record({ asset: 'usdc:base', to: 'x', amount: '9', usd: 9, dryRun: true }) // dry runs do not count
-    expect(p.check(8)).toMatch(/daily limit/)
-    expect(p.check(7)).toBeUndefined()
-    clock += 25 * 3_600_000
-    expect(p.spentLast24h()).toBe(0)
+    const log = join(mkdtempSync(join(tmpdir(), 'sends-')), 'sends.jsonl')
+    recordSend(log, { asset: 'usdc:base', to: 'x', amount: '9', usd: 9, tx: '0x1' })
+    recordSend(log, { asset: 'qi:quai', to: 'PM8T', amount: '1', tx: '0x2' }) // no price: still logged
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(2)
   })
 
   it('values Qi through its live Qi→QUAI rate', async () => {
@@ -96,6 +89,6 @@ describe('spending policy', () => {
       qiToQuai: async (qi) => qi * 10n ** 15n * 2n, // pretend 1 Qi unit = 0.002 QUAI
     })
     expect(await price(asset('qi:quai')!, 5_000n)).toBeCloseTo(0.1) // 5000 units → 10 QUAI → $0.10
-    expect(await priceFn()(asset('qi:quai')!, 1n)).toBeUndefined() // no rate → refused upstream
+    expect(await priceFn()(asset('qi:quai')!, 1n)).toBeUndefined()
   })
 })

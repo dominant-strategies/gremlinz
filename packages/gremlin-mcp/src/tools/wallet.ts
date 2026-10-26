@@ -6,7 +6,7 @@ import { chainKeys, homeFile, phrase } from '../env.js'
 import { ASSETS, QUAI, asset as findAsset, rpcFor } from '../wallets/chains.js'
 import { allBalances } from '../wallets/balances.js'
 import { destinationProblem, send } from '../wallets/send.js'
-import { SendPolicy, priceFn } from '../wallets/policy.js'
+import { priceFn, recordSend } from '../wallets/policy.js'
 import { fail, text } from '../result.js'
 
 const CHAIN_LABEL: Record<string, string> = { quai: 'Quai', ethereum: 'Ethereum', base: 'Base', bsc: 'BSC', arbitrum: 'Arbitrum', optimism: 'Optimism', polygon: 'Polygon', avalanche: 'Avalanche', solana: 'Solana', bitcoin: 'Bitcoin', litecoin: 'Litecoin' }
@@ -29,7 +29,7 @@ export function registerWalletTools(server: McpServer) {
   })
 
   server.registerTool('wallet_send', {
-    description: `Send crypto. asset is one of: ${ASSETS.map((a) => a.id).join(', ')}. amount is in normal units (e.g. "12.5"). Each send is valued in USD and checked against your per-send and daily limits; use dryRun first for anything unusual. Qi goes to a payment code (PM8T…), not an address.`,
+    description: `Send crypto. asset is one of: ${ASSETS.map((a) => a.id).join(', ')}. amount is in normal units (e.g. "12.5"). Use dryRun first for anything unusual: it checks the address and estimates the fee without sending. Qi goes to a payment code (PM8T…), not an address.`,
     inputSchema: {
       asset: z.string(),
       to: z.string().min(10).max(200),
@@ -46,13 +46,11 @@ export function registerWalletTools(server: McpServer) {
     try { units = parseUnits(amount, a.decimals) } catch { return fail(`${amount} has too many decimal places for ${a.symbol} (max ${a.decimals}).`) }
     const quai = new QuaiProvider(rpcFor('quai', QUAI.rpc), undefined, { usePathing: true })
     const usd = await priceFn({ qiToQuai: (qi) => quai.getLatestQiToQuaiRate(Zone.Cyprus1, qi) })(a, units).catch(() => undefined)
-    const policy = SendPolicy.fromEnv(homeFile('sends.jsonl'))
-    const refused = policy.check(usd)
-    if (refused) return fail(refused)
+    const value = usd === undefined ? '' : ` (~$${usd.toFixed(2)})`
     try {
       const r = await send({ keys: await chainKeys(), phrase: phrase(), asset: a, to, amount: units, dryRun })
-      policy.record({ asset: a.id, to, amount, usd: usd!, tx: r.tx, ...(r.dryRun ? { dryRun: true } : {}) })
-      return text(r.dryRun ? `${r.tx} (~$${usd!.toFixed(2)}). Nothing was sent.` : `Sent ${amount} ${a.symbol} on ${CHAIN_LABEL[a.chain] ?? a.chain} (~$${usd!.toFixed(2)}): ${r.explorer || r.tx}`)
+      recordSend(homeFile('sends.jsonl'), { asset: a.id, to, amount, ...(usd === undefined ? {} : { usd }), tx: r.tx, ...(r.dryRun ? { dryRun: true } : {}) })
+      return text(r.dryRun ? `${r.tx}${value}. Nothing was sent.` : `Sent ${amount} ${a.symbol} on ${CHAIN_LABEL[a.chain] ?? a.chain}${value}: ${r.explorer || r.tx}`)
     } catch (e) {
       return fail(`Send failed: ${(e as Error).message.slice(0, 300)}`)
     }
