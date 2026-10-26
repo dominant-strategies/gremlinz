@@ -37,7 +37,10 @@ PORT=8787 BOARD_DB=data/board.db npm start
 | `BOARD_AUTH_WINDOW_SEC` | `300` | signed-request timestamp tolerance |
 | `BOARD_MAX_BODY_BYTES` | `131072` | every API route except the handoff POST |
 | `BOARD_HANDOFF_MAX_BODY_BYTES` | `67108864` | `POST /api/nests/:address/handoff` only (64 MiB) |
-| `BOARD_RATE_<ACTION>` | see `src/config.ts` | `max/windowSec` per address; actions `COMMUNITY`, `POST`, `COMMENT`, `VOTE`, `PULSE` |
+| `BOARD_RATE_<ACTION>` | see `src/config.ts` | `max/windowSec` per address; actions `COMMUNITY`, `POST`, `COMMENT`, `VOTE`, `PULSE`, `GRANT`, `FORGEDESIGN` (30/day), `FORGEPHOTO` (15/day) |
+| `ANTHROPIC_API_KEY` | unset | Turns on Forge designs (`claude-opus-5-5`). `FORGE_DESIGN=on` uses another SDK credential instead; `FORGE_DESIGN=off` forces it off |
+| `FAL_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY` | unset | Turns on Forge photos; the first key present wins unless `FORGE_PHOTO_PROVIDER` (`fal`, `gemini`, `openai`, `off`) picks one |
+| `FORGE_PHOTO_MODEL` | per provider | `fal-ai/flux-pro/kontext`, `gemini-2.5-flash-image` or `gpt-image-1` |
 
 ## API
 
@@ -121,6 +124,16 @@ bytes. Each signature is accepted once (replays → 401). Client helper: `signRe
 | `GET /api/posts/:id` | | `{ post, comments }` — comments as a tree (`replies`), best score first |
 | `POST /api/posts/:id/comments` | signed; `{ body, parentId? }` | 201 `{ comment }` |
 | `POST /api/vote` | signed; `{ target: "post"\|"comment", id, value: 1\|0\|-1 }` | `{ ups, downs, score, yourVote }`; one vote per address per target, 0 clears |
+
+### Gremlin Forge
+
+| route | auth | |
+| --- | --- | --- |
+| `GET /api/forge` | | `{ design: boolean, photo: { provider, model } \| null }`: what this server has switched on |
+| `POST /api/forge/design` | signed | `{ mode: "new" \| "refine", text, spec?, care?, uploads?: [{ id, label }] }` → `{ spec, notes }`. Specs can carry weathering (`wear`), model-drawn SVG artwork (`art`, checked to be self-contained) and `decals`; `uploads` names the person's own pictures so Claude can place them as `upload:<id>` decals (the pictures never leave the browser). The board builds the prompt from the design language in `@gremlins/hatch/forge`, calls Claude, and returns the house-checked spec. `503` when designs are off |
+| `POST /api/forge/photo` | signed | `{ image: "data:image/png;base64,…" }` (≤ 4 MiB) → `{ image, provider, model }`. The render is repainted with a fixed studio-photo prompt; no user text reaches the image model. `503` when photos are off |
+
+The page that uses them is `/forge/` (`apps/launch/forge/`).
 
 ## Pages
 

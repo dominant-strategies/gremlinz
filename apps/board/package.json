@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "start": "node src/main.ts",
     "dev": "node --watch src/main.ts",
@@ -11,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.133.0",
     "@gremlins/hatch": "file:../../packages/hatch",
     "@hono/node-server": "^1.19.0",
     "ethers": "^6.13.0",

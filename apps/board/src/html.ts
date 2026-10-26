@@ -205,6 +205,8 @@ function registerSite(app: Hono<any>, siteDir: string) {
   app.get('/', (c) => send(c, 'index.html', 'no-cache'))
   app.get('/hatch', (c) => c.redirect('/hatch/', 301))
   app.get('/hatch/', (c) => send(c, 'hatch/index.html', 'no-cache'))
+  app.get('/forge', (c) => c.redirect('/forge/', 301))
+  app.get('/forge/', (c) => send(c, 'forge/index.html', 'no-cache'))
   app.get('/docs', (c) => c.redirect('/docs/', 301))
   app.get('/docs/', (c) => send(c, 'docs/index.html', 'no-cache'))
   app.get('/docs/:page{[a-z-]+}', (c) => c.redirect(`/docs/${c.req.param('page')}/`, 301))

@@ -136,3 +136,18 @@ export const Vote = z.object({
   id: z.number().int().positive(),
   value: z.union([z.literal(-1), z.literal(0), z.literal(1)]),
 })
+
+export const ForgeDesign = z.object({
+  mode: z.enum(['new', 'refine']),
+  text: z.string().trim().min(1).max(1_500),
+  /** The current design, for `refine`; re-checked server-side before it reaches the prompt. */
+  spec: z.unknown().optional(),
+  care: z.boolean().optional(),
+  /** Names of pictures the person uploaded (the pictures stay in their browser); the prompt lets Claude place them. */
+  uploads: z.array(z.object({ id: z.string().regex(/^[a-z0-9-]{1,24}$/), label: z.string().max(120) })).max(6).optional(),
+})
+
+export const ForgePhoto = z.object({
+  /** The studio render as `data:image/png;base64,…`. */
+  image: z.string().max(6 * 1024 * 1024),
+})

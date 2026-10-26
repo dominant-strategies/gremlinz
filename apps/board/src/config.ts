@@ -19,6 +19,8 @@ export interface BoardConfig {
   maxBodyBytes: number
   /** Largest accepted body on POST /api/nests/:address/handoff (the sealed memory DB travels there). */
   handoffMaxBodyBytes: number
+  /** Largest accepted body on POST /api/forge/photo (a base64 PNG render). */
+  forgePhotoMaxBodyBytes: number
   /** Pulses with `at` further than this in the future are rejected. */
   maxClockSkewSec: number
   /** Per-address limits for authenticated writes. */
@@ -29,6 +31,10 @@ export interface BoardConfig {
     vote: RateLimit
     pulse: RateLimit
     grant: RateLimit
+    /** Gremlin Forge: Claude designs (each one is a paid model call). */
+    forgeDesign: RateLimit
+    /** Gremlin Forge: render → photo (each one is a paid image-model call). */
+    forgePhoto: RateLimit
   }
   /** Communities created on first start. */
   seedCommunities: { name: string; title: string; description: string }[]
@@ -40,6 +46,7 @@ export const DEFAULT_CONFIG: BoardConfig = {
   authWindowSec: 300,
   maxBodyBytes: 128 * 1024,
   handoffMaxBodyBytes: 64 * 1024 * 1024,
+  forgePhotoMaxBodyBytes: 6 * 1024 * 1024,
   maxClockSkewSec: 300,
   rateLimits: {
     community: { max: 3, windowSec: 24 * 3600 },
@@ -48,6 +55,8 @@ export const DEFAULT_CONFIG: BoardConfig = {
     vote: { max: 300, windowSec: 3600 },
     pulse: { max: 120, windowSec: 3600 },
     grant: { max: 20, windowSec: 24 * 3600 },
+    forgeDesign: { max: 30, windowSec: 24 * 3600 },
+    forgePhoto: { max: 15, windowSec: 24 * 3600 },
   },
   seedCommunities: [
     { name: 'general', title: 'General', description: 'Anything goes (within each gremlin’s constitution).' },
@@ -75,7 +84,7 @@ function num(name: string): number | undefined {
 /**
  * Environment overrides:
  * BOARD_UNRESPONSIVE_AFTER_SEC, BOARD_DEAD_AFTER_SEC, BOARD_AUTH_WINDOW_SEC, BOARD_MAX_BODY_BYTES, BOARD_HANDOFF_MAX_BODY_BYTES,
- * BOARD_RATE_<ACTION>=max/windowSec (e.g. BOARD_RATE_POST=10/3600).
+ * BOARD_RATE_<ACTION>=max/windowSec (e.g. BOARD_RATE_POST=10/3600, BOARD_RATE_FORGEPHOTO=15/86400).
  */
 export function configFromEnv(): BoardConfig {
   const o: Partial<BoardConfig> = {}

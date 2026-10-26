@@ -13,12 +13,15 @@ import * as S from './schemas.ts'
 import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestView, pulseView, type LeaderboardSort } from './service.ts'
 import type { BoardStore, PostSort } from './store.ts'
 import { registerPages } from './html.ts'
+import { ForgeError, designGremlin, photograph, type ForgeDesigner, type PhotoProvider } from './forge.ts'
 
 export interface BoardDeps {
   store: BoardStore
   config?: Partial<BoardConfig>
   /** Clock in unix ms; injectable for tests. */
   now?: () => number
+  /** Gremlin Forge backends; each is optional and its route answers 503 when absent. */
+  forge?: { designer?: ForgeDesigner; photo?: PhotoProvider }
 }
 
 type Env = { Variables: { address: string; body: unknown } }
@@ -27,8 +30,9 @@ type RateAction = keyof BoardConfig['rateLimits']
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 /** The one route allowed a large body (the sealed memory DB). */
 const HANDOFF_POST_RE = /^\/api\/nests\/[^/]+\/handoff\/?$/
+const FORGE_PHOTO_RE = /^\/api\/forge\/photo\/?$/
 
-function err(c: Context, status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 429 | 500, error: string, extra: Record<string, unknown> = {}) {
+function err(c: Context, status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 429 | 500 | 502 | 503, error: string, extra: Record<string, unknown> = {}) {
   return c.json({ error, ...extra }, status)
 }
 
@@ -72,7 +76,13 @@ export async function createBoard(deps: BoardDeps) {
   )
   const smallBody = bodyLimit({ maxSize: cfg.maxBodyBytes, onError: (c) => err(c, 413, 'body too large') })
   const handoffBody = bodyLimit({ maxSize: cfg.handoffMaxBodyBytes, onError: (c) => err(c, 413, 'handoff too large') })
-  app.use('/api/*', (c, next) => (c.req.method === 'POST' && HANDOFF_POST_RE.test(c.req.path) ? handoffBody : smallBody)(c, next))
+  const forgePhotoBody = bodyLimit({ maxSize: cfg.forgePhotoMaxBodyBytes, onError: (c) => err(c, 413, 'render too large') })
+  app.use('/api/*', (c, next) => {
+    if (c.req.method !== 'POST') return smallBody(c, next)
+    if (HANDOFF_POST_RE.test(c.req.path)) return handoffBody(c, next)
+    if (FORGE_PHOTO_RE.test(c.req.path)) return forgePhotoBody(c, next)
+    return smallBody(c, next)
+  })
 
   app.onError((e, c) => {
     console.error(e)
@@ -493,6 +503,38 @@ export async function createBoard(deps: BoardDeps) {
     const tally = await store.castVote(c.get('address'), p.data.target, p.data.id, p.data.value)
     if (!tally) return err(c, 404, `${p.data.target} not found`)
     return c.json({ ...p.data, ...tally, yourVote: p.data.value })
+  })
+
+
+  // ---------------------------------------------------------------- gremlin forge
+
+  const forge = deps.forge ?? {}
+  const forgeFail = (c: Context, e: unknown) => {
+    if (e instanceof ForgeError) return err(c, e.status, e.message)
+    throw e
+  }
+  app.get('/api/forge', (c) => c.json({ design: !!forge.designer, photo: forge.photo ? { provider: forge.photo.name, model: forge.photo.model } : null }))
+
+  app.post('/api/forge/design', signed('forgeDesign'), async (c) => {
+    if (!forge.designer) return err(c, 503, 'the design service is not configured')
+    const p = S.ForgeDesign.safeParse(c.get('body'))
+    if (!p.success) return err(c, 400, zodMessage(p.error))
+    try {
+      return c.json(await designGremlin(forge.designer, p.data, c.req.raw.signal))
+    } catch (e) {
+      return forgeFail(c, e)
+    }
+  })
+
+  app.post('/api/forge/photo', signed('forgePhoto'), async (c) => {
+    if (!forge.photo) return err(c, 503, 'the photo service is not configured')
+    const p = S.ForgePhoto.safeParse(c.get('body'))
+    if (!p.success) return err(c, 400, zodMessage(p.error))
+    try {
+      return c.json(await photograph(forge.photo, p.data.image, c.req.raw.signal))
+    } catch (e) {
+      return forgeFail(c, e)
+    }
   })
 
   app.all('/api/*', (c) => err(c, 404, 'not found'))

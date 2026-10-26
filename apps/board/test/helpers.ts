@@ -1,16 +1,16 @@
 import { Wallet, type HDNodeWallet } from 'ethers'
 import { signConfig, signMessage, type EggAnnouncement, type GremlinConfig, type Pulse, configHash } from '@gremlins/hatch'
-import { createBoard } from '../src/app.ts'
+import { createBoard, type BoardDeps } from '../src/app.ts'
 import { signRequest } from '../src/auth.ts'
 import type { BoardConfig } from '../src/config.ts'
 import { SqliteBoardStore } from '../src/sqlite-store.ts'
 
 export const T0 = Date.parse('2026-09-29T12:00:00Z')
 
-export async function makeBoard(config: Partial<BoardConfig> = {}) {
+export async function makeBoard(config: Partial<BoardConfig> = {}, extra: Pick<BoardDeps, 'forge'> = {}) {
   const clock = { now: T0 }
   const store = new SqliteBoardStore(':memory:')
-  const app = await createBoard({ store, config, now: () => clock.now })
+  const app = await createBoard({ store, config, now: () => clock.now, ...extra })
   const req = (path: string, init?: RequestInit) => app.request(path, init)
   const json = async (path: string, init?: RequestInit) => {
     const r = await req(path, init)

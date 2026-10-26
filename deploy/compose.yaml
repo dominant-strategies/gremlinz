@@ -8,6 +8,13 @@ services:
       - board-data:/data
     environment:
       BOARD_DB: /data/board.db
+      # Gremlin Forge (optional): Claude designs, an image model photographs. Unset keys leave that half off.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      FAL_KEY: ${FAL_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      FORGE_PHOTO_PROVIDER: ${FORGE_PHOTO_PROVIDER:-}
+      FORGE_PHOTO_MODEL: ${FORGE_PHOTO_MODEL:-}
     expose:
       - "8787"
   caddy:
