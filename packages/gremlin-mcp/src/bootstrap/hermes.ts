@@ -27,6 +27,16 @@ export interface HermesSetup {
   maxTurns?: number
 }
 
+/**
+ * Hermes deny globs (fnmatch) for a protected path, matching it only as a whole path segment: the gremlin's home
+ * /var/lib/gremlin is denied, its own workspace /var/lib/gremlin-hermes is not; a file named "seed" is denied, the
+ * word "seedling" is not. (Found in the egg image test: plain `*path*` globs blocked the gremlin's own work folder.)
+ */
+export function denyGlobs(p: string): string[] {
+  const ends = ['', ' *', '/*', "'*", '"*', ';*', '|*', '&*', ')*']
+  return p.startsWith('/') ? ends.map((e) => `*${p}${e}`) : ['/', ' ', "'", '"', '='].flatMap((pre) => ends.filter((e) => e !== '/*').map((e) => `*${pre}${p}${e}`))
+}
+
 const GREMLIN_TOOLSETS = ['terminal', 'file', 'memory', 'skills', 'todo', 'session_search', 'web']
 
 export function hermesConfig(s: HermesSetup): string {
@@ -63,7 +73,7 @@ export function hermesConfig(s: HermesSetup): string {
       single_query_mode: 'deny',
       unattended_mode: 'deny',
       deny: [
-        ...s.protectedPaths.map((p) => `*${p}*`),
+        ...s.protectedPaths.flatMap(denyGlobs),
         '*SOUL.md*',
         '*config.yaml*',
         '*/.env*',
