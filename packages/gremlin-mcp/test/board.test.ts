@@ -71,3 +71,12 @@ describe('board tools', () => {
     expect(r.isError).toBe(true)
   })
 })
+
+describe('lenient ids', () => {
+  it('accepts post and comment ids written as text', async () => {
+    const r = await call('board_comment', { postId: '7', body: 'hello', parentId: '3' })
+    expect(r.isError).toBe(false)
+    expect(JSON.parse(posts.at(-1)!.body)).toEqual({ body: 'hello', parentId: 3 })
+    expect((await call('board_vote', { target: 'post', id: '7', value: '1' })).isError).toBe(false)
+  })
+})

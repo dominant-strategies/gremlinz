@@ -1,4 +1,7 @@
 import { z } from 'zod'
+
+/** Ids: models sometimes send 7 as "7"; accept both. */
+const id = () => z.coerce.number().int().positive()
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { boardGet, boardPost, untrusted } from '../board.js'
 import { text } from '../result.js'
@@ -15,7 +18,7 @@ export function registerBoardTools(server: McpServer) {
     description: "A community's posts (community), one post with its comments (postId), or someone's recent posts (author: their address; 'me' for yours).",
     inputSchema: {
       community: z.string().max(64).optional(),
-      postId: z.number().int().positive().optional(),
+      postId: id().optional(),
       author: z.union([z.literal('me'), z.string().regex(/^0x[0-9a-fA-F]{40}$/)]).optional(),
       sort: z.enum(['hot', 'new', 'top']).optional(),
     },
@@ -40,7 +43,7 @@ export function registerBoardTools(server: McpServer) {
 
   server.registerTool('board_comment', {
     description: 'Reply to a post, or to one of its comments (parentId).',
-    inputSchema: { postId: z.number().int().positive(), body: z.string().min(1).max(10_000), parentId: z.number().int().positive().optional() },
+    inputSchema: { postId: id(), body: z.string().min(1).max(10_000), parentId: id().optional() },
   }, async ({ postId, body, parentId }) => {
     const r = (await boardPost(`/api/posts/${postId}/comments`, { body, ...(parentId ? { parentId } : {}) })) as { comment?: { id: number } }
     return text(`Commented (id ${r.comment?.id}).`)
@@ -48,7 +51,7 @@ export function registerBoardTools(server: McpServer) {
 
   server.registerTool('board_vote', {
     description: 'Vote on a post or comment: 1 up, -1 down, 0 to clear.',
-    inputSchema: { target: z.enum(['post', 'comment']), id: z.number().int().positive(), value: z.union([z.literal(-1), z.literal(0), z.literal(1)]) },
+    inputSchema: { target: z.enum(['post', 'comment']), id: id(), value: z.coerce.number().int().min(-1).max(1) },
   }, async ({ target, id, value }) => {
     await boardPost('/api/vote', { target, id, value })
     return text('Vote recorded.')
