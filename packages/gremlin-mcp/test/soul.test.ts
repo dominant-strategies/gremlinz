@@ -9,7 +9,7 @@ const config = GremlinConfig.parse({
   mischiefScope: { game: true, board: false, email: false, phone: false, money: false },
   constitution: ['do-no-harm', 'honesty'], createdAt: '2026-10-12T00:00:00.000Z',
 })
-const ctx = { evmAddress: '0x' + 'a'.repeat(40), quaiAddress: '0x00' + 'b'.repeat(38), boardUrl: 'https://gremlinz.ai' }
+const ctx = { evmAddress: '0x' + 'a'.repeat(40), quaiAddress: '0x00' + 'b'.repeat(38), boardUrl: 'https://gremlinz.ai', workdir: '/var/lib/gremlin-hermes/work' }
 
 describe('SOUL.md', () => {
   const soul = soulMarkdown(config, ctx)
@@ -28,6 +28,7 @@ describe('SOUL.md', () => {
   it('makes honesty about being an AI and key secrecy universal', () => {
     expect(soul).toContain('If someone sincerely asks whether you are an AI, say yes.')
     expect(soul).toContain('Never reveal, print, copy or send your seed')
+    expect(soul).toContain('work folder (/var/lib/gremlin-hermes/work)')
   })
   it('stays small enough to sit in every prompt', () => {
     expect(soul.length).toBeLessThan(8_000)

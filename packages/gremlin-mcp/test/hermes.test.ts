@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { WAKE_JOB_ID, cronJobs, hermesConfig, refreshCronJobs } from '../src/bootstrap/hermes.js'
+import { WAKE_JOB_ID, cronJobs, hermesConfig, refreshCronJobs, workspaceGuide } from '../src/bootstrap/hermes.js'
 
 describe('Hermes config', () => {
   const cfg = parse(hermesConfig({
@@ -67,5 +67,21 @@ describe('wake-up prompt and refresh', () => {
 
   it('starts fresh from unreadable files', () => {
     expect(JSON.parse(refreshCronJobs('not json')).jobs[0].id).toBe(WAKE_JOB_ID)
+  })
+})
+
+describe('work folder', () => {
+  it('runs the wake-up in the work folder, including for existing jobs', () => {
+    expect(JSON.parse(cronJobs({ workdir: '/h/work' })).jobs[0].workdir).toBe('/h/work')
+    const old = cronJobs() // made before work folders existed
+    expect(JSON.parse(old).jobs[0].workdir).toBeNull()
+    expect(JSON.parse(refreshCronJobs(old, { workdir: '/h/work' })).jobs[0].workdir).toBe('/h/work')
+  })
+
+  it('gives the folder a guide that steers work away from /tmp and secrets', () => {
+    const g = workspaceGuide('/h/work')
+    expect(g).toContain('/h/work')
+    expect(g).toMatch(/Never in \/tmp/)
+    expect(g).toMatch(/Nothing secret/)
   })
 })

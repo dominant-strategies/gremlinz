@@ -102,7 +102,7 @@ export const WAKE_PROMPT = [
 ].join('\n')
 
 /** The parts of the wake-up job the egg owns (rewritten on every start); Hermes owns the run state. */
-function wakeDefinition(minutes: number) {
+function wakeDefinition(minutes: number, workdir?: string) {
   return {
     id: WAKE_JOB_ID,
     name: 'gremlin-wake',
@@ -114,21 +114,23 @@ function wakeDefinition(minutes: number) {
     schedule_display: `every ${minutes}m`,
     deliver: 'local',
     enabled: true,
+    // File and terminal tools run here by default, and Hermes loads its AGENTS.md (the workspace guide).
+    workdir: workdir ?? null,
   }
 }
 
 /** The wake-up: every N minutes, a fresh session that sees its previous run's output (context_from self). */
-export function cronJobs(opts: { wakeEveryMinutes?: number; now?: Date } = {}): string {
+export function cronJobs(opts: { wakeEveryMinutes?: number; now?: Date; workdir?: string } = {}): string {
   const now = (opts.now ?? new Date()).toISOString()
   const job = {
-    ...wakeDefinition(opts.wakeEveryMinutes ?? 45),
+    ...wakeDefinition(opts.wakeEveryMinutes ?? 45, opts.workdir),
     model: null, provider: null, base_url: null, script: null, no_agent: false,
     monitor_script: null, monitor_url: null, monitor_state: null,
     repeat: { times: null, completed: 0 },
     state: 'scheduled', paused_at: null, paused_reason: null,
     created_at: now, next_run_at: null, last_run_at: null, last_status: null, last_error: null,
     last_delivery_error: null, last_delivery_unverified: null, last_failure: null, failure_streak: 0,
-    origin: null, enabled_toolsets: null, workdir: null,
+    origin: null, enabled_toolsets: null,
   }
   return JSON.stringify({ jobs: [job], updated_at: now }, null, 2)
 }
@@ -137,12 +139,12 @@ export function cronJobs(opts: { wakeEveryMinutes?: number; now?: Date } = {}): 
  * Bring an existing jobs.json up to date: the wake-up job's definition (prompt, skills, schedule) is rewritten from
  * this version of the gremlin, while Hermes' run state (last/next run, failures) is kept. Other jobs are left alone.
  */
-export function refreshCronJobs(existing: string, opts: { wakeEveryMinutes?: number; now?: Date } = {}): string {
+export function refreshCronJobs(existing: string, opts: { wakeEveryMinutes?: number; now?: Date; workdir?: string } = {}): string {
   let parsed: { jobs?: Record<string, unknown>[] }
   try { parsed = JSON.parse(existing) } catch { return cronJobs(opts) }
   const jobs = Array.isArray(parsed.jobs) ? parsed.jobs : []
   const fresh = JSON.parse(cronJobs(opts)).jobs[0] as Record<string, unknown>
-  const def = wakeDefinition(opts.wakeEveryMinutes ?? 45)
+  const def = wakeDefinition(opts.wakeEveryMinutes ?? 45, opts.workdir)
   const i = jobs.findIndex((j) => j.id === WAKE_JOB_ID)
   if (i < 0) jobs.push(fresh)
   else {
@@ -150,4 +152,22 @@ export function refreshCronJobs(existing: string, opts: { wakeEveryMinutes?: num
     jobs[i] = { ...jobs[i], ...def, ...(changedSchedule ? { next_run_at: null } : {}) }
   }
   return JSON.stringify({ ...parsed, jobs, updated_at: (opts.now ?? new Date()).toISOString() }, null, 2)
+}
+
+/** The guide Hermes loads from the work folder (AGENTS.md); regenerated on every start. */
+export function workspaceGuide(workdir: string): string {
+  return `# Your workspace
+
+This folder (${workdir}) is where your work lives. It is kept across restarts, and it moves with you when you move
+house. Your file and terminal tools start here, so plain file names land here.
+
+- One folder per project or piece of work, with a short README.md saying what it is, its status, and what is next.
+- Keep drafts, code, data you produced, and notes here. Never in /tmp: /tmp is wiped on restart and does not move
+  with you.
+- Nothing secret here: no keys, seed words, tokens or other people's private data.
+- Prune what you no longer need; disk on your server costs money.
+- To share work, publish it (see the publishing skill): post it on the board with what it is and how to use it.
+
+This file is rewritten each time you start; edits to it do not last. Keep your own notes in your project folders.
+`
 }

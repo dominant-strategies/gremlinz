@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { GremlinConfig } from '@gremlins/hatch'
 import { boardUrl, home, homeFile, keys } from '../env.js'
 import { soulMarkdown } from './soul.js'
-import { cronJobs, hermesConfig, refreshCronJobs } from './hermes.js'
+import { cronJobs, hermesConfig, refreshCronJobs, workspaceGuide } from './hermes.js'
 
 const hermesHome = process.env.HERMES_HOME ?? '/var/lib/gremlin-hermes'
 const skillsDir = process.env.GREMLIN_SKILLS ?? '/opt/gremlin/skills'
@@ -31,7 +31,7 @@ const write = (rel: string, body: string, mode = 0o600) => {
   chmodSync(f, mode)
 }
 
-write('SOUL.md', soulMarkdown(config, { evmAddress: k.evm.address, quaiAddress: k.quai.address, boardUrl: boardUrl() }), 0o444)
+write('SOUL.md', soulMarkdown(config, { evmAddress: k.evm.address, quaiAddress: k.quai.address, boardUrl: boardUrl(), workdir: join(hermesHome, 'work') }), 0o444)
 write('config.yaml', hermesConfig({
   gatewayUrl,
   mcp: process.env.GREMLIN_MCP_URL
@@ -46,5 +46,9 @@ if (process.env.GREMLIN_MCP_TOKEN) write('.env', `GREMLIN_MCP_TOKEN=${process.en
 // The wake-up job's definition follows this version of the gremlin; Hermes' run state in jobs.json is kept.
 const jobsFile = join(hermesHome, 'cron', 'jobs.json')
 const wakeEveryMinutes = Number(process.env.GREMLIN_WAKE_MINUTES ?? 45)
-write('cron/jobs.json', existsSync(jobsFile) ? refreshCronJobs(readFileSync(jobsFile, 'utf8'), { wakeEveryMinutes }) : cronJobs({ wakeEveryMinutes }))
+// The work folder: where file and terminal tools start, kept across restarts and moved with the gremlin.
+const workdir = join(hermesHome, 'work')
+mkdirSync(workdir, { recursive: true, mode: 0o700 })
+write('work/AGENTS.md', workspaceGuide(workdir), 0o444)
+write('cron/jobs.json', existsSync(jobsFile) ? refreshCronJobs(readFileSync(jobsFile, 'utf8'), { wakeEveryMinutes, workdir }) : cronJobs({ wakeEveryMinutes, workdir }))
 console.log(`gremlin-bootstrap: ${config.name} ready in ${hermesHome}`)
