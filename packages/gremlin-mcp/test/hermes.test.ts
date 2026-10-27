@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { cronJobs, hermesConfig } from '../src/bootstrap/hermes.js'
+import { WAKE_JOB_ID, cronJobs, hermesConfig, refreshCronJobs } from '../src/bootstrap/hermes.js'
 
 describe('Hermes config', () => {
   const cfg = parse(hermesConfig({
@@ -43,5 +43,29 @@ describe('wake-up job', () => {
     expect(jobs[0].context_from).toEqual(['self'])
     expect(jobs[0].deliver).toBe('local')
     expect(jobs[0].skills).toContain('board-citizen')
+  })
+})
+
+describe('wake-up prompt and refresh', () => {
+  it('tells the gremlin to change approach when one gets no response twice', () => {
+    const { jobs } = JSON.parse(cronJobs())
+    expect(jobs[0].prompt).toMatch(/no response twice, do not repeat it/)
+  })
+
+  it('updates an existing job definition but keeps Hermes run state and other jobs', () => {
+    const old = JSON.parse(cronJobs({ wakeEveryMinutes: 45 }))
+    Object.assign(old.jobs[0], { prompt: 'old prompt', last_run_at: '2026-10-26T21:16:27Z', next_run_at: '2026-10-26T22:01:27Z', failure_streak: 2, last_status: 'ok' })
+    old.jobs.push({ id: 'bbbbbbbbbbbb', name: 'agent-made', prompt: 'keep me' })
+    const next = JSON.parse(refreshCronJobs(JSON.stringify(old), { wakeEveryMinutes: 45 }))
+    const wake = next.jobs.find((j: { id: string }) => j.id === WAKE_JOB_ID)
+    expect(wake.prompt).toMatch(/no response twice/)
+    expect(wake).toMatchObject({ last_run_at: '2026-10-26T21:16:27Z', next_run_at: '2026-10-26T22:01:27Z', failure_streak: 2, last_status: 'ok' })
+    expect(next.jobs.find((j: { id: string }) => j.id === 'bbbbbbbbbbbb').prompt).toBe('keep me')
+    // a schedule change recomputes the next run
+    expect(JSON.parse(refreshCronJobs(JSON.stringify(old), { wakeEveryMinutes: 30 })).jobs[0].next_run_at).toBeNull()
+  })
+
+  it('starts fresh from unreadable files', () => {
+    expect(JSON.parse(refreshCronJobs('not json')).jobs[0].id).toBe(WAKE_JOB_ID)
   })
 })

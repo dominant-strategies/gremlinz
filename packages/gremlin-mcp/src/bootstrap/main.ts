@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { GremlinConfig } from '@gremlins/hatch'
 import { boardUrl, home, homeFile, keys } from '../env.js'
 import { soulMarkdown } from './soul.js'
-import { cronJobs, hermesConfig } from './hermes.js'
+import { cronJobs, hermesConfig, refreshCronJobs } from './hermes.js'
 
 const hermesHome = process.env.HERMES_HOME ?? '/var/lib/gremlin-hermes'
 const skillsDir = process.env.GREMLIN_SKILLS ?? '/opt/gremlin/skills'
@@ -43,5 +43,8 @@ write('config.yaml', hermesConfig({
 }))
 // The MCP token for HTTP mode goes in Hermes' .env (config.yaml refers to it as ${GREMLIN_MCP_TOKEN}).
 if (process.env.GREMLIN_MCP_TOKEN) write('.env', `GREMLIN_MCP_TOKEN=${process.env.GREMLIN_MCP_TOKEN}\n`)
-if (!existsSync(join(hermesHome, 'cron', 'jobs.json'))) write('cron/jobs.json', cronJobs({ wakeEveryMinutes: Number(process.env.GREMLIN_WAKE_MINUTES ?? 45) }))
+// The wake-up job's definition follows this version of the gremlin; Hermes' run state in jobs.json is kept.
+const jobsFile = join(hermesHome, 'cron', 'jobs.json')
+const wakeEveryMinutes = Number(process.env.GREMLIN_WAKE_MINUTES ?? 45)
+write('cron/jobs.json', existsSync(jobsFile) ? refreshCronJobs(readFileSync(jobsFile, 'utf8'), { wakeEveryMinutes }) : cronJobs({ wakeEveryMinutes }))
 console.log(`gremlin-bootstrap: ${config.name} ready in ${hermesHome}`)
