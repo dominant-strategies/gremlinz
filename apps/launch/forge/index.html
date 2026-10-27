@@ -9,24 +9,42 @@
   <link rel="stylesheet" href="/assets/site.css">
   <style>
     [hidden] { display: none !important; }
-    .forge { display: grid; grid-template-columns: minmax(0, 460px) minmax(0, 1fr); gap: 32px; align-items: start; padding-block: 32px 56px; }
+    /* The forge keeps the prototype's single light "photo studio" palette (warm greige, off-white panels, ink pills,
+       rosso accents) whatever the site theme; :is([data-theme]) out-ranks the site's dark-mode selectors. */
+    html:root:is(*, [data-theme]) {
+      --paper: #e9e3d8; --paper-2: #e2dbcd; --card: #f7f3ec; --ink: #24211d; --ink-2: #5f574d; --line: #d3c9b9;
+      --moss: #4f7040; --moss-2: #3d5a31; --moss-tint: #e4e8d8; --spark: #e0a83e; --spark-tint: #f6e7c8; --rust: #b8281f;
+      --rosso: #b8281f; --sticker: #f7f3ec; --sticker-ink: #24211d; --shadow: #24211d; --on-moss: #f7f3ec; color-scheme: light;
+    }
+    body { font-family: var(--display); font-size: 15px; line-height: 1.45; }
+    .forge .card { background: var(--card); border-radius: 18px; padding: 16px; }
+    .forge .btn, .forge-stage-col .btn { border-radius: 999px; border: 1.5px solid var(--ink); background: transparent; color: var(--ink); box-shadow: none; font-family: var(--display); font-weight: 600; min-height: 44px; }
+    .forge .btn:hover, .forge .btn:active { transform: none; box-shadow: none; background: rgba(36,33,29,.06); }
+    .forge .btn-small { min-height: 38px; padding: 0 14px; font-size: 14px; font-weight: 500; }
+    .forge .btn-primary { background: var(--ink); color: #f7f3ec; font-weight: 800; }
+    .forge .btn-primary:hover { background: #3a352f; color: #f7f3ec; }
+    .forge .btn-spark { background: var(--rosso); border-color: var(--rosso); color: #fff; font-weight: 700; }
+    .forge .btn-spark:hover { background: #9e2119; color: #fff; }
+    .forge textarea:focus-visible, .forge button:focus-visible, .forge input:focus-visible, .forge select:focus-visible { outline: 3px solid var(--spark); outline-offset: 2px; }
+    .forge .linkish { color: var(--ink); }
+    .forge { display: grid; grid-template-columns: minmax(0, 460px) minmax(0, 1fr); gap: 32px; align-items: start; padding-block: 20px 40px; }
     @media (max-width: 960px) { .forge { grid-template-columns: minmax(0, 1fr); gap: 24px; } .forge-stage-col { order: -1; } }
-    .forge-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-    .forge h1 { margin: 0 0 8px; font-family: var(--display); font-size: clamp(34px, 4vw, 46px); line-height: 1; letter-spacing: -.02em; }
-    .forge .lede { margin: 0; color: var(--ink-2); max-width: 52ch; }
-    .forge form.card { display: flex; flex-direction: column; gap: 12px; }
+    .forge-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+    .forge h1 { margin: 0 0 6px; font-family: var(--display); font-size: clamp(28px, 3vw, 36px); line-height: 1; letter-spacing: -.02em; }
+    .forge .lede { margin: 0; color: var(--ink-2); max-width: 52ch; font-size: 16px; line-height: 1.5; }
+    .forge form.card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }
     .forge label.big { font-family: var(--display); font-weight: 700; font-size: 18px; }
-    .forge textarea, .forge input[type="text"] { width: 100%; box-sizing: border-box; border: 1.5px solid var(--line); border-radius: 12px; padding: 12px 14px; font: inherit; font-size: 16px; background: var(--paper); color: var(--ink); }
-    .forge textarea { min-height: 96px; resize: vertical; }
+    .forge textarea, .forge input[type="text"] { width: 100%; box-sizing: border-box; border: 1.5px solid var(--line); border-radius: 12px; padding: 12px 14px; font: inherit; font-size: 16px; background: #fffdf9; color: var(--ink); }
+    .forge textarea { min-height: 64px; resize: vertical; }
     .forge .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .forge .chips button { min-height: 36px; padding: 6px 12px; border-radius: 999px; border: 1.5px dashed var(--line); background: transparent; color: var(--ink-2); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+    .forge .chips button { min-height: 32px; padding: 4px 12px; border-radius: 999px; border: 1.5px dashed var(--line); background: transparent; color: var(--ink-2); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
     .forge .chips button:hover { color: var(--ink); border-color: var(--ink-2); }
     .forge .check { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--ink-2); min-height: 44px; }
     .forge .status { font-family: var(--mono); font-size: 13px; color: var(--ink-2); min-height: 1.4em; margin: 0; }
     .forge .status.err { color: var(--rust); }
     .forge .linkish { background: none; border: none; padding: 0; font: inherit; color: var(--moss); text-decoration: underline; cursor: pointer; }
     .forge .starts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-    .forge .starts button { min-height: 54px; padding: 8px 12px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--card); color: var(--ink); text-align: left; cursor: pointer; font: inherit; display: flex; flex-direction: column; }
+    .forge .starts button { min-height: 54px; padding: 8px 12px; border-radius: 14px; border: 1.5px solid var(--line); background: var(--card); color: var(--ink); text-align: left; cursor: pointer; font: inherit; display: flex; flex-direction: column; }
     .forge .starts button span { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
     .forge .swatches { display: flex; flex-wrap: wrap; gap: 8px; }
     .forge .swatches button { width: 40px; height: 40px; border-radius: 50%; border: none; cursor: pointer; box-shadow: inset 0 0 0 1.5px rgba(0,0,0,.18); }
@@ -34,7 +52,7 @@
     .forge .house ul { margin: 0; padding-left: 18px; color: var(--moss); font-size: 14px; }
     .forge-stage-col { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
     @media (max-width: 960px) { .forge-stage-col { position: static; } }
-    .stage { border-radius: 24px; overflow: hidden; background: #d6ccbd; aspect-ratio: 1 / 1; max-height: 78vh; width: 100%; position: relative; touch-action: none; border: 1.5px solid var(--line); }
+    .stage { border-radius: 28px; overflow: hidden; background: #d8cebf; aspect-ratio: 1 / 1; max-height: 78vh; width: 100%; position: relative; touch-action: none; }
     .stage canvas.studio { display: block; width: 100%; height: 100%; cursor: grab; }
     .stage .photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; background: #d6ccbd; }
     .stage[data-view="photo"] .photo { display: block; }
@@ -51,8 +69,8 @@
     .meter { display: flex; gap: 4px; }
     .meter i { width: 20px; height: 10px; border-radius: 3px; }
     .menace { font-family: var(--mono); font-size: 13px; color: var(--ink-2); text-align: right; }
-    .forge details { border: 1.5px solid var(--line); border-radius: var(--radius); padding: 10px 14px; background: var(--card); }
-    .forge summary { cursor: pointer; font-weight: 700; }
+    .forge-stage-col details { border: 1.5px solid var(--line); border-radius: 14px; padding: 10px 14px; background: var(--card); }
+    .forge-stage-col summary { cursor: pointer; font-weight: 700; }
     .forge .wearchips button[aria-pressed="true"] { border-style: solid; border-color: var(--ink); color: var(--ink); background: var(--paper); font-weight: 600; }
     .forge input[type="range"] { width: 100%; accent-color: var(--ink); }
     .forge .pics { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -72,6 +90,59 @@
     .forge .history .lbl { font-size: 14px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
     .forge .history .meta { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
     .stage.placing canvas.studio { cursor: crosshair; }
+    .forge .panels { display: flex; flex-direction: column; gap: 8px; }
+    .forge .panel { background: var(--card); border: 1.5px solid var(--line); border-radius: 16px; padding: 0; }
+    .forge .panel > summary { list-style: none; display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 16px; cursor: pointer; font-weight: 700; font-size: 16px; border-radius: 16px; }
+    .forge .panel > summary::-webkit-details-marker { display: none; }
+    .forge .panel > summary::before { content: ""; width: 8px; height: 8px; border-right: 2px solid var(--ink); border-bottom: 2px solid var(--ink); transform: rotate(-45deg); transition: transform .15s ease; flex: none; margin-right: 2px; }
+    .forge .panel[open] > summary::before { transform: rotate(45deg); }
+    .forge .panel > summary:hover { background: rgba(36,33,29,.04); }
+    .forge .panel[open] { border-color: var(--ink); }
+    .forge .panel .badge { margin-left: auto; font-family: var(--mono); font-size: 12px; font-weight: 400; color: var(--ink-2); text-align: right; }
+    .forge .panel-body { padding: 4px 16px 16px; overflow: auto; }
+    .forge .offline { margin: 0; padding: 8px 12px; border-radius: 12px; background: var(--paper-2); }
+    .forge .history ol, .forge #history { max-height: none; }
+    .forge .inline { display: flex; gap: 8px; align-items: center; }
+    .forge .inline input { flex: 1 1 auto; min-width: 0; }
+    .forge .inline .btn { flex: none; }
+    .forge .statusline { display: flex; flex-direction: column; gap: 2px; }
+    .forge .statusline p { margin: 0; }
+    .forge .statusline .status:empty { display: none; }
+    .forge .panel-body { max-height: var(--panel-max, 360px); min-height: 0; }
+    .forge .inspector .panel-body { display: flex; flex-direction: column; gap: 12px; }
+    .forge-stage-col { top: 80px; }
+    .stage { width: min(100%, calc(100vh - 290px)); min-width: 280px; max-height: none; }
+    .forge .panel > summary { min-height: 42px; font-size: 15px; }
+    .forge .panels { gap: 6px; }
+    .forge label.big { font-size: 15px; }
+    .forge form.card { padding: 12px 14px; gap: 8px; }
+    .forge textarea { min-height: 52px; }
+    .forge h1 { font-size: clamp(26px, 2.6vw, 32px); margin: 0; }
+    .forge #who { font-size: 13px; }
+    .stage { width: min(100%, calc(100vh - 370px)); }
+    .forge label.big { font-family: var(--mono); font-size: 12px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); line-height: 1; }
+    .forge-col { gap: 8px; }
+    .forge .check { min-height: 36px; }
+    .forge .panel > summary { min-height: 40px; }
+    @media (max-width: 960px) { .stage { width: 100%; } }
+
+    .forge .adv summary { font-weight: 700; }
+    .forge .colours { display: grid; grid-template-columns: auto 56px minmax(0, 1fr); gap: 8px 12px; align-items: center; font-size: 14px; }
+    .forge .colours input[type="color"] { width: 56px; height: 40px; border: 1.5px solid var(--line); border-radius: 10px; padding: 2px; background: #fffdf9; cursor: pointer; }
+    .forge .colours code { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); }
+    .forge .inspector { gap: 12px; border-color: var(--ink); }
+    .forge .selchips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .forge .selchips button { min-height: 32px; padding: 0 10px; border-radius: 999px; border: 1.5px solid var(--line); background: #fffdf9; color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer; }
+    .forge .selchips button::after { content: " ×"; color: var(--ink-2); }
+    .forge .grid2 { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; align-items: center; font-size: 14px; color: var(--ink-2); }
+    .forge .grid2 label { font-weight: 400; }
+    .forge .grid2 select, .forge .grid2 input[type="number"] { font: inherit; font-size: 14px; min-height: 36px; border-radius: 8px; border: 1.5px solid var(--line); background: #fffdf9; color: var(--ink); padding: 0 8px; }
+    .forge .grid2 .xyz { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .forge .grid2 .xyz input { width: 100%; min-width: 0; box-sizing: border-box; }
+    .forge .nudges { gap: 6px; }
+    .forge .nudges button { min-width: 40px; min-height: 36px; padding: 0 8px; border-radius: 10px; border: 1.5px solid var(--line); background: #fffdf9; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+    .forge .nudges button:hover { border-color: var(--ink); }
+    .forge .btn.danger { border-color: var(--rosso); color: var(--rosso); }
     .forge pre { margin: 10px 0 0; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
   </style>
 </head>
@@ -86,77 +157,122 @@
   <main class="wrap forge">
     <div class="forge-col">
       <div>
-        <p class="eyebrow">Gremlin Forge</p>
         <h1>Describe it. We’ll build it.</h1>
-        <p class="lede">Claude designs your gremlin’s whole body from scratch in enamel, chrome and brass. House rules keep every one in the same product line. When you like it, have it photographed.</p>
       </div>
 
-      <p class="card small muted" id="offline" hidden>The forge isn’t switched on on this server yet. You can still turn and recolour the examples.</p>
+      <p class="small muted offline" id="offline" hidden>Claude is off on this server, so requests won’t send. Everything else works.</p>
 
-      <form class="card" id="askForm" hidden>
+      <form class="card" id="askForm">
         <label class="big" for="prompt">Describe your gremlin</label>
         <textarea id="prompt" placeholder="A paranoid lighthouse keeper with a rotating searchlight head and too many arms"></textarea>
-        <div class="row chips" id="chips"></div>
         <div class="row">
           <button class="btn btn-primary" id="forgeBtn" type="submit">Forge a new one</button>
-          <label class="check"><input type="checkbox" id="care"> Take extra care (slower)</label>
+          <button class="btn btn-small" id="ideaBtn" type="button">Try an idea</button>
+          <label class="check"><input type="checkbox" id="care"> Extra care</label>
         </div>
       </form>
 
-      <form class="card" id="refineForm" hidden>
+      <form class="card" id="refineForm">
         <label class="big" for="refine">Change something</label>
-        <input type="text" id="refine" placeholder="Rust it up and tattoo a snake on its arm" autocomplete="off">
-        <div class="row">
-          <button class="btn" id="refineBtn" type="submit">Apply change</button>
+        <div class="inline">
+          <input type="text" id="refine" placeholder="Rust it up and tattoo a snake on its arm" autocomplete="off">
+          <button class="btn" id="refineBtn" type="submit">Apply</button>
           <button class="btn" id="stopBtn" type="button" hidden>Stop</button>
         </div>
       </form>
-      <p class="status" id="status" role="status" aria-live="polite"></p>
-      <p class="small muted" id="who"></p>
+      <div class="statusline">
+        <p class="status" id="status" role="status" aria-live="polite"></p>
+        <p class="small muted" id="who"></p>
+      </div>
 
-      <div class="card history">
+      <div class="panels" id="panels">
+        <details class="panel inspector" name="forge-panel" id="panelSelection" hidden>
+          <summary><span>Selected parts</span><span class="badge" id="badgeSelection"></span></summary>
+          <div class="panel-body">
         <div class="row" style="justify-content:space-between">
-          <p class="eyebrow" style="margin:0">History</p>
-          <div class="row">
-            <button class="btn btn-small" id="undoBtn" type="button" disabled aria-keyshortcuts="Control+Z Meta+Z">Undo</button>
-            <button class="btn btn-small" id="redoBtn" type="button" disabled aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y">Redo</button>
+          <b id="selTitle"></b>
+          <span class="row"><button class="btn btn-small" id="selAll" type="button">Select all</button><button class="btn btn-small" id="selClear" type="button">Clear</button></span>
+        </div>
+        <div class="selchips" id="selList"></div>
+        <div class="grid2">
+          <label for="selMat">Material</label>
+          <select id="selMat"></select>
+          <span>Move</span>
+          <span class="row nudges" id="selMove"></span>
+          <span>Turn and size</span>
+          <span class="row nudges" id="selShape"></span>
+        </div>
+        <div class="grid2" id="selExact"></div>
+        <div>
+          <p class="small muted" style="margin:0 0 6px">Weathering on just these parts</p>
+          <div class="row chips wearchips" id="selWear"></div>
+        </div>
+        <div class="row">
+          <button class="btn btn-small" id="selMirror" type="button"></button>
+          <button class="btn btn-small" id="selDup" type="button">Duplicate</button>
+          <button class="btn btn-small danger" id="selDelete" type="button" aria-keyshortcuts="Delete Backspace">Delete</button>
+        </div>
           </div>
-        </div>
-        <p class="small muted" style="margin:6px 0 10px">Pick any step to go back to it. Whatever you do next starts a new branch from there, and nothing is lost.</p>
-        <ol id="history"></ol>
-      </div>
+        </details>
 
-      <div class="card">
-        <p class="eyebrow">Surfaces</p>
-        <p class="small muted" style="margin:0 0 8px">Weathering</p>
-        <div class="row chips wearchips" id="wearChips"></div>
-        <label class="small muted" for="wearAmount" style="display:block; margin-top:10px">How much: <span id="wearAmountOut"></span></label>
-        <input type="range" id="wearAmount" min="0.05" max="1" step="0.05" value="0.35">
-        <p class="small muted" style="margin:16px 0 8px">Pictures and artwork: pick one, then click the robot where it should go.</p>
-        <div class="pics" id="pics"></div>
-        <div class="row" style="margin-top:8px">
-          <label class="btn btn-small" for="picFile" style="cursor:pointer">Upload a picture</label>
-          <input type="file" id="picFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden>
-          <button class="btn btn-small" id="placeCancel" type="button" hidden>Cancel placing</button>
-        </div>
-        <p class="small muted" style="margin:6px 0 0">Pictures stay in this browser. The designer only sees their file names, so you can say “put my logo on its chest”.</p>
-        <p class="small muted" style="margin:16px 0 8px" id="decalsTitle">Decals</p>
-        <ul class="decals" id="decals"></ul>
-      </div>
+        <details class="panel" name="forge-panel" id="panelHistory" open>
+          <summary><span>History</span><span class="badge" id="badgeHistory"></span></summary>
+          <div class="panel-body">
+            <p class="small muted" style="margin:0 0 10px">Pick any step to go back to it. Whatever you do next starts a new branch from there, and nothing is lost.</p>
+            <ol id="history"></ol>
+          </div>
+        </details>
 
-      <div class="card house">
-        <p class="eyebrow">House rules check</p>
-        <div id="houseBody"></div>
-      </div>
+        <details class="panel" name="forge-panel" id="panelSurfaces">
+          <summary><span>Surfaces</span><span class="badge" id="badgeSurfaces"></span></summary>
+          <div class="panel-body">
+            <p class="small muted" style="margin:0 0 8px">Weathering</p>
+            <div class="row chips wearchips" id="wearChips"></div>
+            <label class="small muted" for="wearAmount" style="display:block; margin-top:10px">How much: <span id="wearAmountOut"></span></label>
+            <input type="range" id="wearAmount" min="0.05" max="1" step="0.05" value="0.35">
+            <p class="small muted" style="margin:16px 0 8px">Pictures and artwork: pick one, then click the robot where it should go.</p>
+            <div class="pics" id="pics"></div>
+            <div class="row" style="margin-top:8px">
+              <label class="btn btn-small" for="picFile" style="cursor:pointer">Upload a picture</label>
+              <input type="file" id="picFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden>
+              <button class="btn btn-small" id="placeCancel" type="button" hidden>Cancel placing</button>
+            </div>
+            <p class="small muted" style="margin:6px 0 0">Pictures stay in this browser. The designer only sees their file names, so you can say “put my logo on its chest”.</p>
+            <p class="small muted" style="margin:16px 0 8px" id="decalsTitle">Decals</p>
+            <ul class="decals" id="decals"></ul>
+          </div>
+        </details>
 
-      <div>
-        <p class="eyebrow">Start from an example</p>
-        <div class="starts" id="starts"></div>
-      </div>
+        <details class="panel" name="forge-panel" id="panelColours">
+          <summary><span>Colours</span><span class="badge" id="badgeColours"></span></summary>
+          <div class="panel-body">
+            <div class="row" style="gap:28px; align-items:flex-start">
+              <div><p class="eyebrow">Enamel</p><div class="swatches" id="enamels"></div></div>
+              <div><p class="eyebrow">Glow</p><div class="swatches" id="glows"></div></div>
+            </div>
+            <p class="eyebrow" style="margin-top:16px">Any colour</p>
+            <p class="small muted" style="margin:0 0 10px">The house rules tone enamels into the 1950s appliance range and keep glows bright enough to read as lights.</p>
+            <div class="colours">
+              <label for="pickEnamel">Enamel</label><input type="color" id="pickEnamel"><code id="hexEnamel"></code>
+              <label for="pickAccent">Accent</label><input type="color" id="pickAccent"><code id="hexAccent"></code>
+              <label for="pickGlow">Glow</label><input type="color" id="pickGlow"><code id="hexGlow"></code>
+            </div>
+          </div>
+        </details>
 
-      <div class="row" style="gap:28px; align-items:flex-start">
-        <div><p class="eyebrow">Enamel</p><div class="swatches" id="enamels"></div></div>
-        <div><p class="eyebrow">Glow</p><div class="swatches" id="glows"></div></div>
+        <details class="panel" name="forge-panel" id="panelExamples">
+          <summary><span>Examples</span><span class="badge">start from one</span></summary>
+          <div class="panel-body"><div class="starts" id="starts"></div></div>
+        </details>
+
+        <details class="panel house" name="forge-panel" id="panelHouse">
+          <summary><span>House rules and spec</span><span class="badge" id="badgeHouse"></span></summary>
+          <div class="panel-body">
+            <div id="houseBody"></div>
+            <p class="eyebrow" style="margin:14px 0 4px">Design spec</p>
+            <pre id="config"></pre>
+          </div>
+        </details>
       </div>
     </div>
 
@@ -183,16 +299,15 @@
       <div class="row" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center">
         <button class="btn btn-spark btn-small" id="photoBtn" type="button" hidden>Make it a photo</button>
         <a class="btn btn-small" id="photoDl" hidden>Download photo</a>
+        <button class="btn btn-small" id="undoBtn" type="button" disabled aria-keyshortcuts="Control+Z Meta+Z">Undo</button>
+        <button class="btn btn-small" id="redoBtn" type="button" disabled aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y">Redo</button>
         <button class="btn btn-small" id="spinBtn" type="button" aria-pressed="false">Turntable</button>
         <button class="btn btn-small" id="viewBtn" type="button">Reset view</button>
         <button class="btn btn-small" id="copyBtn" type="button">Copy hatch config</button>
         <span class="small muted" id="copyStatus"></span>
       </div>
+      <p class="small muted" id="selectHint" style="margin:0">Click a part to select it. Shift-click to select more.</p>
       <p class="small muted" id="photoBy"></p>
-      <details>
-        <summary>Design spec</summary>
-        <pre id="config"></pre>
-      </details>
     </div>
   </main>
 

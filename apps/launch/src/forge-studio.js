@@ -9,7 +9,7 @@ import * as T from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
-import { FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_STYLE, FORGE_WEAR, checkForgeSpec } from '@gremlins/hatch'
+import { FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec } from '@gremlins/hatch'
 import { addDecals, artReady, wearFor, wearFrame, wearMaterial } from './forge-surfaces.js'
 import { creatureSvg } from '@gremlins/hatch/creature'
 import { signIn, signOut, signedInAddress, signedPostJson } from './forge-auth.ts'
@@ -54,7 +54,14 @@ function save() {
 const rebase = (list, from) => (from ? list.map((x) => ({ ...x, parent: x.parent >= from ? x.parent - from : -1 })) : list)
 
 /** Records a new step after the current one and shows it. */
-function commit(nextSpec, house, label) {
+function commit(nextSpec, house, label, opts = {}) {
+  const last = step()
+  // Repeated nudges of the same kind fold into one step instead of flooding the history.
+  if (opts.coalesce && last && last.label === label && state.cur === state.steps.length - 1 && Date.now() - last.t < 4000) {
+    last.spec = nextSpec; last.t = Date.now(); last.thumb = undefined; last.photo = undefined
+    render(false); return
+  }
+  if (!opts.keepSelection) selected = new Set()
   state.steps.push({ spec: nextSpec, house: house || [], label, parent: state.cur, t: Date.now() })
   state.cur = state.steps.length - 1
   if (state.steps.length > MAX_STEPS) {
@@ -65,7 +72,7 @@ function commit(nextSpec, house, label) {
 }
 function go(i, fresh) {
   if (i < 0 || i >= state.steps.length || i === state.cur) return
-  state.cur = i; placing = null
+  state.cur = i; placing = null; selected = new Set()
   render(!!fresh)
 }
 function undo() {
@@ -83,6 +90,7 @@ function redo() { const r = redoTarget(); if (r >= 0) go(r) }
 const draft = () => structuredClone(spec())
 let caps = { design: false, photo: null }
 let placing = null // { image } | { art } | { move: index } while waiting for a click on the robot
+let selected = new Set() // indices into spec().parts picked in the 3D view
 let lastSurface = { missed: 0, missingPictures: 0 }
 
 // ---------------------------------------------------------------------------------------------------- studio
@@ -105,7 +113,7 @@ function initStudio() {
   renderer.domElement.className = 'studio'
   stage.prepend(renderer.domElement)
   scene = new T.Scene()
-  scene.background = new T.Color('#d6ccbd')
+  scene.background = new T.Color('#d8cebf')
   scene.environment = new T.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture
   camera = new T.PerspectiveCamera(26, 1, 0.1, 80)
   controls = new OrbitControls(camera, renderer.domElement)
@@ -113,7 +121,7 @@ function initStudio() {
   // The backdrop and lights orbit with the camera, like a photographer walking round with the studio, so the paper
   // sweep is always behind the robot and never between it and the camera.
   rig = new T.Group(); scene.add(rig)
-  const sweep = new T.Mesh(sweepGeometry(), new T.MeshStandardMaterial({ color: '#d6ccbd', roughness: 0.95 }))
+  const sweep = new T.Mesh(sweepGeometry(), new T.MeshStandardMaterial({ color: '#d8cebf', roughness: 0.95 }))
   sweep.receiveShadow = true
   rig.add(sweep)
   const cv = document.createElement('canvas'); cv.width = cv.height = 128
@@ -130,14 +138,16 @@ function initStudio() {
   let down = null
   renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, t: performance.now() } })
   renderer.domElement.addEventListener('pointerup', (e) => {
-    if (!down || !placing) return
+    if (!down) return
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y), quick = performance.now() - down.t < 500
     down = null
-    if (moved < 6 && quick) placeAt(e)
+    if (moved >= 6 || !quick) return // that was an orbit drag
+    if (placing) placeAt(e)
+    else selectAt(e)
   })
   renderer.setAnimationLoop(() => {
     if (document.hidden) return
-    if (spin && robot && !placing) robot.rotation.y += 0.004
+    if (spin && robot && !placing && !selected.size) robot.rotation.y += 0.004
     controls.update()
     rig.rotation.y = controls.getAzimuthalAngle()
     if (robot) { robot.updateMatrixWorld(); wearFrame.value.copy(robot.matrixWorld).invert() }
@@ -273,7 +283,11 @@ function expand(p, M, spec) {
   }
   return out
 }
-function buildParts(spec, M) { const g = new T.Group(); spec.parts.forEach((p) => g.add(expand(p, M, spec))); return g }
+function buildParts(spec, M) {
+  const g = new T.Group()
+  spec.parts.forEach((p, i) => { const e = expand(p, M, spec); e.traverse((n) => { if (n.isMesh) n.userData.part = i }); g.add(e) })
+  return g
+}
 function disposeTree(o) {
   const seen = new Set()
   o.traverse((n) => {
@@ -323,6 +337,7 @@ function rebuild(fresh) {
   robot = new T.Group(); robot.add(holder)
   const glows = []; robot.updateMatrixWorld(true)
   lastSurface = addDecals(sp, inner, robot, state.uploads, s)
+  applySelection()
   robot.rotation.y = rot
   inner.traverse((n) => { if (n.userData.glow) glows.push(new T.Vector3().setFromMatrixPosition(n.matrixWorld)) })
   if (glows.length) {
@@ -353,12 +368,202 @@ function thumbLater() {
   }))
 }
 
+// ---------------------------------------------------------------------------------------------------- selecting parts
+const selMat = new T.MeshBasicMaterial({ color: '#ff9d2e', transparent: true, opacity: 0.22, blending: T.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, toneMapped: false })
+// An outline: the back faces pushed out along their normals, drawn in solid orange behind the part.
+const outlineMat = new T.MeshBasicMaterial({ color: '#ff8a00', side: T.BackSide, toneMapped: false })
+outlineMat.onBeforeCompile = (sh) => { sh.vertexShader = sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed += normalize(normal) * 0.016;') }
+let overlays = []
+/** Tints every mesh of the selected parts (all mirror and array copies) with an additive glow. */
+function applySelection() {
+  for (const o of overlays) o.parent?.remove(o)
+  overlays = []
+  if (!inner || !selected.size) return
+  const hits = []
+  inner.traverse((n) => { if (n.isMesh && !n.userData.overlay && selected.has(n.userData.part)) hits.push(n) })
+  for (const n of hits) {
+    const tint = new T.Mesh(n.geometry, selMat), line = new T.Mesh(n.geometry, outlineMat)
+    tint.userData.overlay = line.userData.overlay = true; tint.renderOrder = 3
+    n.add(tint, line); overlays.push(tint, line)
+  }
+}
+function pickPart(e) {
+  if (!robot || !inner) return null
+  const r = renderer.domElement.getBoundingClientRect()
+  const ray = new T.Raycaster(); ray.setFromCamera(new T.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera)
+  const targets = []; inner.traverse((n) => { if (n.isMesh && !n.userData.overlay) targets.push(n) })
+  const hit = ray.intersectObjects(targets, false)[0]
+  return hit ? hit.object.userData.part : null
+}
+function selectAt(e) {
+  const i = pickPart(e)
+  if (i == null) { if (!e.shiftKey) setSelection([]); return }
+  if (e.shiftKey) { const n = new Set(selected); n.has(i) ? n.delete(i) : n.add(i); setSelection([...n]) }
+  else setSelection(selected.size === 1 && selected.has(i) ? [] : [i])
+}
+function setSelection(list) {
+  const n = spec()?.parts.length ?? 0
+  selected = new Set(list.filter((i) => i >= 0 && i < n))
+  applySelection(); renderInspector()
+}
+
+const KIND_LABEL = { lathe: 'Body', tube: 'Tube', extrude: 'Plate', visor: 'Visor', eye: 'Eye', sphere: 'Sphere', box: 'Box', cylinder: 'Cylinder', cone: 'Cone', torus: 'Ring', capsule: 'Capsule' }
+function partLabel(p) {
+  const copies = (p.mirror ? 2 : 1) * (p.array ? p.array.count : 1)
+  const what = p.kind === 'eye' ? `Eye (${p.eye})` : p.kind === 'visor' ? 'Visor' : `${KIND_LABEL[p.kind]} · ${p.mat}`
+  return what + (copies > 1 ? ` ×${copies}` : '')
+}
+const r3 = (x) => Math.round(x * 1000) / 1000
+const anchor = (p) => (p.kind === 'tube' ? p.points.reduce((a, q) => [a[0] + q[0] / p.points.length, a[1] + q[1] / p.points.length, a[2] + q[2] / p.points.length], [0, 0, 0]) : p.pos)
+function selectionCentre(parts) {
+  const list = [...selected].map((i) => anchor(parts[i]))
+  return list.reduce((a, v) => [a[0] + v[0] / list.length, a[1] + v[1] / list.length, a[2] + v[2] / list.length], [0, 0, 0])
+}
+function movePart(p, d) {
+  if (p.kind === 'tube') p.points = p.points.map((q) => [r3(q[0] + d[0]), r3(q[1] + d[1]), r3(q[2] + d[2])])
+  else p.pos = [r3(p.pos[0] + d[0]), r3(p.pos[1] + d[1]), r3(p.pos[2] + d[2])]
+}
+/** Turns a part about the vertical axis through `c`, as a true world-space turn (its own rotation composed, not added). */
+function turnPart(p, deg, c) {
+  const a = deg * D, cos = Math.cos(a), sin = Math.sin(a)
+  const spin = (q) => [r3(c[0] + (q[0] - c[0]) * cos + (q[2] - c[2]) * sin), q[1], r3(c[2] - (q[0] - c[0]) * sin + (q[2] - c[2]) * cos)]
+  if (p.kind === 'tube') { p.points = p.points.map(spin); return }
+  p.pos = spin(p.pos)
+  const q = new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 1, 0), a).multiply(new T.Quaternion().setFromEuler(new T.Euler(p.rot[0] * D, p.rot[1] * D, p.rot[2] * D)))
+  const e = new T.Euler().setFromQuaternion(q)
+  p.rot = [r3(e.x / D), r3(e.y / D), r3(e.z / D)]
+}
+/** Scales a part about `c`: its place moves with the scale and so does its own size. */
+function scalePart(p, k, c) {
+  const sc = (q) => [r3(c[0] + (q[0] - c[0]) * k), r3(c[1] + (q[1] - c[1]) * k), r3(c[2] + (q[2] - c[2]) * k)]
+  if (p.kind === 'tube') {
+    p.points = p.points.map(sc)
+    p.radius = Array.isArray(p.radius) ? p.radius.map((r) => r3(r * k)) : r3(p.radius * k)
+    return
+  }
+  p.pos = sc(p.pos)
+  const s0 = p.scale || [1, 1, 1]
+  p.scale = s0.map((v) => r3(v * k))
+}
+function editSelected(fn, label, opts = {}) {
+  if (!selected.size) return
+  const next = draft(), c = selectionCentre(next.parts)
+  for (const i of selected) fn(next.parts[i], c, i)
+  const { spec: checked } = checkForgeSpec(next)
+  commit(checked, step().house, label, { keepSelection: true, ...opts })
+}
+function deleteSelected() {
+  if (!selected.size) return
+  const n = selected.size, next = draft()
+  if (n >= next.parts.length) return setStatus('A gremlin needs at least one part. Leave something selected out.', true)
+  next.parts = next.parts.filter((_, i) => !selected.has(i))
+  commit(checkForgeSpec(next).spec, step().house, `Deleted ${n} part${n > 1 ? 's' : ''}`)
+}
+function duplicateSelected() {
+  if (!selected.size) return
+  const next = draft(), start = next.parts.length
+  const copies = [...selected].map((i) => { const p = structuredClone(next.parts[i]); delete p.house; movePart(p, [0.2, 0, 0]); return p })
+  next.parts.push(...copies)
+  const { spec: checked } = checkForgeSpec(next)
+  commit(checked, step().house, `Duplicated ${copies.length} part${copies.length > 1 ? 's' : ''}`)
+  setSelection(copies.map((_, k) => start + k).filter((i) => i < checked.parts.length))
+}
+
+let panelBeforeSelection = null
+function renderInspector() {
+  const sp = spec(), box = $('panelSelection')
+  $('selectHint').hidden = !!selected.size
+  const was = !box.hidden
+  box.hidden = !sp || !selected.size
+  if (box.hidden) {
+    // back to whichever panel was open before the selection took over
+    if (was) { box.open = false; const back = panelBeforeSelection && $(panelBeforeSelection); if (back) back.open = true; sizePanels() }
+    return
+  }
+  if (!was) { panelBeforeSelection = document.querySelector('#panels > details[open]:not(#panelSelection)')?.id || null; box.open = true; sizePanels() }
+  const parts = [...selected].map((i) => sp.parts[i])
+  $('selTitle').textContent = `${parts.length} part${parts.length > 1 ? 's' : ''} selected`
+  $('badgeSelection').textContent = `${parts.length} selected`
+  const list = $('selList'); list.replaceChildren()
+  for (const i of selected) {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = partLabel(sp.parts[i]); b.title = 'Remove from the selection'
+    b.addEventListener('click', () => setSelection([...selected].filter((j) => j !== i)))
+    list.appendChild(b)
+  }
+  // material
+  const withMat = parts.filter((p) => p.mat), sel = $('selMat'); sel.replaceChildren()
+  const mats = new Set(withMat.map((p) => p.mat))
+  if (mats.size !== 1) { const o = document.createElement('option'); o.value = ''; o.textContent = withMat.length ? 'Mixed' : 'Fixed (visor or eye)'; sel.appendChild(o) }
+  for (const m of FORGE_MATERIALS) { const o = document.createElement('option'); o.value = m; o.textContent = m; o.selected = mats.size === 1 && mats.has(m); sel.appendChild(o) }
+  sel.disabled = !withMat.length
+  // nudges
+  const nudge = (el, items) => {
+    el.replaceChildren()
+    for (const [text, title, fn, label] of items) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = text; b.title = title; b.setAttribute('aria-label', title)
+      b.addEventListener('click', () => editSelected(fn, label, { coalesce: true }))
+      el.appendChild(b)
+    }
+  }
+  const S = 0.05
+  nudge($('selMove'), [
+    ['←', 'Move left', (p) => movePart(p, [-S, 0, 0]), 'Moved parts'], ['→', 'Move right', (p) => movePart(p, [S, 0, 0]), 'Moved parts'],
+    ['↑', 'Move up', (p) => movePart(p, [0, S, 0]), 'Moved parts'], ['↓', 'Move down', (p) => movePart(p, [0, -S, 0]), 'Moved parts'],
+    ['Fwd', 'Move toward the front', (p) => movePart(p, [0, 0, S]), 'Moved parts'], ['Back', 'Move toward the back', (p) => movePart(p, [0, 0, -S]), 'Moved parts'],
+  ])
+  nudge($('selShape'), [
+    ['⟲ 15°', 'Turn left 15 degrees', (p, c) => turnPart(p, 15, c), 'Turned parts'], ['⟳ 15°', 'Turn right 15 degrees', (p, c) => turnPart(p, -15, c), 'Turned parts'],
+    ['− 10%', 'Make smaller', (p, c) => scalePart(p, 1 / 1.1, c), 'Resized parts'], ['+ 10%', 'Make bigger', (p, c) => scalePart(p, 1.1, c), 'Resized parts'],
+  ])
+  // exact numbers for a single part
+  const ex = $('selExact'); ex.replaceChildren()
+  if (parts.length === 1) {
+    const p = parts[0], i = [...selected][0]
+    const row = (label, values, apply, opts = {}) => {
+      const l = document.createElement('span'); l.textContent = label
+      const w = document.createElement('span'); w.className = 'xyz'
+      values.forEach((v, k) => {
+        const inp = document.createElement('input'); inp.type = 'number'; inp.step = opts.step || '0.01'; inp.value = String(r3(v)); inp.setAttribute('aria-label', `${label} ${opts.names ? opts.names[k] : 'xyz'[k]}`)
+        inp.addEventListener('change', () => { const n = Number(inp.value); if (Number.isFinite(n)) editSelected((q) => apply(q, k, n), `${label} of ${partLabel(p)}`) })
+        w.appendChild(inp)
+      })
+      ex.append(l, w)
+    }
+    if (p.kind !== 'tube') {
+      row('Position', p.pos, (q, k, n) => { q.pos[k] = n })
+      row('Rotation°', p.rot, (q, k, n) => { q.rot[k] = n }, { step: '5' })
+      row('Stretch', p.scale || [1, 1, 1], (q, k, n) => { q.scale = q.scale || [1, 1, 1]; q.scale[k] = n }, { step: '0.05' })
+    }
+    if (p.kind === 'tube') row('Radius', Array.isArray(p.radius) ? p.radius : [p.radius], (q, k, n) => { if (Array.isArray(q.radius)) q.radius[k] = n; else q.radius = n }, { names: ['start', 'end'], step: '0.005' })
+    const names = { sphere: ['radius'], box: ['width', 'height', 'depth'], cylinder: ['top', 'bottom', 'height'], cone: ['radius', 'height'], torus: ['ring', 'tube'], capsule: ['radius', 'length'], eye: ['size'] }[p.kind]
+    if (names) row('Size', p.size, (q, k, n) => { q.size[k] = n }, { names, step: '0.01' })
+    if (p.kind === 'visor') row('Size', [p.w, p.h], (q, k, n) => { q[k ? 'h' : 'w'] = n }, { names: ['width', 'height'] })
+    void i
+  }
+  // wear on just these parts
+  const wear = $('selWear'); wear.replaceChildren()
+  const canWear = parts.filter((p) => p.kind !== 'eye')
+  for (const k of FORGE_WEAR) {
+    const all = canWear.length && canWear.every((p) => (p.wear || []).some((w) => w.kind === k))
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = WEAR_LABEL[k]; b.setAttribute('aria-pressed', String(!!all))
+    b.disabled = !canWear.length
+    b.addEventListener('click', () => editSelected((p) => {
+      if (p.kind === 'eye') return
+      if (all) { p.wear = (p.wear || []).filter((w) => w.kind !== k); if (!p.wear.length) delete p.wear }
+      else if (!(p.wear || []).some((w) => w.kind === k) && (p.wear || []).length < 3) p.wear = [...(p.wear || []), { kind: k, amount: 0.4 }]
+    }, `${all ? 'Removed' : 'Added'} ${WEAR_LABEL[k].toLowerCase()} on ${parts.length} part${parts.length > 1 ? 's' : ''}`))
+    wear.appendChild(b)
+  }
+  const mirrored = parts.every((p) => p.mirror)
+  $('selMirror').textContent = mirrored ? 'Stop mirroring' : 'Mirror to the other side'
+}
+
 // ---------------------------------------------------------------------------------------------------- placing decals
 function placeAt(e) {
   if (!robot || !inner) return
   const r = renderer.domElement.getBoundingClientRect()
   const ray = new T.Raycaster(); ray.setFromCamera(new T.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera)
-  const targets = []; inner.traverse((n) => { if (n.isMesh && !n.userData.glow) targets.push(n) })
+  const targets = []; inner.traverse((n) => { if (n.isMesh && !n.userData.glow && !n.userData.overlay) targets.push(n) })
   const hit = ray.intersectObjects(targets, false).find((h) => h.face)
   if (!hit) return setStatus('That missed the robot. Click on its body.', true)
   const toInner = new T.Matrix4().copy(inner.matrixWorld).invert()
@@ -414,6 +619,10 @@ let ctl = null
 const setStatus = (t, err) => { const s = $('status'); s.textContent = t || ''; s.classList.toggle('err', !!err) }
 
 async function generate(mode, text) {
+  if (!caps.design) {
+    setStatus('Requests need Claude, which isn’t switched on on this server yet (start the board with ANTHROPIC_API_KEY). Everything else on this page still works.', true)
+    return false
+  }
   ctl = new AbortController(); busy(true, mode === 'new' ? 'Designing… this takes a minute or two.' : 'Reworking the design…')
   try {
     const body = { mode, text, care: $('care').checked }
@@ -490,12 +699,31 @@ function renderSwatches() {
     }
   }
   sw($('enamels'), ENAMELS, 'enamel'); sw($('glows'), GLOWS, 'glow')
+  for (const k of ['enamel', 'accent', 'glow']) {
+    const K = k[0].toUpperCase() + k.slice(1)
+    if (document.activeElement !== $('pick' + K)) $('pick' + K).value = spec().palette[k]
+    $('hex' + K).textContent = spec().palette[k]
+  }
+}
+/** Advanced colours: shows the raw pick live, then records it after the house range check. */
+function wireColours() {
+  for (const k of ['enamel', 'accent', 'glow']) {
+    const K = k[0].toUpperCase() + k.slice(1), inp = $('pick' + K)
+    inp.addEventListener('input', () => { $('hex' + K).textContent = inp.value; preview((x) => { x.palette[k] = inp.value }) })
+    inp.addEventListener('change', () => {
+      if (!spec()) return
+      const want = inp.value.toLowerCase(), next = draft(); next.palette[k] = want
+      const { spec: checked } = checkForgeSpec(next), got = checked.palette[k]
+      commit(checked, step().house, `${K}: ${got}`, { keepSelection: true })
+      setStatus(got === want ? '' : `${K} toned into the house range: ${want} became ${got}.`)
+    })
+  }
 }
 function renderAuth() {
   const a = signedInAddress()
   $('who').innerHTML = a
     ? `Signed in as <code>${esc(a.slice(0, 6))}…${esc(a.slice(-4))}</code> · <button type="button" class="linkish" id="signOut">Sign out</button>`
-    : 'Forging and photos are signed with your wallet, so each request is yours. <button type="button" class="linkish" id="signInBtn">Sign in</button>'
+    : 'Requests are signed with your wallet. <button type="button" class="linkish" id="signInBtn">Sign in</button>'
   $('signOut')?.addEventListener('click', () => { signOut(); renderAuth() })
   $('signInBtn')?.addEventListener('click', () => signIn().then(renderAuth, (e) => setStatus(e.message, true)))
 }
@@ -510,6 +738,40 @@ function renderPhoto() {
   if (!p) showView('render')
 }
 
+/** One-line summaries on the collapsed panels, so their state reads without opening them. */
+function renderBadges(sp) {
+  const n = state.steps.length
+  $('badgeHistory').textContent = `${n} step${n > 1 ? 's' : ''} · at ${state.cur + 1}`
+  const w = sp.wear?.length || 0, d = sp.decals?.length || 0
+  $('badgeSurfaces').textContent = [w ? `${w} weathering` : '', d ? `${d} decal${d > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ') || 'clean'
+  $('badgeColours').innerHTML = ['enamel', 'accent', 'glow'].map((k) => `<i style="display:inline-block;width:14px;height:14px;border-radius:50%;vertical-align:-2px;margin-left:4px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.2);background:${sp.palette[k]}"></i>`).join('')
+  const h = (step().house || []).length
+  $('badgeHouse').textContent = h ? `${h} fix${h > 1 ? 'es' : ''}` : 'all clear'
+}
+/** Panels open one at a time (native <details name> where supported, this as the fallback) and remember the last one. */
+/** Gives the open panel whatever height is left in the window, so the whole forge fits on one screen. */
+function sizePanels() {
+  const host = $('panels'); if (!host) return
+  if (window.matchMedia('(max-width: 960px)').matches) { host.style.removeProperty('--panel-max'); return }
+  const top = host.getBoundingClientRect().top + window.scrollY
+  let chrome = 0
+  for (const d of host.querySelectorAll(':scope > details:not([hidden])')) chrome += d.querySelector('summary').offsetHeight + 3 + 6
+  const left = window.innerHeight - top - chrome - 24
+  host.style.setProperty('--panel-max', `${Math.max(120, Math.floor(left))}px`)
+}
+function wirePanels() {
+  const panels = [...document.querySelectorAll('#panels > details')]
+  window.addEventListener('resize', sizePanels)
+  new ResizeObserver(sizePanels).observe(document.querySelector('.forge-col'))
+  let last = null
+  try { last = localStorage.getItem('gremlins.forge.panel') } catch { /* private mode */ }
+  if (last && $(last)) panels.forEach((d) => { d.open = d.id === last })
+  for (const d of panels) d.addEventListener('toggle', () => {
+    if (!d.open) return
+    for (const o of panels) if (o !== d && o.open) o.open = false
+    if (d.id !== 'panelSelection') try { localStorage.setItem('gremlins.forge.panel', d.id) } catch { /* private mode */ }
+  })
+}
 function ago(t) {
   const s = Math.max(0, Math.round((Date.now() - t) / 1000))
   return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : new Date(t).toLocaleDateString()
@@ -650,16 +912,15 @@ function render(fresh) {
   $('meter').innerHTML = Array.from({ length: 10 }, (_, i) => `<i style="background:${i < sp.menace ? t.color : 'var(--line)'}"></i>`).join('')
   const house = step().house || []
   $('houseBody').innerHTML = house.length ? '<ul>' + house.map((n) => `<li>${esc(n)}</li>`).join('') + '</ul>' : '<p class="small muted">Passed every house rule unchanged.</p>'
-  renderSwatches(); renderConfig(); renderPhoto(); renderHistory(); renderSurfaces(); save(); thumbLater()
+  if ([...selected].some((i) => i >= sp.parts.length)) selected = new Set()
+  renderBadges(sp)
+  renderSwatches(); renderConfig(); renderPhoto(); renderHistory(); renderSurfaces(); renderInspector(); save(); thumbLater()
 }
 
 // ---------------------------------------------------------------------------------------------------- wiring
 function wire() {
-  for (const idea of IDEAS) {
-    const b = document.createElement('button'); b.type = 'button'; b.textContent = idea
-    b.addEventListener('click', () => { $('prompt').value = idea; $('prompt').focus() })
-    $('chips').appendChild(b)
-  }
+  let idea = -1
+  $('ideaBtn').addEventListener('click', () => { idea = (idea + 1) % IDEAS.length; $('prompt').value = IDEAS[idea]; $('prompt').focus() })
   for (const ex of Object.values(FORGE_EXAMPLES)) {
     const b = document.createElement('button'); b.type = 'button'
     b.innerHTML = `<b>${esc(ex.name)}</b><span>menace ${ex.menace}/10</span>`
@@ -684,14 +945,30 @@ function wire() {
   $('undoBtn').addEventListener('click', undo)
   $('redoBtn').addEventListener('click', redo)
   document.addEventListener('keydown', (e) => {
-    if (!(e.metaKey || e.ctrlKey) || e.altKey) return
     const t = e.target, typing = t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))
     if (typing) return
+    if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selected.size) { e.preventDefault(); deleteSelected() }
+      else if (e.key === 'Escape' && (selected.size || placing)) { placing = null; setSelection([]); renderSurfaces(); setStatus('') }
+      return
+    }
+    if (e.altKey) return
     const k = e.key.toLowerCase()
     if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo() }
     else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo() }
   })
   $('name').addEventListener('input', (e) => { if (!spec()) return; spec().name = e.target.value.slice(0, 40); renderConfig(); renderHistory(); save() })
+  wireColours()
+  wirePanels()
+  $('selMat').addEventListener('change', (e) => { const m = e.target.value; if (m) editSelected((p) => { if (p.mat) p.mat = m }, `Material: ${m}`) })
+  $('selMirror').addEventListener('click', () => {
+    const all = [...selected].every((i) => spec().parts[i].mirror)
+    editSelected((p) => { if (all) delete p.mirror; else p.mirror = 'x' }, all ? 'Stopped mirroring' : 'Mirrored parts')
+  })
+  $('selDup').addEventListener('click', duplicateSelected)
+  $('selDelete').addEventListener('click', deleteSelected)
+  $('selClear').addEventListener('click', () => setSelection([]))
+  $('selAll').addEventListener('click', () => setSelection(spec().parts.map((_, i) => i)))
   $('picFile').addEventListener('change', (e) => { addUpload(e.target.files?.[0]); e.target.value = '' })
   $('placeCancel').addEventListener('click', () => { placing = null; setStatus(''); renderSurfaces() })
   $('wearAmount').addEventListener('input', () => {
@@ -717,8 +994,7 @@ function wire() {
 
 async function loadCaps() {
   try { caps = await (await fetch('/api/forge')).json() } catch { caps = { design: false, photo: null } }
-  $('askForm').hidden = !caps.design
-  $('refineForm').hidden = !caps.design
+  // The request boxes always show; without a designer on the server they explain why instead of sending.
   $('photoBtn').hidden = !caps.photo || !glOK
   $('offline').hidden = !!caps.design
 }
