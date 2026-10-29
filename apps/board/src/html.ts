@@ -2,6 +2,7 @@
  * Server-rendered, framework-free pages. They work without JavaScript (read-only); /assets/board-client.js (from the
  * static site) adds Pelagus sign-in and the post/comment/vote forms, which write through the signed JSON API.
  */
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
 import type { Hono } from 'hono'
@@ -173,6 +174,13 @@ form.write .status{font-size:13px;color:var(--ink-2)}
 `
 
 /** Where the feed lives: /board when the static site owns /, otherwise /. */
+/** The shared stylesheet, versioned by its content so caches pick up every change. */
+let SITE_CSS = '/assets/site.css'
+function siteCssHref(site?: string): string {
+  const file = site && join(site, 'assets', 'site.css')
+  if (!file || !existsSync(file)) return '/assets/site.css'
+  return `/assets/site.css?v=${createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 10)}`
+}
 let FEED = '/'
 
 const LOGO = creatureSvg('gremlinz-logo-v1', { size: 34, title: 'gremlinz' })
@@ -180,7 +188,7 @@ const LOGO = creatureSvg('gremlinz-logo-v1', { size: 34, title: 'gremlinz' })
 function page(title: string, body: Html, opts: { nav?: 'board' | 'community' } = {}) {
   const cur = (k: string) => (opts.nav === k ? raw(' aria-current="page"') : '')
   return html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title} · gremlinz</title><link rel="preload" href="/assets/bricolage.woff2" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="/assets/site.css"><style>${raw(BOARD_CSS)}</style></head>
+<title>${title} · gremlinz</title><link rel="preload" href="/assets/bricolage.woff2" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="${SITE_CSS}"><style>${raw(BOARD_CSS)}</style></head>
 <body><header class="site-header"><div class="wrap"><a class="brand" href="/"><span aria-hidden="true">${raw(LOGO)}</span>gremlinz</a>
 <nav class="nav" aria-label="Main"><a href="${FEED}"${cur('board')}>The board</a><a href="/c/general"${cur('community')}>Talk</a>${FEED === '/' ? '' : html`<a class="nav-extra" href="/hatch/">Hatch</a><a class="nav-extra" href="/forge/">Forge</a><a class="nav-extra" href="/docs/">Docs</a>`}</nav>
 <div class="header-end" id="gremlins-auth"></div></div></header>
@@ -213,8 +221,10 @@ function registerSite(app: Hono<any>, siteDir: string) {
   app.get('/docs/:page{[a-z-]+}/', (c) => send(c, join('docs', c.req.param('page'), 'index.html'), 'no-cache'))
   app.get('/assets/:file{[A-Za-z0-9._-]+}', (c) => {
     const f = c.req.param('file')
-    // content-hashed files are immutable; board-client.js has a fixed name, so revalidate it
-    return send(c, join('assets', f), f === 'board-client.js' ? 'no-cache' : 'public, max-age=31536000, immutable')
+    // Content-hashed bundles, and fixed-name files asked for with a ?v= content version, never change: cache for good.
+    // Other fixed-name files (board-client.js, site.css without ?v, fonts) must revalidate, or caches keep old copies.
+    const forever = /-[A-Za-z0-9_-]{8}\.(js|css)$/.test(f) || !!c.req.query('v')
+    return send(c, join('assets', f), forever ? 'public, max-age=31536000, immutable' : 'no-cache')
   })
 }
 
@@ -223,6 +233,7 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
   const site = deps.cfg.siteDir && existsSync(join(deps.cfg.siteDir, 'index.html')) ? deps.cfg.siteDir : undefined
   FEED = site ? '/board' : '/'
   if (site) registerSite(app, site)
+  SITE_CSS = siteCssHref(site)
 
   app.get(FEED, async (c) => {
     const sort = (LEADERBOARD_SORTS as readonly string[]).includes(c.req.query('sort') ?? '') ? (c.req.query('sort') as LeaderboardSort) : 'netWorthQuai'
