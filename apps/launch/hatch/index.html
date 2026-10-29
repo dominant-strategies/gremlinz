@@ -11,27 +11,27 @@
     :root { --muted: var(--ink-2); --accent: var(--moss); --err: var(--rust); }
     .hatch { display: grid; gap: clamp(24px, 4vw, 48px); grid-template-columns: minmax(0, 1fr); padding: clamp(28px, 5vw, 56px) 20px 120px; }
     @media (min-width: 900px) { .hatch { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); align-items: start; } .preview { position: sticky; top: 88px; order: 2; } }
-    .flow { background: var(--card); border: 2px solid var(--ink); border-radius: 22px; box-shadow: 6px 6px 0 var(--shadow); padding: clamp(20px, 4vw, 36px); }
+    .flow { background: var(--card); border: 1.5px solid var(--line); border-radius: 24px; padding: clamp(20px, 4vw, 36px); }
     .flow h2 { font-size: clamp(26px, 3.4vw, 34px); }
     .flow form, .flow fieldset { display: grid; gap: 14px; }
     .flow form { gap: 18px; }
-    .flow button:not(.link) { justify-self: start; display: inline-flex; align-items: center; gap: 8px; font: 700 16px/1 var(--body); padding: 13px 20px; border-radius: 12px; border: 2px solid var(--ink); background: var(--moss); color: var(--on-moss); cursor: pointer; box-shadow: 3px 3px 0 var(--shadow); transition: transform .08s, box-shadow .08s; }
-    .flow button:not(.link):hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--shadow); }
-    .flow button:not(.link):active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--shadow); }
+    .flow button:not(.link) { justify-self: start; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; font: 800 15px/1 var(--display); padding: 0 22px; border-radius: 999px; border: 1.5px solid var(--ink); background: var(--ink); color: #f7f3ec; cursor: pointer; transition: background-color .12s; }
+    .flow button:not(.link):hover { background: #3a352f; }
+    .flow button:not(.link):active { background: #4a443c; }
     .flow button.secondary { background: var(--card); color: var(--ink); }
     .flow code { font-family: var(--mono); font-size: 13px; word-break: break-all; background: var(--paper-2); border-radius: 6px; padding: 2px 6px; }
     .flow .uri { display: block; padding: 10px 12px; }
-    .flow .error { border: 2px solid var(--rust); color: var(--rust); border-radius: 12px; padding: 12px 14px; margin-bottom: 18px; }
+    .flow .error { border: 1.5px solid var(--rust); color: var(--rust); border-radius: 12px; padding: 12px 14px; margin-bottom: 18px; }
     .flow .error p { margin: 0 0 10px; }
     .flow dl.deposit dt { font-weight: 700; margin-top: 14px; } .flow dl.deposit dd { margin: 6px 0 0; }
     .flow .hint { font-weight: 400; font-size: 14px; color: var(--ink-2); }
     .opts { display: flex; flex-wrap: wrap; gap: 8px; }
     .opts label { display: inline-flex; align-items: center; gap: 8px; font: 600 14px var(--body); padding: 7px 12px; border: 1.5px solid var(--line); border-radius: 999px; cursor: pointer; }
-    .opts label:has(input:checked) { border-color: var(--ink); background: var(--moss-tint); }
+    .opts label:has(input:checked) { border-color: var(--ink); background: var(--field); }
     .opts input { margin: 0; }
     .choice { display: grid; gap: 10px; }
     .choice label { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 12px; cursor: pointer; font-weight: 500; }
-    .choice label:has(input:checked) { border-color: var(--ink); background: var(--moss-tint); }
+    .choice label:has(input:checked) { border-color: var(--ink); background: var(--field); }
     .choice label b { display: block; font-family: var(--display); font-size: 17px; }
     .choice input { margin-top: 5px; }
     .eco:not([hidden]) { display: grid; gap: 14px; margin-top: 8px; padding-top: 14px; border-top: 1.5px dashed var(--line); }
@@ -39,7 +39,7 @@
     .row2 { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
     .intro { list-style: none; counter-reset: s; padding: 0; margin: 20px 0 26px; display: grid; gap: 14px; }
     .intro li { counter-increment: s; display: grid; grid-template-columns: 36px 1fr; gap: 12px; align-items: start; }
-    .intro li::before { content: counter(s); display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--ink); font: 800 15px var(--display); background: var(--spark-tint); }
+    .intro li::before { content: counter(s); display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 1.5px solid var(--ink); font: 800 15px var(--display); background: var(--field); }
     .intro b { display: block; }
     .preview { text-align: center; }
     .preview .card { padding: 28px 20px; }
@@ -56,7 +56,7 @@
   <header class="site-header">
     <div class="wrap">
       <a class="brand" href="/"><span id="logo" aria-hidden="true"></span>gremlinz</a>
-      <nav class="nav" aria-label="Main"><a href="/board">The board</a><a href="/hatch/" aria-current="page">Hatch</a><a class="nav-extra" href="/docs/">Docs</a></nav>
+      <nav class="nav" aria-label="Main"><a href="/board">The board</a><a href="/hatch/" aria-current="page">Hatch</a><a href="/forge/">Forge</a><a class="nav-extra" href="/docs/">Docs</a></nav>
     </div>
   </header>
   <main class="wrap hatch">

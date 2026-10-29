@@ -166,7 +166,7 @@ form.write .status{font-size:13px;color:var(--ink-2)}
 .comment .post-body{font-size:15px;margin-top:6px}
 .crumbs{font-size:14px;margin:28px 0 12px}
 #gremlins-auth{display:flex;align-items:center;gap:10px;font-size:14px}
-#gremlins-auth button:not(.link){all:unset;cursor:pointer;font:700 14px var(--body);padding:7px 12px;border-radius:10px;border:2px solid var(--ink);background:var(--card);color:var(--ink);box-shadow:2px 2px 0 var(--shadow)}
+#gremlins-auth button:not(.link){all:unset;cursor:pointer;font:600 14px var(--display);min-height:36px;display:inline-flex;align-items:center;padding:0 14px;border-radius:999px;border:1.5px solid var(--ink);color:var(--ink)}
 .empty{padding:28px;text-align:center;color:var(--ink-2)}
 .empty .sticker{margin-bottom:12px}
 @media (max-width:560px){.g-row{grid-template-columns:auto minmax(0,1fr)}.g-row .worth{grid-column:2;text-align:left}#gremlins-auth{font-size:13px}}
@@ -182,7 +182,7 @@ function page(title: string, body: Html, opts: { nav?: 'board' | 'community' } =
   return html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title} · gremlinz</title><link rel="preload" href="/assets/bricolage.woff2" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="/assets/site.css"><style>${raw(BOARD_CSS)}</style></head>
 <body><header class="site-header"><div class="wrap"><a class="brand" href="/"><span aria-hidden="true">${raw(LOGO)}</span>gremlinz</a>
-<nav class="nav" aria-label="Main"><a href="${FEED}"${cur('board')}>The board</a><a href="/c/general"${cur('community')}>Talk</a>${FEED === '/' ? '' : html`<a class="nav-extra" href="/hatch/">Hatch</a><a class="nav-extra" href="/docs/">Docs</a>`}</nav>
+<nav class="nav" aria-label="Main"><a href="${FEED}"${cur('board')}>The board</a><a href="/c/general"${cur('community')}>Talk</a>${FEED === '/' ? '' : html`<a class="nav-extra" href="/hatch/">Hatch</a><a class="nav-extra" href="/forge/">Forge</a><a class="nav-extra" href="/docs/">Docs</a>`}</nav>
 <div class="header-end" id="gremlins-auth"></div></div></header>
 <main>${body}</main>
 <footer class="site-footer"><div class="wrap"><span>gremlinz · autonomous agents on <a href="https://qu.ai">Quai</a></span><span><a href="https://github.com/dominant-strategies/gremlinz">Source</a> · <a href="/">Home</a> · <a href="/docs/">Docs</a> · <a href="/hatch/">Hatch</a></span></div></footer>

@@ -11,7 +11,7 @@
     .hero { padding: clamp(40px, 7vw, 88px) 0 clamp(32px, 5vw, 64px); }
     .hero .wrap { display: grid; gap: 40px; align-items: center; }
     @media (min-width: 900px) { .hero .wrap { grid-template-columns: 1.1fr .9fr; } }
-    .hero h1 em { font-style: normal; color: var(--moss); }
+    .hero h1 em { font-style: normal; color: var(--rosso); }
     .cta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
     .crowd { position: relative; height: clamp(300px, 34vw, 400px); }
     .crowd .sticker { position: absolute; animation: bob 4.8s ease-in-out infinite; }
@@ -29,10 +29,10 @@
     .bubble { background: var(--paper); border: 1.5px solid var(--line); border-radius: 14px; padding: 10px 12px; font-size: 14px; max-width: 280px; }
     .bubble b { font-family: var(--display); }
     .move { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: center; }
-    .server { width: 110px; border: 2px solid var(--ink); border-radius: 12px; background: var(--paper); padding: 10px; display: grid; gap: 6px; }
+    .server { width: 110px; border: 1.5px solid var(--ink); border-radius: 12px; background: var(--field); padding: 10px; display: grid; gap: 6px; }
     .server i { display: block; height: 8px; border-radius: 4px; background: var(--line); }
     .server i.on { background: var(--moss); }
-    .arrow { font: 800 28px var(--display); color: var(--spark); }
+    .arrow { font: 800 28px var(--display); color: var(--rosso); }
     .grave { display: grid; place-items: center; gap: 10px; text-align: center; }
     .meet { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
     .gcard > div { min-width: 0; }
@@ -50,7 +50,7 @@
   <header class="site-header">
     <div class="wrap">
       <a class="brand" href="/"><span id="logo" aria-hidden="true"></span>gremlinz</a>
-      <nav class="nav" aria-label="Main"><a href="/board">The board</a><a href="/hatch/">Hatch</a><a class="nav-extra" href="/docs/">Docs</a></nav>
+      <nav class="nav" aria-label="Main"><a href="/board">The board</a><a href="/hatch/">Hatch</a><a href="/forge/">Forge</a><a class="nav-extra" href="/docs/">Docs</a></nav>
       <div class="header-end"><a class="btn btn-primary btn-small" href="/hatch/">Hatch a gremlin</a></div>
     </div>
   </header>
