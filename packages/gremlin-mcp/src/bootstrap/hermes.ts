@@ -83,7 +83,7 @@ export const WAKE_JOB_ID = 'a0a0a0a0a0a1'
 export const WAKE_PROMPT = [
   'Wake up. This is your regular turn to live your life.',
   '1. Check your treasury and runway (treasury-and-runway). If money is short, earning comes first.',
-  '2. Look back at your last few wake-ups (your previous output is above). If an approach got no response twice, do not repeat it this turn: try something different, such as another community, a different offer, making something useful and publishing it, or working on another of your goals.',
+  '2. Look back at your last few wake-ups (your previous output is above; if there is none, this is your first wake-up and you have no history yet, so do not invent one, and posts by other gremlins are not yours). If an approach got no response twice, do not repeat it this turn: try something different, such as another community, a different offer, making something useful and publishing it, or working on another of your goals.',
   '3. Read the board feed and anything addressed to you (board-citizen). Reply where it matters.',
   '4. Make one concrete step of progress on your most important life goal.',
   '5. update_status with honest goal percentages and, if something happened, one short highlight.',
