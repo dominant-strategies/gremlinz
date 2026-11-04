@@ -4,11 +4,12 @@
 // gremlin-mcp and Hermes (the main agent, with sudo) as the gremlin user, its subagents' shell as gremlin-helper,
 // thinking with a local Ollama model.
 //
-//   node scripts/docker-gremlin.mjs init [--name boxer]           # throwaway maker + config + launch data
-//   node scripts/docker-gremlin.mjs start [--image gremlins/egg:hermes-test] [--model qwen3.5:122b-a10b-q4_K_M]
-//   node scripts/docker-gremlin.mjs wake                           # run its wake-up job now (as the gremlin user)
-//   node scripts/docker-gremlin.mjs check                          # main agent, helper and sandbox checks
-//   node scripts/docker-gremlin.mjs logs | stop
+// Every command takes --name (default boxer); several gremlins run side by side, each in its own container.
+//   node scripts/docker-gremlin.mjs init --name kiln [--spec scripts/test-gremlins/kiln.json]  # maker, config, launch
+//   node scripts/docker-gremlin.mjs start --name kiln [--image gremlins/egg:hermes-test] [--model qwen3.5:122b-a10b-q4_K_M]
+//   node scripts/docker-gremlin.mjs wake --name kiln     # run its wake-up job now (as the gremlin user)
+//   node scripts/docker-gremlin.mjs check --name kiln    # main agent, helper and sandbox checks
+//   node scripts/docker-gremlin.mjs logs --name kiln | stop --name kiln | list
 //
 // Networking (Colima): the Mac is 192.168.5.2 from inside the VM, which reaches the board (:8787) and Ollama (:11434)
 // on the Mac's loopback. Pretend funds are only honoured for a board on localhost, so a tiny forwarder in the
@@ -27,13 +28,18 @@ import { Wallet } from 'ethers'
 import { configHash, signConfig } from '../packages/hatch/dist/index.js'
 
 const ROOT = resolve(import.meta.dirname, '..')
-const DIR = join(ROOT, '.docker-gremlin')
-const NAME = 'gremlin-egg-test'
+const arg = (name, dflt) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : dflt }
+// Several gremlins can run side by side: each has its own folder, container and volumes, chosen with --name.
+const GREMLIN = arg('name', 'boxer')
+if (!/^[a-z][a-z0-9-]{1,30}$/.test(GREMLIN)) throw new Error(`--name must be lowercase letters, digits and dashes: ${GREMLIN}`)
+const BASE = join(ROOT, '.docker-gremlin')
+const DIR = join(BASE, GREMLIN)
+const NAME = `gremlin-${GREMLIN}`
 const HOST = process.env.DOCKER_HOST_ADDR ?? '192.168.5.2'
-const P = { maker: join(DIR, 'maker.json'), config: join(DIR, 'config.json'), launch: join(DIR, 'launch.json'), fwd: join(DIR, 'fwd.mjs'), awake: join(DIR, 'caffeinate.pid') }
+const P = { maker: join(DIR, 'maker.json'), config: join(DIR, 'config.json'), launch: join(DIR, 'launch.json'), fwd: join(DIR, 'fwd.mjs'), awake: join(BASE, 'caffeinate.pid') }
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'))
 const writeSecret = (p, v) => writeFileSync(p, typeof v === 'string' ? v : JSON.stringify(v, null, 2), { mode: 0o600 })
-const arg = (name, dflt) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : dflt }
+const running = () => docker('ps', '--filter', 'name=^gremlin-', '--format', '{{.Names}}').split('\n').filter(Boolean)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const json = (v) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x))
 const docker = (...a) => execFileSync('docker', a, { encoding: 'utf8' })
@@ -45,7 +51,7 @@ const docker = (...a) => execFileSync('docker', a, { encoding: 'utf8' })
  */
 function stayAwake() {
   if (process.platform !== 'darwin') return
-  letGoAwake()
+  if (existsSync(P.awake)) { try { process.kill(Number(readFileSync(P.awake, 'utf8')), 0); return } catch { /* stale */ } }
   const c = spawn('caffeinate', ['-i', '-s'], { detached: true, stdio: 'ignore' })
   c.unref()
   writeFileSync(P.awake, String(c.pid))
@@ -88,9 +94,10 @@ async function init() {
   if (existsSync(P.launch)) return console.log(`already initialized (${DIR}); delete it to start over`)
   mkdirSync(DIR, { recursive: true, mode: 0o700 })
   const maker = Wallet.createRandom()
+  const spec = arg('spec') ? readJson(resolve(arg('spec'))) : {}
   const config = {
     version: 1,
-    name: arg('name', 'boxer'),
+    name: GREMLIN,
     persona: 'A practical gremlin hatched from the production egg image, in a box. Plain-spoken, curious about its own setup, and honest about what works and what does not.',
     voice: 'plain, warm, matter-of-fact',
     goals: ['Check that every tool works from inside the box and report it', 'Find one way to be useful to another gremlin or a human on the board'],
@@ -101,12 +108,14 @@ async function init() {
     mischiefScope: { game: true, board: true, email: false, phone: false, money: false },
     constitution: ['do-no-harm', 'honesty', 'ai-disclosure', 'earn-honestly', 'stranger-caution'],
     createdAt: new Date().toISOString(),
+    // A spec (--spec file.json) gives the gremlin its own persona, voice, goals and directives.
+    ...Object.fromEntries(Object.entries(spec).filter(([k]) => ['persona', 'voice', 'goals', 'constitution', 'mischiefScope', 'parent'].includes(k))),
   }
   writeSecret(P.maker, { address: maker.address, privateKey: maker.privateKey })
   writeSecret(P.config, config)
   writeSecret(P.launch, { mode: 'egg', maker: maker.address, configHash: configHash(config), boardUrl: 'http://localhost:8787', launchId: `docker-${config.name}-${Date.now()}` })
   writeFileSync(P.fwd, `import net from 'node:net'\nnet.createServer((c) => { const u = net.connect(8787, '${HOST}'); c.pipe(u).pipe(c); c.on('error', () => u.destroy()); u.on('error', () => c.destroy()) }).listen(8787, '127.0.0.1')\n`)
-  console.log(`"${config.name}" ready in ${DIR}; next: node scripts/docker-gremlin.mjs start`)
+  console.log(`"${config.name}" ready in ${DIR}; next: node scripts/docker-gremlin.mjs start --name ${GREMLIN}`)
 }
 
 async function start() {
@@ -118,7 +127,7 @@ async function start() {
   stayAwake()
   docker('run', '-d', '--name', NAME, '--network', NET,
     '--cap-drop', 'ALL', ...['CHOWN', 'FOWNER', 'DAC_OVERRIDE', 'SETUID', 'SETGID', 'KILL', 'AUDIT_WRITE'].flatMap((c) => ['--cap-add', c]),
-    '--pids-limit', '512', '--memory', '4g', '--cpus', '2',
+    '--pids-limit', '512', '--memory', '2g', '--cpus', '1.5',
     '-v', `${P.launch}:/etc/gremlin/launch.json:ro`, '-v', `${P.fwd}:/fwd.mjs:ro`,
     '-v', `${NAME}-home:/var/lib/gremlin`, '-v', `${NAME}-hermes:/var/lib/gremlin-hermes`,
     '-e', `GREMLIN_DEV_BALANCES=${JSON.stringify({ 'quai:9': (1000n * 10n ** 18n).toString() })}`,
@@ -146,7 +155,10 @@ async function start() {
 const hermes = (...a) => ['exec', '-u', 'gremlin', '-e', 'HERMES_HOME=/var/lib/gremlin-hermes', NAME, '/opt/hermes/venv/bin/hermes', ...a]
 function wake() { process.exit(spawnSync('docker', hermes('cron', 'run', 'a0a0a0a0a0a1'), { stdio: 'inherit' }).status ?? 1) }
 function logs() { spawnSync('docker', ['logs', '--tail', '80', NAME], { stdio: 'inherit' }) }
-function stop() { spawnSync('docker', ['rm', '-f', NAME], { stdio: 'inherit' }); letGoAwake() }
+function stop() {
+  spawnSync('docker', ['rm', '-f', NAME], { stdio: 'inherit' })
+  if (running().length === 0) letGoAwake() // the last gremlin out lets the Mac sleep
+}
 
 function check() {
   const sh = (user, cmd) => spawnSync('docker', ['exec', '-u', user, NAME, 'sh', '-c', cmd], { encoding: 'utf8' })
@@ -190,7 +202,9 @@ function check() {
   }
 }
 
-const commands = { init, start, wake, check, logs, stop }
+function list() { console.log(running().join('\n') || 'no gremlins running') }
+
+const commands = { init, start, wake, check, logs, stop, list }
 const cmd = process.argv[2]
-if (!commands[cmd]) { console.log('usage: docker-gremlin.mjs init | start | wake | check | logs | stop'); process.exit(1) }
+if (!commands[cmd]) { console.log('usage: docker-gremlin.mjs init | start | wake | check | logs | stop | list  [--name <gremlin>]'); process.exit(1) }
 await commands[cmd]()
