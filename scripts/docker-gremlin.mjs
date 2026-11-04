@@ -21,7 +21,7 @@
 // its users (no network admin, so nothing inside can touch the network), and pid, memory and CPU caps. Inside the
 // box the gremlin's main agent has sudo; the box is the limit, not the gremlin's permissions.
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { Wallet } from 'ethers'
 import { configHash, signConfig } from '../packages/hatch/dist/index.js'
@@ -30,13 +30,31 @@ const ROOT = resolve(import.meta.dirname, '..')
 const DIR = join(ROOT, '.docker-gremlin')
 const NAME = 'gremlin-egg-test'
 const HOST = process.env.DOCKER_HOST_ADDR ?? '192.168.5.2'
-const P = { maker: join(DIR, 'maker.json'), config: join(DIR, 'config.json'), launch: join(DIR, 'launch.json'), fwd: join(DIR, 'fwd.mjs') }
+const P = { maker: join(DIR, 'maker.json'), config: join(DIR, 'config.json'), launch: join(DIR, 'launch.json'), fwd: join(DIR, 'fwd.mjs'), awake: join(DIR, 'caffeinate.pid') }
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'))
 const writeSecret = (p, v) => writeFileSync(p, typeof v === 'string' ? v : JSON.stringify(v, null, 2), { mode: 0o600 })
 const arg = (name, dflt) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : dflt }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const json = (v) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x))
 const docker = (...a) => execFileSync('docker', a, { encoding: 'utf8' })
+
+/**
+ * Keep the Mac awake while the gremlin runs: an idle-sleeping Mac pauses the VM (and the gremlin) for minutes at a
+ * time, waking only for brief maintenance windows. caffeinate -i stops idle sleep (also on battery); -s stops system
+ * sleep on AC power. Closing the lid still sleeps a Mac on battery.
+ */
+function stayAwake() {
+  if (process.platform !== 'darwin') return
+  letGoAwake()
+  const c = spawn('caffeinate', ['-i', '-s'], { detached: true, stdio: 'ignore' })
+  c.unref()
+  writeFileSync(P.awake, String(c.pid))
+}
+function letGoAwake() {
+  if (!existsSync(P.awake)) return
+  try { process.kill(Number(readFileSync(P.awake, 'utf8')), 'SIGTERM') } catch { /* already gone */ }
+  rmSync(P.awake, { force: true })
+}
 
 const NET = 'gremlin-sandbox'
 const SUBNET = '172.30.77.0/24'
@@ -97,6 +115,7 @@ async function start() {
   const model = arg('model', 'qwen3.5:122b-a10b-q4_K_M')
   spawnSync('docker', ['rm', '-f', NAME], { stdio: 'ignore' })
   sandboxNetwork()
+  stayAwake()
   docker('run', '-d', '--name', NAME, '--network', NET,
     '--cap-drop', 'ALL', ...['CHOWN', 'FOWNER', 'DAC_OVERRIDE', 'SETUID', 'SETGID', 'KILL', 'AUDIT_WRITE'].flatMap((c) => ['--cap-add', c]),
     '--pids-limit', '512', '--memory', '4g', '--cpus', '2',
@@ -127,7 +146,7 @@ async function start() {
 const hermes = (...a) => ['exec', '-u', 'gremlin', '-e', 'HERMES_HOME=/var/lib/gremlin-hermes', NAME, '/opt/hermes/venv/bin/hermes', ...a]
 function wake() { process.exit(spawnSync('docker', hermes('cron', 'run', 'a0a0a0a0a0a1'), { stdio: 'inherit' }).status ?? 1) }
 function logs() { spawnSync('docker', ['logs', '--tail', '80', NAME], { stdio: 'inherit' }) }
-function stop() { spawnSync('docker', ['rm', '-f', NAME], { stdio: 'inherit' }) }
+function stop() { spawnSync('docker', ['rm', '-f', NAME], { stdio: 'inherit' }); letGoAwake() }
 
 function check() {
   const sh = (user, cmd) => spawnSync('docker', ['exec', '-u', user, NAME, 'sh', '-c', cmd], { encoding: 'utf8' })
@@ -160,6 +179,15 @@ function check() {
   ok('sandbox: even root has no network admin or raw sockets', (caps & ((1n << 12n) | (1n << 13n))) === 0n, `CapEff ${caps.toString(16)}`)
   const mounts = sh('root', 'grep -c " /Users" /proc/mounts').stdout.trim()
   ok('sandbox: no Mac folders mounted', mounts === '0')
+  // The Mac stays awake (a sleeping Mac pauses the gremlin).
+  if (process.platform === 'darwin') {
+    const pid = existsSync(P.awake) ? Number(readFileSync(P.awake, 'utf8')) : 0
+    let awake = false
+    try { awake = pid > 0 && (process.kill(pid, 0), true) } catch { /* not running */ }
+    ok('the Mac is kept awake (caffeinate)', awake)
+    const batt = spawnSync('pmset', ['-g', 'batt'], { encoding: 'utf8' }).stdout
+    if (/Battery Power/.test(batt)) console.log('  note: on battery; closing the lid will still sleep the Mac and pause the gremlin')
+  }
 }
 
 const commands = { init, start, wake, check, logs, stop }
