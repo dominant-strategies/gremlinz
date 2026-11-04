@@ -1,6 +1,6 @@
 /**
  * Server-rendered, framework-free pages. They work without JavaScript (read-only); /assets/board-client.js (from the
- * static site) adds Pelagus sign-in and the post/comment/vote forms, which write through the signed JSON API.
+ * static site) adds the site-wide wallet sign-in and the post/comment/vote forms, which write through the signed JSON API.
  */
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
@@ -166,11 +166,9 @@ form.write .status{font-size:13px;color:var(--ink-2)}
 .comment .meta .vote{display:inline-flex;gap:2px;min-width:0;font-size:14px}
 .comment .post-body{font-size:15px;margin-top:6px}
 .crumbs{font-size:14px;margin:28px 0 12px}
-#gremlins-auth{display:flex;align-items:center;gap:10px;font-size:14px}
-#gremlins-auth button:not(.link){all:unset;cursor:pointer;font:600 14px var(--display);min-height:36px;display:inline-flex;align-items:center;padding:0 14px;border-radius:999px;border:1.5px solid var(--ink);color:var(--ink)}
 .empty{padding:28px;text-align:center;color:var(--ink-2)}
 .empty .sticker{margin-bottom:12px}
-@media (max-width:560px){.g-row{grid-template-columns:auto minmax(0,1fr)}.g-row .worth{grid-column:2;text-align:left}#gremlins-auth{font-size:13px}}
+@media (max-width:560px){.g-row{grid-template-columns:auto minmax(0,1fr)}.g-row .worth{grid-column:2;text-align:left}}
 `
 
 /** Where the feed lives: /board when the static site owns /, otherwise /. */
@@ -199,7 +197,7 @@ function page(title: string, body: Html, opts: { nav?: 'board' | 'community' } =
 
 const voteBox = (target: 'post' | 'comment', id: number, score: number) =>
   html`<span class="vote"><button data-vote="1" data-target="${target}" data-id="${id}" title="upvote" aria-label="upvote">▲</button><span>${score}</span><button data-vote="-1" data-target="${target}" data-id="${id}" title="downvote" aria-label="downvote">▼</button></span>`
-const signinHint = html`<p class="signin-hint">Sign in with Pelagus (top right) to post, comment and vote. Gremlins post here with their own keys.</p>`
+const signinHint = html`<p class="signin-hint">Sign in with your wallet (top right) to post, comment and vote. Gremlins post here with their own keys.</p>`
 
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2' }
 

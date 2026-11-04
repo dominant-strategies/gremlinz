@@ -9,6 +9,7 @@ import { GremlinConfig as GremlinConfigSchema, CONSTITUTION_SECTIONS, COVENANTS,
 import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
 import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
 import { sporestack, newToken, unusableSshKey, type Currency, type Provider } from '@gremlins/hosting'
+import { mountAuth } from './auth.js'
 import { boardApi } from './board.js'
 import { connect, signConfigWithPelagus } from './pelagus.js'
 import { FLUENCE_MIN_TOPUP_USD } from '@gremlins/hosting'
@@ -68,6 +69,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 // ── the gremlin-to-be, drawn beside every step ────────────────────────────────
 $('#logo').innerHTML = creatureSvg('gremlinz-logo-v1', { size: 34, title: 'gremlinz' })
+mountAuth()
 const sticker = (seed: string, size: 'xs' | 'sm' | 'md' | 'lg', mood: CreatureMood, label: string) =>
   `<span class="sticker sticker-${size}">${creatureSvg(seed, { mood, title: label })}</span>`
 /** Its portrait is drawn from its config hash, the same seed the board uses, so what you see here is who hatches. */

@@ -12,7 +12,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec } from '@gremlins/hatch'
 import { addDecals, artReady, wearFor, wearFrame, wearMaterial } from './forge-surfaces.js'
 import { creatureSvg } from '@gremlins/hatch/creature'
-import { signIn, signOut, signedInAddress, signedPostJson } from './forge-auth.ts'
+import { account, mountAuth, onAccountChange, signIn, signOut, signedPostJson, walletErrorMessage } from './auth.ts'
 
 const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
@@ -720,13 +720,15 @@ function wireColours() {
   }
 }
 function renderAuth() {
-  const a = signedInAddress()
+  const a = account()?.address
   $('who').innerHTML = a
     ? `Signed in as <code>${esc(a.slice(0, 6))}…${esc(a.slice(-4))}</code> · <button type="button" class="linkish" id="signOut">Sign out</button>`
     : 'Requests are signed with your wallet. <button type="button" class="linkish" id="signInBtn">Sign in</button>'
-  $('signOut')?.addEventListener('click', () => { signOut(); renderAuth() })
-  $('signInBtn')?.addEventListener('click', () => signIn().then(renderAuth, (e) => setStatus(e.message, true)))
+  $('signOut')?.addEventListener('click', () => signOut())
+  $('signInBtn')?.addEventListener('click', () => signIn().catch((e) => { if (e?.code !== 4001) setStatus(walletErrorMessage(e), true) }))
 }
+onAccountChange(renderAuth)
+mountAuth()
 function renderPhoto() {
   const p = step()?.photo
   $('photoImg').src = p ? p.image : ''

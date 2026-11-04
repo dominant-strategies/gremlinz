@@ -1,7 +1,9 @@
 // Docs pages: logo, and creature stickers wherever a page asks for one with data-creature="seed[:mood[:size]]".
 import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
+import { mountAuth } from './auth.js'
 
 document.getElementById('logo')!.innerHTML = creatureSvg('gremlinz-logo-v1', { size: 34, title: 'gremlinz' })
+mountAuth()
 for (const el of document.querySelectorAll<HTMLElement>('[data-creature]')) {
   const [seed, mood = 'normal', size = 'sm'] = el.dataset.creature!.split(':')
   el.classList.add('sticker', `sticker-${size}`)

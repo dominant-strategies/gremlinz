@@ -1,5 +1,6 @@
 /** Homepage: creature illustrations and live numbers from the board. Works as a plain page if the API is down. */
 import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
+import { mountAuth } from './auth.js'
 
 interface Entry { address: string; name: string | null; configHash?: string; liveness: string; tier: string; netWorthQuai: string; netWorthQuaiFormatted: string; runwayDays: number; highlight?: string }
 
@@ -10,6 +11,7 @@ const sticker = (seed: string, size: 'xs' | 'sm' | 'md' | 'lg', mood: CreatureMo
 
 // logo: one fixed little creature
 $('logo')!.innerHTML = creatureSvg('gremlinz-logo-v1', { size: 34, title: 'gremlinz' })
+mountAuth()
 
 // hero crowd: a small gang, scattered and tilted
 const crowd: [string, 'sm' | 'md' | 'lg', number, number, number][] = [

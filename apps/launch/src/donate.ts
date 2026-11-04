@@ -1,12 +1,13 @@
 /**
  * One-click donations: pick an amount in dollars (presets or your own), pick what to pay with, press Donate. The
  * button connects a wallet if needed and opens exactly one signing prompt. QUAI goes through Pelagus; ETH, BNB,
- * USDC and USDT on Ethereum, Base and BSC go through the wallet picker (wallets.ts: any installed wallet or
- * WalletConnect). Dollar amounts are converted at live prices (DefiLlama). Nothing is converted at donation time; the
+ * USDC and USDT on Ethereum, Base and BSC go through the signed-in EVM wallet, or the sign-in dialog's MetaMask, Phantom
+ * and WalletConnect options (auth.ts). Dollar amounts are converted at live prices (DefiLlama). Nothing is converted at donation time; the
  * gremlin's sweeper turns what it receives into QUAI later.
  */
 import { Interface, parseUnits, toBeHex } from 'ethers'
-import { connectEvm, pelagus as pelagusWallet } from './wallets.js'
+import { evmWallet } from './auth.js'
+import { pelagus as pelagusWallet } from './wallets.js'
 
 
 export interface DonateTarget { name: string; quai: string; evm: string }
@@ -40,7 +41,7 @@ export async function amountFor(coin: Coin, usd: number, fetchImpl: typeof fetch
 // ── wallets ──────────────────────────────────────────────────────────────────
 
 async function sendEvm(coin: Coin, to: string, amount: bigint): Promise<string> {
-  const { provider: w, address: from } = await connectEvm()
+  const { provider: w, address: from } = await evmWallet()
   const want = toBeHex(coin.chainId)
   if ((await w.request({ method: 'eth_chainId' })) !== want) await w.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] })
   const tx = coin.token
@@ -88,14 +89,14 @@ export function mountDonate(root: HTMLElement, target: DonateTarget) {
   const coinSelect = h('select', { 'aria-label': 'Pay with' }) as HTMLSelectElement
   for (const c of COINS) coinSelect.append(h('option', { value: c.id }, c.label))
   if (!pelagusWallet()) coinSelect.value = 'base-usdc'
-  const hint = h('span', { class: 'donate-wc' }, 'MetaMask, Phantom, Rabby, Coinbase, or any WalletConnect wallet')
+  const hint = h('span', { class: 'donate-wc' }, 'MetaMask, Phantom, or any WalletConnect wallet')
 
   const go = h('button', { type: 'button', class: 'btn btn-primary' })
   const status = h('p', { class: 'donate-status small', role: 'status', 'aria-live': 'polite' })
   const coin = () => COINS.find((c) => c.id === coinSelect.value)!
   const sync = () => {
     presetButtons.forEach((b, i) => b.classList.toggle('on', !custom.value && PRESETS[i] === usd))
-    hint.textContent = coin().chainId === 9 ? 'with Pelagus' : 'MetaMask, Phantom, Rabby, Coinbase, or any WalletConnect wallet'
+    hint.textContent = coin().chainId === 9 ? 'with Pelagus' : 'MetaMask, Phantom, or any WalletConnect wallet'
     go.textContent = `Donate $${usd % 1 ? usd.toFixed(2) : usd}`
   }
   coinSelect.onchange = sync
