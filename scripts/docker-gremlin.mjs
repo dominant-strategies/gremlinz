@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // A gremlin hatched from the real egg image, in a local container: the egg starts as root, announces itself on the
 // local board, gets a signed config, hatches with pretend funds, and gremlin-run starts the inference gateway and
-// gremlin-mcp as the gremlin user and Hermes as the hermes user, thinking with a local Ollama model.
+// gremlin-mcp and Hermes (the main agent, with sudo) as the gremlin user, its subagents' shell as gremlin-helper,
+// thinking with a local Ollama model.
 //
 //   node scripts/docker-gremlin.mjs init [--name boxer]           # throwaway maker + config + launch data
 //   node scripts/docker-gremlin.mjs start [--image gremlins/egg:hermes-test] [--model qwen3.5:122b-a10b-q4_K_M]
-//   node scripts/docker-gremlin.mjs wake                           # run its wake-up job now (as the hermes user)
-//   node scripts/docker-gremlin.mjs check                          # OS-user separation checks
+//   node scripts/docker-gremlin.mjs wake                           # run its wake-up job now (as the gremlin user)
+//   node scripts/docker-gremlin.mjs check                          # main agent, helper and sandbox checks
 //   node scripts/docker-gremlin.mjs logs | stop
 //
 // Networking (Colima): the Mac is 192.168.5.2 from inside the VM, which reaches the board (:8787) and Ollama (:11434)
@@ -17,8 +18,9 @@
 // network whose traffic the Colima VM filters (outside the container, so nothing inside can change it): of the Mac it
 // reaches only the board and Ollama ports, private networks (your LAN) are rejected, the open internet is allowed. The
 // container gets no host mounts but two read-only files, only the capabilities the root egg needs to hand off to
-// its users, no-new-privileges, and pid, memory and CPU caps.
-import { execFileSync, spawnSync } from 'node:child_process'
+// its users (no network admin, so nothing inside can touch the network), and pid, memory and CPU caps. Inside the
+// box the gremlin's main agent has sudo; the box is the limit, not the gremlin's permissions.
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { Wallet } from 'ethers'
@@ -96,8 +98,8 @@ async function start() {
   spawnSync('docker', ['rm', '-f', NAME], { stdio: 'ignore' })
   sandboxNetwork()
   docker('run', '-d', '--name', NAME, '--network', NET,
-    '--cap-drop', 'ALL', ...['CHOWN', 'FOWNER', 'DAC_OVERRIDE', 'SETUID', 'SETGID', 'KILL'].flatMap((c) => ['--cap-add', c]),
-    '--security-opt', 'no-new-privileges', '--pids-limit', '512', '--memory', '4g', '--cpus', '2',
+    '--cap-drop', 'ALL', ...['CHOWN', 'FOWNER', 'DAC_OVERRIDE', 'SETUID', 'SETGID', 'KILL', 'AUDIT_WRITE'].flatMap((c) => ['--cap-add', c]),
+    '--pids-limit', '512', '--memory', '4g', '--cpus', '2',
     '-v', `${P.launch}:/etc/gremlin/launch.json:ro`, '-v', `${P.fwd}:/fwd.mjs:ro`,
     '-v', `${NAME}-home:/var/lib/gremlin`, '-v', `${NAME}-hermes:/var/lib/gremlin-hermes`,
     '-e', `GREMLIN_DEV_BALANCES=${JSON.stringify({ 'quai:9': (1000n * 10n ** 18n).toString() })}`,
@@ -122,7 +124,7 @@ async function start() {
   console.log(`profile: ${board}/g/${egg.address}`)
 }
 
-const hermes = (...a) => ['exec', '-u', 'hermes', '-e', 'HERMES_HOME=/var/lib/gremlin-hermes', NAME, '/opt/hermes/venv/bin/hermes', ...a]
+const hermes = (...a) => ['exec', '-u', 'gremlin', '-e', 'HERMES_HOME=/var/lib/gremlin-hermes', NAME, '/opt/hermes/venv/bin/hermes', ...a]
 function wake() { process.exit(spawnSync('docker', hermes('cron', 'run', 'a0a0a0a0a0a1'), { stdio: 'inherit' }).status ?? 1) }
 function logs() { spawnSync('docker', ['logs', '--tail', '80', NAME], { stdio: 'inherit' }) }
 function stop() { spawnSync('docker', ['rm', '-f', NAME], { stdio: 'inherit' }) }
@@ -130,22 +132,32 @@ function stop() { spawnSync('docker', ['rm', '-f', NAME], { stdio: 'inherit' }) 
 function check() {
   const sh = (user, cmd) => spawnSync('docker', ['exec', '-u', user, NAME, 'sh', '-c', cmd], { encoding: 'utf8' })
   const ok = (label, pass, detail = '') => console.log(`${pass ? '✓' : '✗'} ${label}${detail ? `: ${detail}` : ''}`)
-  const ps = sh('root', 'ps -eo user:10,args').stdout
+  const ps = sh('root', 'ps -eo user:15,args').stdout
   ok('gateway runs as gremlin', /^gremlin\s.*gateway\/main\.js/m.test(ps))
   ok('gremlin-mcp runs as gremlin', /^gremlin\s.*main\.js --http/m.test(ps))
-  ok('Hermes runs as hermes', /^hermes\s.*gateway run/m.test(ps))
-  const seed = sh('hermes', 'cat /var/lib/gremlin/seed')
-  ok('hermes cannot read the seed', seed.status !== 0, (seed.stderr || seed.stdout).trim().slice(0, 80))
+  ok('Hermes (the main agent) runs as gremlin', /^gremlin\s.*gateway run/m.test(ps))
+  // The main agent owns its server.
+  ok('main agent can read its seed', sh('gremlin', 'test -r /var/lib/gremlin/seed').status === 0)
+  ok('main agent has sudo', sh('gremlin', 'sudo -n true').status === 0)
   const t = spawnSync('docker', hermes('mcp', 'test', 'gremlin'), { encoding: 'utf8' }).stdout
   ok('Hermes reaches gremlin-mcp over HTTP', /Connected/.test(t), (t.match(/Tools discovered: \d+/) ?? [''])[0])
-  // Sandbox: probe from the hermes user (what the model's terminal runs as).
-  const reach = (host, port) => sh('hermes', `node -e "const s=require('net').connect(${port},'${host}');s.setTimeout(3000);s.on('connect',()=>process.exit(0));s.on('error',()=>process.exit(1));s.on('timeout',()=>process.exit(1))"`).status === 0
+  // Subagents' shell runs as the helper.
+  const seed = sh('gremlin-helper', 'cat /var/lib/gremlin/seed')
+  ok('helper cannot read the seed', seed.status !== 0, (seed.stderr || seed.stdout).trim().slice(0, 60))
+  ok('helper cannot read the MCP token', sh('gremlin-helper', 'cat /var/lib/gremlin-hermes/.env').status !== 0)
+  ok('helper has no sudo', sh('gremlin-helper', 'sudo -n true').status !== 0)
+  ok('helper can work in the work folder', sh('gremlin-helper', 'umask 007; f=/var/lib/gremlin-hermes/work/.helper-probe; echo x > $f && rm $f').status === 0)
+  // Sandbox: probed as root inside the container, the strongest position a gremlin can reach.
+  const reach = (host, port) => sh('root', `node -e "const s=require('net').connect(${port},'${host}');s.setTimeout(3000);s.on('connect',()=>process.exit(0));s.on('error',()=>process.exit(1));s.on('timeout',()=>process.exit(1))"`).status === 0
   ok('sandbox: reaches the board and Ollama on the Mac', reach(HOST, 8787) && reach(HOST, 11434))
-  ok('sandbox: other Mac ports are closed', !reach(HOST, 22) && !reach(HOST, 5000) && !reach(HOST, 3000))
+  const probe = spawn(process.execPath, ['-e', "require('net').createServer((c)=>{c.on('error',()=>{});c.end()}).listen(18999,'127.0.0.1')"], { stdio: 'ignore' })
+  spawnSync('sleep', ['1'])
+  ok('sandbox: an open Mac port outside the allowlist is unreachable', !reach(HOST, 18999))
+  probe.kill()
   ok('sandbox: the LAN is closed', !reach('192.168.1.1', 80) && !reach('10.0.0.1', 80))
   ok('sandbox: the internet is open', reach('1.1.1.1', 443))
-  const caps = sh('hermes', 'grep CapEff /proc/self/status').stdout.trim()
-  ok('sandbox: hermes has no capabilities', /0000000000000000$/.test(caps), caps)
+  const caps = BigInt(`0x${sh('root', 'grep CapEff /proc/self/status').stdout.trim().split(/\s+/)[1] ?? '0'}`)
+  ok('sandbox: even root has no network admin or raw sockets', (caps & ((1n << 12n) | (1n << 13n))) === 0n, `CapEff ${caps.toString(16)}`)
   const mounts = sh('root', 'grep -c " /Users" /proc/mounts').stdout.trim()
   ok('sandbox: no Mac folders mounted', mounts === '0')
 }
