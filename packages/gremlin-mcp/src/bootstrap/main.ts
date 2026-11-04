@@ -38,7 +38,6 @@ write('config.yaml', hermesConfig({
     ? { url: process.env.GREMLIN_MCP_URL }
     : { command: process.execPath, args: [mcpMain], env: { GREMLIN_HOME: home(), GREMLIN_BOARD_URL: boardUrl(), ...(process.env.GREMLIN_DEV_BALANCES ? { GREMLIN_DEV_BALANCES: process.env.GREMLIN_DEV_BALANCES } : {}) } },
   skillsDir,
-  protectedPaths: [home(), 'seed', 'signed-config.json'],
   wakeEveryMinutes: Number(process.env.GREMLIN_WAKE_MINUTES ?? 45),
 }))
 // The MCP token for HTTP mode goes in Hermes' .env (config.yaml refers to it as ${GREMLIN_MCP_TOKEN}).

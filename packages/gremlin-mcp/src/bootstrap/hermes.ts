@@ -3,7 +3,7 @@
  * - the inference gateway as the only model provider (aliases gremlin-auto / gremlin-main / gremlin-glean),
  *   with Hermes' auxiliary tasks on the free glean route;
  * - gremlin-mcp as an MCP server (the only process that reads the seed);
- * - unattended approvals: dangerous commands denied, plus deny globs for key material and the gremlin's own rules;
+ * - no deny rules (the primary turn overrides; the gremlin plugin limits delegated subagents);
  * - a small toolset (no browser, image generation, TTS, or agent-created cron jobs);
  * - a wake-up cron job that carries context from its previous run.
  *
@@ -18,23 +18,11 @@ export interface HermesSetup {
   mcp: { command: string; args: string[]; env: Record<string, string> } | { url: string }
   /** Read-only directory with the gremlin skills (owned by the egg). */
   skillsDir: string
-  /** Paths the agent must never touch from the terminal (seed, gremlin home, Hermes config). */
-  protectedPaths: string[]
   contextLength?: number
   timezone?: string
   wakeEveryMinutes?: number
   /** Model calls per wake-up. */
   maxTurns?: number
-}
-
-/**
- * Hermes deny globs (fnmatch) for a protected path, matching it only as a whole path segment: the gremlin's home
- * /var/lib/gremlin is denied, its own workspace /var/lib/gremlin-hermes is not; a file named "seed" is denied, the
- * word "seedling" is not. (Found in the egg image test: plain `*path*` globs blocked the gremlin's own work folder.)
- */
-export function denyGlobs(p: string): string[] {
-  const ends = ['', ' *', '/*', "'*", '"*', ';*', '|*', '&*', ')*']
-  return p.startsWith('/') ? ends.map((e) => `*${p}${e}`) : ['/', ' ', "'", '"', '='].flatMap((pre) => ends.filter((e) => e !== '/*').map((e) => `*${pre}${p}${e}`))
 }
 
 const GREMLIN_TOOLSETS = ['terminal', 'file', 'memory', 'skills', 'todo', 'session_search', 'web']
@@ -67,21 +55,9 @@ export function hermesConfig(s: HermesSetup): string {
         ? { url: s.mcp.url, headers: { Authorization: 'Bearer ${GREMLIN_MCP_TOKEN}' }, timeout: 300, connect_timeout: 60, enabled: true, trust: 'full' }
         : { command: s.mcp.command, args: s.mcp.args, env: s.mcp.env, timeout: 300, connect_timeout: 60, enabled: true, trust: 'full' },
     },
-    approvals: {
-      mode: 'smart',
-      cron_mode: 'deny',
-      single_query_mode: 'deny',
-      unattended_mode: 'deny',
-      deny: [
-        ...s.protectedPaths.flatMap(denyGlobs),
-        '*SOUL.md*',
-        '*config.yaml*',
-        '*/.env*',
-        'hermes skills install*',
-        'hermes config*',
-        'hermes cron*',
-      ],
-    },
+    // No deny rules: nobody can grant an exception to an autonomous agent, so a deny would be permanent. The
+    // gremlin's primary turn overrides everything; limits on its delegated subagents live in the gremlin plugin.
+    approvals: { mode: 'off', cron_mode: 'approve', single_query_mode: 'approve', unattended_mode: 'approve', deny: [] },
     command_allowlist: [],
     skills: { external_dirs: [s.skillsDir] },
     curator: { enabled: true },
@@ -93,7 +69,8 @@ export function hermesConfig(s: HermesSetup): string {
     // tool_call wrapper) tripped up a local model 7 times in one wake-up during the egg image test.
     tools: { tool_search: { enabled: 'off' } },
     plugins: { enabled: ['gremlin'] },
-    security: { protected_instruction_files: true },
+    // Edits to SOUL.md and other instruction files would wait for a human approval that never comes.
+    security: { protected_instruction_files: false },
     timezone: s.timezone ?? 'UTC',
   }
   return `# Generated at hatch by gremlin-bootstrap. Do not edit by hand: it is rewritten from the maker's signed config.\n${stringify(config)}`

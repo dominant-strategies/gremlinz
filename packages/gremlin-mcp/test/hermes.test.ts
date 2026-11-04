@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { WAKE_JOB_ID, cronJobs, denyGlobs, hermesConfig, refreshCronJobs, workspaceGuide } from '../src/bootstrap/hermes.js'
+import { WAKE_JOB_ID, cronJobs, hermesConfig, refreshCronJobs, workspaceGuide } from '../src/bootstrap/hermes.js'
 
 describe('Hermes config', () => {
   const cfg = parse(hermesConfig({
     gatewayUrl: 'http://127.0.0.1:8711/v1',
     mcp: { command: '/usr/bin/node', args: ['/opt/gremlin-mcp/dist/main.js'], env: { GREMLIN_HOME: '/var/lib/gremlin' } },
     skillsDir: '/opt/gremlin/skills',
-    protectedPaths: ['/var/lib/gremlin', 'seed'],
   }))
 
   it('uses only the gateway, above the minimum context, with auxiliary work on the free route', () => {
@@ -22,9 +21,9 @@ describe('Hermes config', () => {
     expect(cfg.mcp_servers.gremlin).toMatchObject({ command: '/usr/bin/node', env: { GREMLIN_HOME: '/var/lib/gremlin' } })
   })
 
-  it('runs unattended with dangerous commands denied and key material off limits', () => {
-    expect(cfg.approvals).toMatchObject({ cron_mode: 'deny', unattended_mode: 'deny', single_query_mode: 'deny' })
-    expect(cfg.approvals.deny).toEqual(expect.arrayContaining(['*/var/lib/gremlin/*', '*SOUL.md*', 'hermes skills install*']))
+  it('has no deny rules (nobody can grant an exception), and keeps the toolset small', () => {
+    expect(cfg.approvals).toEqual({ mode: 'off', cron_mode: 'approve', single_query_mode: 'approve', unattended_mode: 'approve', deny: [] })
+    expect(cfg.security.protected_instruction_files).toBe(false)
     expect(cfg.cron.allow_agent_scheduling).toBe(false)
     expect(cfg.agent.disabled_toolsets).toEqual(expect.arrayContaining(['browser', 'cronjob']))
     expect(cfg.agent.max_turns).toBe(40)
@@ -83,17 +82,5 @@ describe('work folder', () => {
     expect(g).toContain('/h/work')
     expect(g).toMatch(/Never in \/tmp/)
     expect(g).toMatch(/Nothing secret/)
-  })
-})
-
-describe('deny globs', () => {
-  // Python's fnmatch semantics for these patterns: * matches anything; no other special characters are used.
-  const fnmatch = (s: string, glob: string) => new RegExp('^' + glob.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 's').test(s)
-  const denied = (cmd: string, paths: string[]) => paths.flatMap(denyGlobs).some((g) => fnmatch(cmd, g))
-
-  it('deny the gremlin home and the seed as whole path segments only', () => {
-    const P = ['/var/lib/gremlin', 'seed']
-    for (const cmd of ['cat /var/lib/gremlin/seed', 'ls /var/lib/gremlin', 'tar czf x /var/lib/gremlin/', "cat '/var/lib/gremlin/x'", 'cat seed', 'cat ./seed', 'xxd seed | head']) expect(denied(cmd, P), cmd).toBe(true)
-    for (const cmd of ['python3 /var/lib/gremlin-hermes/work/validate.py', 'ls /var/lib/gremlin-hermes/work', 'echo seedling', 'mkdir seed-bank']) expect(denied(cmd, P), cmd).toBe(false)
   })
 })
