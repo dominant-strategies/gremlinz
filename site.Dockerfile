@@ -1,6 +1,9 @@
 # Site image: the board (API + pages) serving the static site (home, /hatch/) on one origin. Build:
 #   docker buildx build -f site.Dockerfile --build-arg VITE_EGG_IMAGE=<registry>/egg@sha256:… -t gremlins/site .
-FROM node:24.22.1-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS build
+FROM node:24.22.1-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS build
+# CVE-2026-111497 (Node2Shell, Brotli decoder out-of-bounds write): fail the build on a Node without the fix. The fix
+# is a cherry-pick (process.versions.brotli still says 1.2.0); it also added this zlib constant, so its presence proves it.
+RUN node -e "if (require('zlib').constants.BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH === undefined) { console.error('Node ' + process.version + ' lacks the CVE-2026-111497 fix: use 22.23.4+, 24.22.1+ or 26.12.1+'); process.exit(1) }"
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages packages
@@ -19,7 +22,7 @@ COPY apps/board apps/board
 # --install-links copies @gremlins/hatch (built above) into the board's node_modules with its dependencies.
 RUN cd apps/board && npm install --omit=dev --install-links --no-audit --no-fund
 
-FROM node:24.22.1-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
+FROM node:24.22.1-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c
 WORKDIR /app/board
 COPY --from=build /app/apps/board /app/board
 COPY --from=build /app/apps/launch/dist /app/site

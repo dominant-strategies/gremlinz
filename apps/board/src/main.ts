@@ -1,11 +1,17 @@
 /** Entry point: PORT (default 8787), BOARD_DB (default ./data/board.db, or ':memory:'). */
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { constants as zlibConstants } from 'node:zlib'
 import { serve } from '@hono/node-server'
 import { createBoard } from './app.ts'
 import { configFromEnv } from './config.ts'
 import { SqliteBoardStore } from './sqlite-store.ts'
 import { claudeDesigner, photoProviderFromEnv, type ForgeDesigner } from './forge.ts'
+
+// CVE-2026-111497 (Node2Shell): Node's Brotli decoder could be made to write out of bounds by untrusted input. The fix
+// (22.23.4, 24.22.1, 26.12.1) is a cherry-pick that also added this constant, so its absence means an unpatched Node.
+if ((zlibConstants as Record<string, number | undefined>).BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH === undefined)
+  console.warn(`WARNING: Node ${process.version} is missing the CVE-2026-111497 fix. Upgrade to 22.23.4+, 24.22.1+ or 26.12.1+ (see .nvmrc).`)
 
 const port = Number(process.env.PORT ?? 8787)
 const dbPath = process.env.BOARD_DB ?? 'data/board.db'
