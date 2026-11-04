@@ -64,6 +64,14 @@ describe('wake-up prompt and refresh', () => {
     expect(JSON.parse(refreshCronJobs(JSON.stringify(old), { wakeEveryMinutes: 30 })).jobs[0].next_run_at).toBeNull()
   })
 
+  it('re-runs a failed wake-up soon, and never leaves it stopped', () => {
+    expect(JSON.parse(cronJobs()).jobs[0].retry_failures).toBe(true)
+    const old = JSON.parse(cronJobs())
+    Object.assign(old.jobs[0], { state: 'paused', paused_at: '2026-11-04T20:00:00Z', paused_reason: 'x', next_run_at: '2026-11-05T00:00:00Z', retry_failures: false })
+    const wake = JSON.parse(refreshCronJobs(JSON.stringify(old))).jobs[0]
+    expect(wake).toMatchObject({ state: 'scheduled', paused_at: null, paused_reason: null, next_run_at: null, retry_failures: true })
+  })
+
   it('starts fresh from unreadable files', () => {
     expect(JSON.parse(refreshCronJobs('not json')).jobs[0].id).toBe(WAKE_JOB_ID)
   })

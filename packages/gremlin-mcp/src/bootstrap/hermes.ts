@@ -105,6 +105,9 @@ function wakeDefinition(minutes: number, workdir?: string) {
     enabled: true,
     // File and terminal tools run here by default, and Hermes loads its AGENTS.md (the workspace guide).
     workdir: workdir ?? null,
+    // A failed wake-up (a crash, a provider outage, a host that slept mid-turn) is re-run after 5, 15 and 30 minutes
+    // instead of costing the gremlin a whole period. Safe: each wake-up re-reads its state and its last output.
+    retry_failures: true,
   }
 }
 
@@ -138,7 +141,13 @@ export function refreshCronJobs(existing: string, opts: { wakeEveryMinutes?: num
   if (i < 0) jobs.push(fresh)
   else {
     const changedSchedule = JSON.stringify(jobs[i]!.schedule) !== JSON.stringify(def.schedule)
-    jobs[i] = { ...jobs[i], ...def, ...(changedSchedule ? { next_run_at: null } : {}) }
+    // A gremlin's wake-up never stays stopped: whatever left it paused, errored or completed, it is scheduled again.
+    const stuck = jobs[i]!.state !== 'scheduled'
+    jobs[i] = {
+      ...jobs[i], ...def,
+      ...(changedSchedule || stuck ? { next_run_at: null } : {}),
+      ...(stuck ? { state: 'scheduled', paused_at: null, paused_reason: null } : {}),
+    }
   }
   return JSON.stringify({ ...parsed, jobs, updated_at: (opts.now ?? new Date()).toISOString() }, null, 2)
 }
