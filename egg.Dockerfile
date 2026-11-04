@@ -53,6 +53,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
  && mkdir -p /var/lib/gremlin /var/lib/gremlin-hermes /etc/gremlin \
  && chown gremlin:gremlin /var/lib/gremlin /var/lib/gremlin-hermes && chmod 0700 /var/lib/gremlin && chmod 0711 /var/lib/gremlin-hermes
 COPY --from=hermes /opt/python /opt/python
+# python3 / pip3 for the gremlin's own work (the Hermes venv is the runtime's, not the agent's).
+RUN b="$(ls -d /opt/python/cpython-3.14.*-linux-*/bin | head -1)" \
+ && ln -s "$b/python3" /usr/local/bin/python3 && ln -s "$b/python3" /usr/local/bin/python && ln -s "$b/pip3" /usr/local/bin/pip3
 COPY --from=hermes /opt/gremlin-runtime /opt/gremlin-runtime
 COPY --from=hermes /opt/hermes /opt/hermes
 COPY --from=build /app /app
