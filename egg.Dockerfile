@@ -42,12 +42,16 @@ FROM node:24-slim
 LABEL org.opencontainers.image.source=https://github.com/dominant-strategies/gremlinz \
       org.opencontainers.image.description="Gremlin egg: egg supervisor + gremlin runtime (Hermes)" \
       org.opencontainers.image.licenses=MIT
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates procps && rm -rf /var/lib/apt/lists/* \
- && groupadd --system gremlin && useradd --system --gid gremlin --home-dir /var/lib/gremlin --shell /usr/sbin/nologin gremlin \
- && groupadd --system hermes && useradd --system --gid hermes --home-dir /var/lib/gremlin-hermes --shell /usr/sbin/nologin hermes \
+# Users: gremlin is the main agent and owns the server (passwordless sudo, the seed, Hermes' home); gremlin-helper
+# runs its subagents' shell commands and shares only the work folder with it (group gremlin-work).
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates procps sudo && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system gremlin && useradd --system --gid gremlin --home-dir /var/lib/gremlin --shell /bin/bash gremlin \
+ && groupadd --system gremlin-work \
+ && useradd --system --user-group --create-home --home-dir /home/gremlin-helper --shell /bin/bash gremlin-helper \
+ && usermod -aG gremlin-work gremlin && usermod -aG gremlin-work gremlin-helper \
+ && echo 'gremlin ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/gremlin && chmod 0440 /etc/sudoers.d/gremlin \
  && mkdir -p /var/lib/gremlin /var/lib/gremlin-hermes /etc/gremlin \
- && chown gremlin:gremlin /var/lib/gremlin && chmod 0700 /var/lib/gremlin \
- && chown hermes:hermes /var/lib/gremlin-hermes && chmod 0700 /var/lib/gremlin-hermes
+ && chown gremlin:gremlin /var/lib/gremlin /var/lib/gremlin-hermes && chmod 0700 /var/lib/gremlin && chmod 0711 /var/lib/gremlin-hermes
 COPY --from=hermes /opt/python /opt/python
 COPY --from=hermes /opt/gremlin-runtime /opt/gremlin-runtime
 COPY --from=hermes /opt/hermes /opt/hermes

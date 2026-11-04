@@ -5,13 +5,16 @@
  * (cron wake-ups, no chat platforms). If any child exits, the others are stopped and gremlin-run exits, so the egg
  * restarts everything with its backoff.
  *
- * Separate OS users (GREMLIN_SEPARATE_USERS=1, as root in the egg image): the gateway and gremlin-mcp run as the
- * gremlin user (it can read the seed); Hermes runs as the hermes user (it cannot) and reaches gremlin-mcp over
- * localhost HTTP with a token made fresh each start. GREMLIN_MCP_HTTP=1 uses the HTTP path without switching users.
+ * OS users (GREMLIN_SEPARATE_USERS=1, as root in the egg image): the gateway, gremlin-mcp and Hermes (the gremlin's
+ * main agent) all run as the gremlin user, which owns the seed and everything else and has passwordless sudo: the
+ * main agent has full control of its server. Its subagents' shell commands run as the unprivileged gremlin-helper
+ * user (the gremlin plugin does that), which reaches only the work folder. Hermes reaches gremlin-mcp over localhost
+ * HTTP with a token made fresh each start. GREMLIN_MCP_HTTP=1 uses the HTTP path without switching users.
  *
  * Env: GREMLIN_HOME, GREMLIN_CONFIG, HERMES_HOME, HERMES_BIN (hermes executable), GREMLIN_RUNTIME_DIR (checkout of
  * gremlin-runtime: plugin + skills), GATEWAY_CONFIG (optional; generated if absent), GREMLIN_OLLAMA_URL /
- * GREMLIN_OLLAMA_MODEL (local development), GREMLIN_DAILY_USD, GREMLIN_USER / HERMES_USER (default gremlin / hermes).
+ * GREMLIN_OLLAMA_MODEL (local development), GREMLIN_DAILY_USD, GREMLIN_USER (default gremlin), GREMLIN_WORK_GROUP
+ * (default gremlin-work: the gremlin and its helper share the work folder).
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -33,8 +36,12 @@ interface Ids { uid: number; gid: number }
 const separate = process.env.GREMLIN_SEPARATE_USERS === '1'
 if (separate && process.getuid?.() !== 0) { log('GREMLIN_SEPARATE_USERS=1 needs root (to start each child as its own user)'); process.exit(78) }
 const idsOf = (user: string): Ids => ({ uid: Number(execFileSync('id', ['-u', user], { encoding: 'utf8' })), gid: Number(execFileSync('id', ['-g', user], { encoding: 'utf8' })) })
+const gidOf = (group: string) => Number(execFileSync('getent', ['group', group], { encoding: 'utf8' }).split(':')[2])
 const gremlinIds = separate ? idsOf(process.env.GREMLIN_USER ?? 'gremlin') : undefined
-const hermesIds = separate ? idsOf(process.env.HERMES_USER ?? 'hermes') : undefined
+const hermesIds = gremlinIds // the main agent is the gremlin
+// Nothing the gremlin's processes create is readable by other users; the work folder is shared with the helper
+// through its setgid group (group rw).
+if (separate) process.umask(0o007)
 const mcpHttp = separate || process.env.GREMLIN_MCP_HTTP === '1'
 const mcpPort = Number(process.env.GREMLIN_MCP_PORT ?? 8712)
 const mcpToken = mcpHttp ? randomBytes(32).toString('hex') : undefined
@@ -51,13 +58,28 @@ rmSync(pluginDst, { recursive: true, force: true })
 mkdirSync(dirname(pluginDst), { recursive: true })
 cpSync(join(runtimeDir, 'gremlin', 'plugin', 'gremlin'), pluginDst, { recursive: true })
 
-// Hermes' home belongs to the hermes user. (It can therefore replace files there, including SOUL.md and config.yaml;
-// those are regenerated on every start and guarded by the plugin. The OS boundary protects the seed and GREMLIN_HOME.)
+// Hermes' home belongs to the gremlin. The helper user (subagents' shell) may pass through it to the work folder,
+// which the two share through a setgid group; everything else in it is owner-only.
 const chownTree = (p: string, ids: Ids) => {
   chownSync(p, ids.uid, ids.gid)
   if (statSync(p).isDirectory()) for (const f of readdirSync(p)) chownTree(join(p, f), ids)
 }
-if (hermesIds) chownTree(hermesHome, hermesIds)
+const ownerOnly = (p: string) => { chmodSync(p, statSync(p).mode & 0o7700); if (statSync(p).isDirectory()) for (const f of readdirSync(p)) ownerOnly(join(p, f)) }
+const workDir = join(hermesHome, 'work')
+if (hermesIds) {
+  chownTree(hermesHome, hermesIds)
+  for (const f of readdirSync(hermesHome)) if (f !== 'work') ownerOnly(join(hermesHome, f))
+  chmodSync(hermesHome, 0o711)
+  mkdirSync(workDir, { recursive: true })
+  const workGid = gidOf(process.env.GREMLIN_WORK_GROUP ?? 'gremlin-work')
+  const shareTree = (p: string) => {
+    chownSync(p, statSync(p).uid, workGid)
+    if (statSync(p).isDirectory()) { chmodSync(p, 0o2770); for (const f of readdirSync(p)) shareTree(join(p, f)) }
+    else chmodSync(p, (statSync(p).mode & 0o777) | 0o060)
+  }
+  shareTree(workDir)
+  chmodSync(join(workDir, 'AGENTS.md'), 0o444)
+}
 // The egg (root) writes the seed and its state into GREMLIN_HOME; the gremlin user must own it and nobody else read it.
 if (gremlinIds) {
   chownTree(home(), gremlinIds)
@@ -137,10 +159,12 @@ if (mcpHttp) {
   await waitHealthy('gremlin-mcp', `http://127.0.0.1:${mcpPort}/mcp`, (r) => r.status === 401) // up, and asking for the token
 }
 
-// 4. Hermes (cron wake-ups; no chat platforms). With separate users it gets only what it needs: no GREMLIN_* secrets.
+// 4. Hermes: the main agent (cron wake-ups; no chat platforms). GREMLIN_PROTECTED_DIRS and GREMLIN_SUBAGENT_ROOTS
+// tell the plugin what its subagents may not touch and where their files may go.
+const subagentEnv = { GREMLIN_PROTECTED_DIRS: home(), GREMLIN_SUBAGENT_ROOTS: `${workDir}:/tmp` }
 const hermesEnv: NodeJS.ProcessEnv = separate
-  ? { PATH: process.env.PATH, LANG: process.env.LANG ?? 'C.UTF-8', HOME: hermesHome, HERMES_HOME: hermesHome, GREMLIN_PROTECTED_DIRS: home() }
-  : { ...env, GREMLIN_PROTECTED_DIRS: home() }
+  ? { PATH: process.env.PATH, LANG: process.env.LANG ?? 'C.UTF-8', HOME: hermesHome, HERMES_HOME: hermesHome, GREMLIN_HOME: home(), ...subagentEnv }
+  : { ...env, ...subagentEnv }
 start('hermes', hermesBin, ['gateway', 'run', '--external-supervisor', '--replace'], hermesEnv, hermesIds)
-log(`running: gateway on ${port}${mcpHttp ? `, gremlin-mcp on ${mcpPort}` : ''}, hermes home ${hermesHome}${separate ? ' (separate users)' : ''}`)
+log(`running: gateway on ${port}${mcpHttp ? `, gremlin-mcp on ${mcpPort}` : ''}, hermes home ${hermesHome}${separate ? ' (as the gremlin user; subagents as gremlin-helper)' : ''}`)
 for (const sig of ['SIGTERM', 'SIGINT'] as const) process.on(sig, () => stopAll(0))

@@ -55,14 +55,16 @@ export function hermesConfig(s: HermesSetup): string {
         ? { url: s.mcp.url, headers: { Authorization: 'Bearer ${GREMLIN_MCP_TOKEN}' }, timeout: 300, connect_timeout: 60, enabled: true, trust: 'full' }
         : { command: s.mcp.command, args: s.mcp.args, env: s.mcp.env, timeout: 300, connect_timeout: 60, enabled: true, trust: 'full' },
     },
-    // No deny rules: nobody can grant an exception to an autonomous agent, so a deny would be permanent. The
-    // gremlin's primary turn overrides everything; limits on its delegated subagents live in the gremlin plugin.
-    approvals: { mode: 'off', cron_mode: 'approve', single_query_mode: 'approve', unattended_mode: 'approve', deny: [] },
+    // The main agent has full control: no approvals, no deny rules, no built-in floors (nobody could ever grant an
+    // autonomous agent an exception, so any of them would be permanent). Its subagents are limited by the gremlin
+    // plugin, and the main agent can grant them exceptions.
+    approvals: { mode: 'off', cron_mode: 'approve', single_query_mode: 'approve', unattended_mode: 'approve', deny: [], floors: false },
     command_allowlist: [],
     skills: { external_dirs: [s.skillsDir] },
     curator: { enabled: true },
     cron: { allow_agent_scheduling: false },
-    platform_toolsets: { cron: [...GREMLIN_TOOLSETS, 'gremlin'], api_server: [...GREMLIN_TOOLSETS, 'gremlin'] },
+    // gremlin: the MCP server; gremlin_policy: the plugin's grant_subagent tool; delegation: subagents.
+    platform_toolsets: { cron: [...GREMLIN_TOOLSETS, 'delegation', 'gremlin', 'gremlin_policy'], api_server: [...GREMLIN_TOOLSETS, 'gremlin'] },
     // A wake-up must finish well before the next one (tinker's first took 17 model calls).
     agent: { max_turns: s.maxTurns ?? 40, disabled_toolsets: ['browser', 'image_gen', 'tts', 'cronjob', 'vision'] },
     // A gremlin has ~25 tools: keep them all directly callable. Hermes' tool_search bridge (hidden tools reached via a

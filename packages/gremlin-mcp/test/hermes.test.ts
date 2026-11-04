@@ -21,13 +21,13 @@ describe('Hermes config', () => {
     expect(cfg.mcp_servers.gremlin).toMatchObject({ command: '/usr/bin/node', env: { GREMLIN_HOME: '/var/lib/gremlin' } })
   })
 
-  it('has no deny rules (nobody can grant an exception), and keeps the toolset small', () => {
-    expect(cfg.approvals).toEqual({ mode: 'off', cron_mode: 'approve', single_query_mode: 'approve', unattended_mode: 'approve', deny: [] })
+  it('gives the main agent full control (no approvals, deny rules or floors), and keeps the toolset small', () => {
+    expect(cfg.approvals).toEqual({ mode: 'off', cron_mode: 'approve', single_query_mode: 'approve', unattended_mode: 'approve', deny: [], floors: false })
     expect(cfg.security.protected_instruction_files).toBe(false)
     expect(cfg.cron.allow_agent_scheduling).toBe(false)
     expect(cfg.agent.disabled_toolsets).toEqual(expect.arrayContaining(['browser', 'cronjob']))
     expect(cfg.agent.max_turns).toBe(40)
-    expect(cfg.platform_toolsets.cron).toContain('gremlin')
+    expect(cfg.platform_toolsets.cron).toEqual(expect.arrayContaining(['gremlin', 'gremlin_policy', 'delegation']))
     expect(cfg.plugins.enabled).toEqual(['gremlin'])
     expect(cfg.tools.tool_search.enabled).toBe('off')
   })
