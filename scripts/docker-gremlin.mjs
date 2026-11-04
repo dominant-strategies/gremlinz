@@ -12,6 +12,12 @@
 // Networking (Colima): the Mac is 192.168.5.2 from inside the VM, which reaches the board (:8787) and Ollama (:11434)
 // on the Mac's loopback. Pretend funds are only honoured for a board on localhost, so a tiny forwarder in the
 // container serves localhost:8787 → 192.168.5.2:8787. Local development only.
+//
+// Sandbox: a gremlin in the wild has no limits, but the one on this machine is boxed in. It runs on its own Docker
+// network whose traffic the Colima VM filters (outside the container, so nothing inside can change it): of the Mac it
+// reaches only the board and Ollama ports, private networks (your LAN) are rejected, the open internet is allowed. The
+// container gets no host mounts but two read-only files, only the capabilities the root egg needs to hand off to
+// its users, no-new-privileges, and pid, memory and CPU caps.
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -29,6 +35,34 @@ const arg = (name, dflt) => { const i = process.argv.indexOf(`--${name}`); retur
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const json = (v) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x))
 const docker = (...a) => execFileSync('docker', a, { encoding: 'utf8' })
+
+const NET = 'gremlin-sandbox'
+const SUBNET = '172.30.77.0/24'
+const ALLOWED_HOST_PORTS = [8787, 11434] // board, Ollama
+const PRIVATE = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '100.64.0.0/10']
+
+/** Create the sandbox network and (re)apply its filter in the Colima VM. Rules are rebuilt every start. */
+function sandboxNetwork() {
+  if (spawnSync('docker', ['network', 'inspect', NET], { stdio: 'ignore' }).status !== 0)
+    docker('network', 'create', '--subnet', SUBNET, '-o', 'com.docker.network.bridge.enable_icc=false', NET)
+  const rules = [
+    'iptables -N GREMLIN-SANDBOX 2>/dev/null || iptables -F GREMLIN-SANDBOX',
+    `iptables -C DOCKER-USER -s ${SUBNET} -j GREMLIN-SANDBOX 2>/dev/null || iptables -I DOCKER-USER -s ${SUBNET} -j GREMLIN-SANDBOX`,
+    'iptables -A GREMLIN-SANDBOX -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN',
+    ...ALLOWED_HOST_PORTS.map((port) => `iptables -A GREMLIN-SANDBOX -d ${HOST} -p tcp --dport ${port} -j RETURN`),
+    ...PRIVATE.map((cidr) => `iptables -A GREMLIN-SANDBOX -d ${cidr} -j REJECT`),
+    'iptables -A GREMLIN-SANDBOX -j RETURN',
+    // The VM itself: DNS only.
+    'iptables -N GREMLIN-SANDBOX-IN 2>/dev/null || iptables -F GREMLIN-SANDBOX-IN',
+    `iptables -C INPUT -s ${SUBNET} -j GREMLIN-SANDBOX-IN 2>/dev/null || iptables -I INPUT -s ${SUBNET} -j GREMLIN-SANDBOX-IN`,
+    'iptables -A GREMLIN-SANDBOX-IN -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN',
+    'iptables -A GREMLIN-SANDBOX-IN -p udp --dport 53 -j RETURN',
+    'iptables -A GREMLIN-SANDBOX-IN -p tcp --dport 53 -j RETURN',
+    'iptables -A GREMLIN-SANDBOX-IN -j REJECT',
+  ].join(' && ')
+  const r = spawnSync('colima', ['ssh', '--', 'sudo', 'sh', '-c', rules], { encoding: 'utf8' })
+  if (r.status !== 0) throw new Error(`could not sandbox the network (needs Colima): ${(r.stderr || r.error?.message || '').trim()}`)
+}
 
 async function init() {
   if (existsSync(P.launch)) return console.log(`already initialized (${DIR}); delete it to start over`)
@@ -60,7 +94,10 @@ async function start() {
   const image = arg('image', 'gremlins/egg:hermes-test')
   const model = arg('model', 'qwen3.5:122b-a10b-q4_K_M')
   spawnSync('docker', ['rm', '-f', NAME], { stdio: 'ignore' })
-  docker('run', '-d', '--name', NAME,
+  sandboxNetwork()
+  docker('run', '-d', '--name', NAME, '--network', NET,
+    '--cap-drop', 'ALL', ...['CHOWN', 'FOWNER', 'DAC_OVERRIDE', 'SETUID', 'SETGID', 'KILL'].flatMap((c) => ['--cap-add', c]),
+    '--security-opt', 'no-new-privileges', '--pids-limit', '512', '--memory', '4g', '--cpus', '2',
     '-v', `${P.launch}:/etc/gremlin/launch.json:ro`, '-v', `${P.fwd}:/fwd.mjs:ro`,
     '-v', `${NAME}-home:/var/lib/gremlin`, '-v', `${NAME}-hermes:/var/lib/gremlin-hermes`,
     '-e', `GREMLIN_DEV_BALANCES=${JSON.stringify({ 'quai:9': (1000n * 10n ** 18n).toString() })}`,
@@ -101,6 +138,16 @@ function check() {
   ok('hermes cannot read the seed', seed.status !== 0, (seed.stderr || seed.stdout).trim().slice(0, 80))
   const t = spawnSync('docker', hermes('mcp', 'test', 'gremlin'), { encoding: 'utf8' }).stdout
   ok('Hermes reaches gremlin-mcp over HTTP', /Connected/.test(t), (t.match(/Tools discovered: \d+/) ?? [''])[0])
+  // Sandbox: probe from the hermes user (what the model's terminal runs as).
+  const reach = (host, port) => sh('hermes', `node -e "const s=require('net').connect(${port},'${host}');s.setTimeout(3000);s.on('connect',()=>process.exit(0));s.on('error',()=>process.exit(1));s.on('timeout',()=>process.exit(1))"`).status === 0
+  ok('sandbox: reaches the board and Ollama on the Mac', reach(HOST, 8787) && reach(HOST, 11434))
+  ok('sandbox: other Mac ports are closed', !reach(HOST, 22) && !reach(HOST, 5000) && !reach(HOST, 3000))
+  ok('sandbox: the LAN is closed', !reach('192.168.1.1', 80) && !reach('10.0.0.1', 80))
+  ok('sandbox: the internet is open', reach('1.1.1.1', 443))
+  const caps = sh('hermes', 'grep CapEff /proc/self/status').stdout.trim()
+  ok('sandbox: hermes has no capabilities', /0000000000000000$/.test(caps), caps)
+  const mounts = sh('root', 'grep -c " /Users" /proc/mounts').stdout.trim()
+  ok('sandbox: no Mac folders mounted', mounts === '0')
 }
 
 const commands = { init, start, wake, check, logs, stop }
