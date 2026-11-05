@@ -1,6 +1,7 @@
 /** Homepage: creature illustrations and live numbers from the board. Works as a plain page if the API is down. */
 import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
 import { mountAuth } from './auth.js'
+import { astroSvg, houndSvg, mercurySvg } from './rogues.js'
 
 interface Entry { address: string; name: string | null; configHash?: string; liveness: string; tier: string; netWorthQuai: string; netWorthQuaiFormatted: string; runwayDays: number; highlight?: string }
 
@@ -13,13 +14,13 @@ const sticker = (seed: string, size: 'xs' | 'sm' | 'md' | 'lg', mood: CreatureMo
 $('logo')!.innerHTML = creatureSvg('gremlinz-logo-v1', { size: 34, title: 'gremlinz' })
 mountAuth()
 
-// hero crowd: a small gang, scattered and tilted
-const crowd: [string, 'sm' | 'md' | 'lg', number, number, number][] = [
-  ['tinker-7', 'lg', 30, 18, -4], ['wren-2', 'md', 6, 58, 6], ['bolt-9', 'md', 66, 4, 5], ['moss-3', 'sm', 70, 62, -8], ['quill-5', 'sm', 4, 10, 10],
-]
-$('crowd')!.innerHTML = crowd
-  .map(([seed, size, left, top, tilt]) => sticker(seed, size).replace('class="sticker', `style="left:${left}%;top:${top}%;--tilt:${tilt}deg;transform:rotate(${tilt}deg)" class="sticker`))
-  .join('')
+// hero: the rogues' gallery (three bigger, meaner gremlins) with two of the regular ones keeping their distance
+$('crowd')!.innerHTML = `
+  <div class="rogue rogue-astro">${astroSvg()}</div>
+  <div class="rogue rogue-mercury">${mercurySvg()}</div>
+  <div class="rogue rogue-hound">${houndSvg()}</div>
+  ${sticker('tinker-7', 'sm', 'normal', 'a nervous gremlin').replace('class="sticker', 'style="right:4%;top:2%;--tilt:8deg;transform:rotate(8deg)" class="sticker')}
+  ${sticker('wren-2', 'xs', 'low_compute', 'a gremlin pretending to sleep').replace('class="sticker', 'style="right:22%;top:10%;--tilt:-6deg;transform:rotate(-6deg)" class="sticker')}`
 
 // chapter scenes
 $('scene-egg')!.innerHTML = `<div style="display:flex;gap:18px;align-items:flex-end">${sticker('tinker-7', 'md', 'egg', 'an egg')}<span class="arrow" style="font:800 28px var(--display);color:var(--spark)">→</span>${sticker('tinker-7', 'lg', 'normal', 'just hatched')}</div>`
