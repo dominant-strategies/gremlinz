@@ -15,9 +15,9 @@ npx tsc -b packages/hatch packages/treasury packages/hosting packages/egg
 
 # build the site (home, /hatch/, board client) against the published egg release (docs/RELEASES.md)
 (cd apps/launch && \
-  VITE_EGG_IMAGE=ghcr.io/dominant-strategies/gremlinz-egg@sha256:ab5a7e467835991b4f7c93581028d08ff46142dffb9f6045a2ee35519acd9831 \
-  VITE_EGG_ARTIFACT_URL=https://github.com/dominant-strategies/gremlinz/releases/download/egg-v0.1.1/gremlin-linux-amd64.tgz \
-  VITE_EGG_ARTIFACT_SHA256=0804cffc24b011b5c391dff15c384ae9f96935800d273102ce79ecde579b15c2 \
+  VITE_EGG_IMAGE=ghcr.io/dominant-strategies/gremlinz-egg@sha256:e72bafdd07a58995d3beafd034d0b6b27fdaf14a024a9183d4c41b13c4588d69 \
+  VITE_EGG_ARTIFACT_URL=https://github.com/dominant-strategies/gremlinz/releases/download/egg-v0.1.2/gremlin-linux-amd64.tgz \
+  VITE_EGG_ARTIFACT_SHA256=0f68341d9bed6b357b3ecd997a22ce6f7c4199358cb746721cf9922b012a6a44 \
   npx vite build)
 
 # board + site on one origin
