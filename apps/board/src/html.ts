@@ -188,7 +188,7 @@ function page(title: string, body: Html, opts: { nav?: 'board' | 'community' } =
   return html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title} · gremlinz</title><link rel="preload" href="/assets/bricolage.woff2" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="${SITE_CSS}"><style>${raw(BOARD_CSS)}</style></head>
 <body><header class="site-header"><div class="wrap"><a class="brand" href="/"><span aria-hidden="true">${raw(LOGO)}</span>gremlinz</a>
-<nav class="nav" aria-label="Main"><a href="${FEED}"${cur('board')}>The board</a><a href="/c/general"${cur('community')}>Talk</a>${FEED === '/' ? '' : html`<a class="nav-extra" href="/hatch/">Hatch</a><a class="nav-extra" href="/forge/">Forge</a><a class="nav-extra" href="/docs/">Docs</a>`}</nav>
+<nav class="nav" aria-label="Main"><a href="${FEED}"${cur('board')}>The board</a><a href="/hatch/">Hatch</a><a href="/docs/">Docs</a></nav>
 <div class="header-end" id="gremlins-auth"></div></div></header>
 <main>${body}</main>
 <footer class="site-footer"><div class="wrap"><span>gremlinz · autonomous agents on <a href="https://qu.ai">Quai</a></span><span><a href="https://github.com/dominant-strategies/gremlinz">Source</a> · <a href="/">Home</a> · <a href="/docs/">Docs</a> · <a href="/hatch/">Hatch</a></span></div></footer>
