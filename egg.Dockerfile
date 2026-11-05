@@ -47,7 +47,9 @@ LABEL org.opencontainers.image.source=https://github.com/dominant-strategies/gre
       org.opencontainers.image.licenses=MIT
 # Users: gremlin is the main agent and owns the server (passwordless sudo, the seed, Hermes' home); gremlin-helper
 # runs its subagents' shell commands and shares only the work folder with it (group gremlin-work).
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates procps sudo && rm -rf /var/lib/apt/lists/* \
+# Debian security fixes published since the base image was built go in at build time; the gremlin applies later ones
+# itself (security_patch_os).
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends git ca-certificates procps sudo && rm -rf /var/lib/apt/lists/* \
  && groupadd --system gremlin && useradd --system --gid gremlin --home-dir /var/lib/gremlin --shell /bin/bash gremlin \
  && groupadd --system gremlin-work \
  && useradd --system --user-group --create-home --home-dir /home/gremlin-helper --shell /bin/bash gremlin-helper \

@@ -25,7 +25,7 @@ import { loadOrCreateKeys } from './keys.js'
 import { readLaunchData, EggLaunchData, type NestLaunchData } from './launch.js'
 import { fileStore } from './store.js'
 import { loadOrCreateTransportKey, nestStep, type NestState } from './nest.js'
-import { moveOutStep, startMoveOut, isQuiet, type MoveOutDeps, type MoveOutState } from './moveout.js'
+import { moveOutStep, nestBuild, startMoveOut, isQuiet, type MoveOutDeps, type MoveOutState } from './moveout.js'
 import { collectPayload, restorePayload } from './payload.js'
 
 const home = process.env.GREMLIN_HOME ?? '/var/lib/gremlin'
@@ -58,7 +58,13 @@ async function runNest(nl: NestLaunchData) {
     board: httpBoardClient(nl.boardUrl),
     transportKey: loadOrCreateTransportKey(keyPath),
     now: () => new Date(),
-    restore: async (p: Parameters<typeof restorePayload>[0]) => restorePayload(p, { gremlinHome: home, runtimeDir }),
+    restore: async (p: Parameters<typeof restorePayload>[0]) => {
+      await restorePayload(p, { gremlinHome: home, runtimeDir })
+      // The moved launch data names the old server's build; this server's is what it runs now (maybe a newer release).
+      const moved = join(home, 'launch.json')
+      const old = readJson<Record<string, unknown>>(moved)
+      if (old) writeJson(moved, { ...old, image: nl.image, artifact: nl.artifact })
+    },
   }
   const statePath = join(home, 'nest-state.json')
   let state: NestState = readJson(statePath) ?? { stage: 'booted', bootedAt: new Date().toISOString(), log: [] }
@@ -156,9 +162,10 @@ async function runEgg() {
     board,
     now: () => new Date(),
     launchNest: (nest) => {
-      // Nests carry the same build forward so they can move again later.
-      const n = { ...nest, image: el.image, artifact: el.artifact }
-      return launchNestOnSporeStack(req, n, el.image, el.artifact)
+      // Nests carry their build forward so they can move again later: this server's, or a newer release of it that the
+      // gremlin asked for (how it picks up fixes that need a new image).
+      const { image, artifact } = nestBuild(req, el.image, el.artifact)
+      return launchNestOnSporeStack(req, { ...nest, image, artifact }, image, artifact)
     },
     stopRuntime,
     startRuntime: () => { paused = false; nextStartAt = 0; startRuntime() },
@@ -211,7 +218,8 @@ async function runEgg() {
  * - sporestack: the token must already hold enough credit (new tokens need a $100 first deposit).
  * (Conway was a host until it discontinued its service.)
  */
-type MoveOutRequest = { host: 'sporestack'; token: string; flavor?: string; provider?: Provider; days?: number }
+type MoveOutRequest = { host: 'sporestack'; token: string; flavor?: string; provider?: Provider; days?: number; image?: string }
+
 
 type NestLaunch = Parameters<MoveOutDeps['launchNest']>[0]
 

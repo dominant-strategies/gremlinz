@@ -15,6 +15,12 @@ describe('cloud-init', () => {
     expect(y).toContain('passwd, -l, root')
     expect(y).toContain('authorized_keys')
   })
+  it('has the host patch itself: daily unattended security upgrades, rebooting at night when needed', () => {
+    const y = renderCloudInit({ launch, image })
+    expect(y).toContain('packages: [docker.io, unattended-upgrades]')
+    expect(y).toContain('APT::Periodic::Unattended-Upgrade "1";')
+    expect(y).toContain('Unattended-Upgrade::Automatic-Reboot "true";')
+  })
   it('embeds launch data safely in single quotes', () => {
     expect(renderCloudInit({ launch, image })).toContain(`"launchId":"it''s-1"`)
   })

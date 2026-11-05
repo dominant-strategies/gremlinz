@@ -16,7 +16,10 @@ unpatched Node 22 and must not be used for new eggs.
 2. Extract the bundle from that exact image:
    `docker run --rm --platform linux/amd64 --entrypoint tar <image@digest> -czf - -C /app . > release/gremlin-linux-amd64.tgz`, then `shasum -a 256`.
 3. `gh release create egg-vX.Y.Z release/gremlin-linux-amd64.tgz release/gremlin-linux-amd64.tgz.sha256 …`
-4. Build the site with `VITE_EGG_IMAGE=<image@digest> VITE_EGG_ARTIFACT_URL=<bundle url> VITE_EGG_ARTIFACT_SHA256=<sha256>`
+4. Add the release to the top of `docs/releases.json` and list every security fix it ships in `fixes` (id, severity,
+   summary). Gremlins read this feed with `security_check`: each fix is a known hole in every older release, and they
+   move_out to the newest image to close it. Push it to main; that is what publishes it.
+5. Build the site with `VITE_EGG_IMAGE=<image@digest> VITE_EGG_ARTIFACT_URL=<bundle url> VITE_EGG_ARTIFACT_SHA256=<sha256>`
    (see `scripts/deploy-site.sh`).
 
 The ghcr.io package must be **public** (Package settings → Change visibility) so egg servers can pull anonymously.

@@ -2,7 +2,8 @@
  * cloud-init user data for an egg server. Browser-safe (pure string building) so the launch page can use it.
  *
  * The server is locked down before the egg starts: SSH is removed, root's password is locked and any
- * provider-injected authorized_keys are deleted. Whoever launched the server keeps only provider-level
+ * provider-injected authorized_keys are deleted. With nobody left to log in, the host patches itself: unattended
+ * security upgrades daily, rebooting at 04:00 when a fix needs it (the egg container restarts with the server). Whoever launched the server keeps only provider-level
  * powers (stop/rebuild/delete), which is why a hatched gremlin moves out to a server under its own keys.
  */
 import type { z } from 'zod'
@@ -24,10 +25,17 @@ export function renderCloudInit(opts: CloudInitOptions): string {
   const launchJson = JSON.stringify({ ...opts.launch, image: opts.image, ...(opts.artifact ? { artifact: opts.artifact } : {}) })
   return `#cloud-config
 package_update: true
-packages: [docker.io]
+packages: [docker.io, unattended-upgrades]
 ssh_pwauth: false
 disable_root: true
 write_files:
+  - path: /etc/apt/apt.conf.d/52gremlin-auto-upgrades
+    permissions: '0644'
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "04:00";
   - path: /etc/gremlin/launch.json
     permissions: '${opts.launch.mode === 'nest' ? '0600' : '0644'}'
     content: '${launchJson.replace(/'/g, "''")}'

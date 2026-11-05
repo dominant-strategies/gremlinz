@@ -115,3 +115,15 @@ export async function moveOutStep(deps: MoveOutDeps, state: MoveOutState): Promi
 
 /** While a move is in flight the old server must not act as the gremlin. */
 export const isQuiet = (s: MoveOutState | undefined) => s?.stage === 'handed-off' || s?.stage === 'moved'
+
+/**
+ * Which build a nest runs. A requested image must come from the repository this server runs: the request is written
+ * by the runtime, which reads untrusted text all day, and a nest receives the seed, so a foreign image could take it.
+ */
+export function nestBuild(req: { image?: string }, image: string | undefined, artifact: { url: string; sha256: string } | undefined) {
+  if (!req.image || req.image === image) return { image, artifact }
+  if (!image || req.image.split('@')[0] !== image.split('@')[0] || !/@sha256:[0-9a-f]{64}$/.test(req.image))
+    throw new Error(`refusing nest image ${req.image}: only digests from ${image?.split('@')[0] ?? 'this server\'s repository'}`)
+  // The release bundle belongs to the old build; the new one's is not known here.
+  return { image: req.image, artifact: undefined }
+}

@@ -6,11 +6,14 @@ import { registerStatusTools } from './tools/status.js'
 import { registerMoveOutTools } from './tools/moveout.js'
 import { registerRegistryTools } from './tools/registry.js'
 import { registerWalletTools } from './tools/wallet.js'
+import { registerSecurityTools, type SecurityDeps } from './tools/security.js'
 
 export interface ServerDeps {
   /** Override for tests and local development (pretend balances). */
   balances?: BalanceReader
   now?: () => number
+  /** Release feed, apt and runtime checks, replaced in tests. */
+  security?: SecurityDeps
 }
 
 export function createServer(deps: ServerDeps = {}): McpServer {
@@ -21,5 +24,6 @@ export function createServer(deps: ServerDeps = {}): McpServer {
   registerMoveOutTools(server, deps.now)
   registerRegistryTools(server)
   registerWalletTools(server)
+  registerSecurityTools(server, { now: deps.now, ...deps.security })
   return server
 }

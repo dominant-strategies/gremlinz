@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { SigningKey, Wallet, hexlify, randomBytes } from 'ethers'
 import { detachCiphertext, signMessage, type Handoff, type HandoffWire, type NestAnnouncement, type Signed } from '@gremlins/hatch'
 import { generatePhrase, keysFromPhrase } from '../src/keys.js'
-import { moveOutStep, startMoveOut, type MoveOutDeps, type NestLaunchRequest } from '../src/moveout.js'
+import { moveOutStep, nestBuild, startMoveOut, type MoveOutDeps, type NestLaunchRequest } from '../src/moveout.js'
 import { nestStep, type NestDeps, type NestState } from '../src/nest.js'
 import type { Payload } from '../src/payload.js'
 
@@ -152,5 +152,22 @@ describe('quiet during a move', () => {
     expect(isQuiet({ ...base, stage: 'handed-off' })).toBe(true) // no pulses → the board can't mark the nest occupied early
     expect(isQuiet({ ...base, stage: 'moved' })).toBe(true)
     expect(isQuiet({ ...base, stage: 'reverted' })).toBe(false)
+  })
+})
+
+describe('nestBuild', () => {
+  const repo = 'ghcr.io/dominant-strategies/gremlinz-egg'
+  const old = `${repo}@sha256:${'a'.repeat(64)}`
+  const artifact = { url: 'https://example.com/b.tgz', sha256: 'f'.repeat(64) }
+  it('carries this server\'s build forward by default', () => {
+    expect(nestBuild({}, old, artifact)).toEqual({ image: old, artifact })
+  })
+  it('moves to a newer image from the same repository, dropping the old bundle', () => {
+    const next = `${repo}@sha256:${'b'.repeat(64)}`
+    expect(nestBuild({ image: next }, old, artifact)).toEqual({ image: next, artifact: undefined })
+  })
+  it('refuses images from any other repository, since the nest receives the seed', () => {
+    expect(() => nestBuild({ image: `evil.example/egg@sha256:${'b'.repeat(64)}` }, old, artifact)).toThrow(/refusing/)
+    expect(() => nestBuild({ image: `${repo}:latest` }, old, artifact)).toThrow(/refusing/)
   })
 })
