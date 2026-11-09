@@ -165,6 +165,19 @@ Advanced makers can configure the harness and pick skills; anyone can write skil
 - **Authors can earn:** optional per-use or per-install fees to the author in QUAI (2% burn applies to game actions only).
 - **Local development:** authors build and test skills against the local agent path (M6) before publishing.
 
+## Required before launch
+
+- **Multiparty hatch key (2-of-2).** Nobody may keep control of a gremlin's hosting account. Today the Fluence hosting key
+  is derived from the maker's signature (`deriveEggKey`), so the maker can always re-derive it. Interim plan: a backend
+  hatch process generates the account key (on Fluence the paying wallet *is* the account: x402 + SIWE), the maker funds
+  its address, the backend launches the VM, seals the key to the new egg (the gremlin then owns and renews its own
+  hosting) and deletes its copy; its signer sits behind a small interface. Before launch that signer becomes 2-of-2
+  multiparty ECDSA (browser shard + backend shard, e.g. DKLs23): the key is never reconstructed until both shards are
+  sealed to the egg, so neither the maker nor we can take control alone. Precondition for any version: confirm Fluence
+  session lifetime, whether a session can mint long-lived API keys, and that the owner can list and revoke them.
+- **End dev mode.** During development every hatched gremlin is a dev gremlin (launch data `dev`: the team keeps SSH
+  access). Unset `VITE_EGG_DEV_SSH_KEYS` on the production build before launch.
+
 ## Open items
 
 - **SporeStack requires $100 for a brand-new token's first deposit** (anti-abuse; later top-ups can be $5). Launch page:
