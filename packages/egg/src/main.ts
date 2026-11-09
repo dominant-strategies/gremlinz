@@ -60,10 +60,11 @@ async function runNest(nl: NestLaunchData) {
     now: () => new Date(),
     restore: async (p: Parameters<typeof restorePayload>[0]) => {
       await restorePayload(p, { gremlinHome: home, runtimeDir })
-      // The moved launch data names the old server's build; this server's is what it runs now (maybe a newer release).
+      // The moved launch data names the old server's build and access; this server's are what apply now (maybe a newer
+      // release; dev access carries over because the egg passed it on).
       const moved = join(home, 'launch.json')
       const old = readJson<Record<string, unknown>>(moved)
-      if (old) writeJson(moved, { ...old, image: nl.image, artifact: nl.artifact })
+      if (old) writeJson(moved, { ...old, image: nl.image, artifact: nl.artifact, dev: nl.dev })
     },
   }
   const statePath = join(home, 'nest-state.json')
@@ -165,7 +166,7 @@ async function runEgg() {
       // Nests carry their build forward so they can move again later: this server's, or a newer release of it that the
       // gremlin asked for (how it picks up fixes that need a new image).
       const { image, artifact } = nestBuild(req, el.image, el.artifact)
-      return launchNestOnSporeStack(req, { ...nest, image, artifact }, image, artifact)
+      return launchNestOnSporeStack(req, { ...nest, image, artifact, dev: el.dev }, image, artifact)
     },
     stopRuntime,
     startRuntime: () => { paused = false; nextStartAt = 0; startRuntime() },

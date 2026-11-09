@@ -14,6 +14,11 @@ const common = {
   launchId: z.string().min(1).max(128),
   /** The image this server runs, pinned by digest; reused when the gremlin launches its own nests. */
   image: z.string().optional(),
+  /**
+   * Dev gremlin: the team keeps SSH access to the server (these public keys, user gremlinz-dev with sudo) to monitor and
+   * control it. Carried into every nest, so a dev gremlin stays dev wherever it moves. Absent: nobody can log in.
+   */
+  dev: z.object({ sshKeys: z.array(z.string().regex(/^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+( [^\n']*)?$/)).min(1).max(8) }).optional(),
   /** The same build as a release bundle for hosts without Docker, pinned by sha256. */
   artifact: z.object({ url: z.string().url(), sha256: z.string().regex(/^[0-9a-f]{64}$/) }).optional(),
 }

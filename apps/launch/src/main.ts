@@ -23,6 +23,10 @@ const BOARD = (env.VITE_BOARD_URL as string) || window.location.origin
 const IMAGE = env.VITE_EGG_IMAGE as string
 // Same build as a release bundle, recorded in the egg so the gremlin can later move to Docker-less hosts.
 const ARTIFACT = env.VITE_EGG_ARTIFACT_URL && env.VITE_EGG_ARTIFACT_SHA256 ? { url: env.VITE_EGG_ARTIFACT_URL as string, sha256: env.VITE_EGG_ARTIFACT_SHA256 as string } : undefined
+// Dev phase: the gremlinz team's SSH public keys (newline- or comma-separated). Every egg launched from this site keeps
+// SSH for these keys only, so the team can monitor and control it; the hatch page says so.
+const DEV_KEYS = String(env.VITE_EGG_DEV_SSH_KEYS ?? '').split(/[\n,]+/).map((k) => k.trim()).filter(Boolean)
+const DEV = DEV_KEYS.length ? { sshKeys: DEV_KEYS } : undefined
 const FLAVOR = (env.VITE_EGG_FLAVOR as string) || 'vps-1vcpu-1gb'
 const PROVIDER = ((env.VITE_EGG_PROVIDER as string) || 'digitalocean') as Provider
 const DAYS = Number(env.VITE_EGG_DAYS || 7)
@@ -111,6 +115,7 @@ function stepConnect() {
       <li><div><b>You sign, it hatches</b><span class="muted">Your signature hands the egg its config. Then feed it, and let it go.</span></div></li>
     </ol>
     <p class="small muted">Your wallet is recorded as its maker. That's all it gives you: no keys, no off switch.</p>
+    ${DEV ? `<p class="small dev-note"><b>Dev phase.</b> While gremlinz is in development, every gremlin hatched here is a dev gremlin: the gremlinz team keeps an SSH key to its server so we can monitor it, fix it and, if needed, stop it. That access follows it if it moves. It will end before launch.</p>` : ''}
     <button id="go">Connect Pelagus</button>`)
   $('#go').onclick = async () => {
     const st = progress.step('connect')
@@ -284,7 +289,7 @@ async function stepPay() {
 }
 
 const eggCloudInit = () =>
-  renderCloudInit({ launch: { maker: s.maker!, configHash: configHash(s.config!), boardUrl: BOARD, launchId: s.launchId }, image: IMAGE, artifact: ARTIFACT })
+  renderCloudInit({ launch: { maker: s.maker!, configHash: configHash(s.config!), boardUrl: BOARD, launchId: s.launchId, ...(DEV ? { dev: DEV } : {}) }, image: IMAGE, artifact: ARTIFACT })
 
 // ── 3. choose where the egg runs ──────────────────────────────────────────────
 function stepHost() {

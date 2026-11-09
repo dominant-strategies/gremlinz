@@ -11,3 +11,5 @@ release/
 .shots/
 .debug-gremlin/
 .docker-gremlin/
+# Production-only build settings (egg image, dev keys), kept on the server
+apps/launch/.env.production

@@ -34,6 +34,8 @@ export interface NestLaunchRequest {
   mode: 'nest'
   image?: string
   artifact?: { url: string; sha256: string }
+  /** Dev gremlins carry the team's access to every new home (launch data `dev`). */
+  dev?: { sshKeys: string[] }
   forGremlin: string
   nestSecret: string
   boardUrl: string

@@ -37,6 +37,7 @@
     .eco:not([hidden]) { display: grid; gap: 14px; margin-top: 8px; padding-top: 14px; border-top: 1.5px dashed var(--line); }
     .choice label a { white-space: nowrap; }
     .row2 { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    .dev-note { border: 1.5px solid var(--spark); background: color-mix(in srgb, var(--spark) 12%, transparent); border-radius: 12px; padding: 10px 12px; }
     .intro { list-style: none; counter-reset: s; padding: 0; margin: 20px 0 26px; display: grid; gap: 14px; }
     .intro li { counter-increment: s; display: grid; grid-template-columns: 36px 1fr; gap: 12px; align-items: start; }
     .intro li::before { content: counter(s); display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 1.5px solid var(--ink); font: 800 15px var(--display); background: var(--field); }
