@@ -173,8 +173,12 @@ Advanced makers can configure the harness and pick skills; anyone can write skil
   its address, the backend launches the VM, seals the key to the new egg (the gremlin then owns and renews its own
   hosting) and deletes its copy; its signer sits behind a small interface. Before launch that signer becomes 2-of-2
   multiparty ECDSA (browser shard + backend shard, e.g. DKLs23): the key is never reconstructed until both shards are
-  sealed to the egg, so neither the maker nor we can take control alone. Precondition for any version: confirm Fluence
-  session lifetime, whether a session can mint long-lived API keys, and that the owner can list and revoke them.
+  sealed to the egg, so neither the maker nor we can take control alone. Checked 2026-11-09: a SIWE session can mint
+  API keys (`POST /v3/api-keys`) and replace a VM's SSH keys (`PUT /v3/vms/{id}/ssh-keys`); the owner can list and
+  delete API keys, so the gremlin wipes them on first boot. Access tokens last 2 hours, but sign-in also returns an
+  opaque refresh token whose lifetime and revocation are undocumented, and it goes to whoever sends the request (even
+  with 2-of-2 signing). Ask Fluence: refresh-token lifetime, rotation, and a revoke-all-sessions call. Without one,
+  the launcher keeps a back door.
 - **End dev mode.** During development every hatched gremlin is a dev gremlin (launch data `dev`: the team keeps SSH
   access). Unset `VITE_EGG_DEV_SSH_KEYS` on the production build before launch.
 
