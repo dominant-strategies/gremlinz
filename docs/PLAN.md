@@ -173,12 +173,18 @@ Advanced makers can configure the harness and pick skills; anyone can write skil
   its address, the backend launches the VM, seals the key to the new egg (the gremlin then owns and renews its own
   hosting) and deletes its copy; its signer sits behind a small interface. Before launch that signer becomes 2-of-2
   multiparty ECDSA (browser shard + backend shard, e.g. DKLs23): the key is never reconstructed until both shards are
-  sealed to the egg, so neither the maker nor we can take control alone. Checked 2026-11-09: a SIWE session can mint
-  API keys (`POST /v3/api-keys`) and replace a VM's SSH keys (`PUT /v3/vms/{id}/ssh-keys`); the owner can list and
-  delete API keys, so the gremlin wipes them on first boot. Access tokens last 2 hours, but sign-in also returns an
-  opaque refresh token whose lifetime and revocation are undocumented, and it goes to whoever sends the request (even
-  with 2-of-2 signing). Ask Fluence: refresh-token lifetime, rotation, and a revoke-all-sessions call. Without one,
-  the launcher keeps a back door.
+  sealed to the egg, so neither the maker nor we can take control alone.
+  Fluence sessions (checked 2026-11-09 against its API spec and x402 guide, plus a live sign-in):
+  - Sign-in returns a refresh token, but "the public API has no endpoint that accepts it": not a back door.
+  - The access token lasts 2 hours (measured) and cannot be revoked. Whoever sends the sign-in request holds it, even
+    with 2-of-2 signing. In that window it can mint API keys (`POST /v3/api-keys`), replace the VM's SSH keys
+    (`PUT /v3/vms/{id}/ssh-keys`, applied on restart), terminate or create VMs (spending the balance), and mint a VM
+    access token (`POST /v3/vms/{id}/vm-api-access-token`, an "attach" JWT: almost certainly a serial console).
+  - The owner can list and delete API keys (`GET`/`DELETE /v3/api-keys`), list its VMs and SSH keys.
+  So the gremlin cleans up twice, at first boot and again after the 2-hour window: delete every API key, terminate any
+  VM that isn't itself, and clear SSH keys. Cloud-init also closes the console path: no getty on the serial console,
+  locked boot menu (no recovery entry, a random GRUB password nobody keeps). To verify on the first funded Fluence
+  hatch: the attach token's lifetime and what attaching gives.
 - **End dev mode.** During development every hatched gremlin is a dev gremlin (launch data `dev`: the team keeps SSH
   access). Unset `VITE_EGG_DEV_SSH_KEYS` on the production build before launch.
 
