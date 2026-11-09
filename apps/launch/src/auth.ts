@@ -221,49 +221,58 @@ function chooseWallet(opts: { title: string; note: string; only?: WalletKind[] }
     dlg.addEventListener('click', (e) => { if (e.target === dlg) finish() }) // backdrop
 
     let busy = false
-    for (const w of WALLETS.filter((w) => !opts.only || opts.only.includes(w.kind))) {
-      const installed = w.kind === 'walletconnect' || !!w.provider()
-      const state = w.kind === 'walletconnect' ? 'QR code' : installed ? 'Detected' : mobile && w.kind !== 'pelagus' ? 'Open app' : 'Install'
-      const text = h('span', { class: 'wallet-text' }, h('b', {}, w.name), h('span', {}, w.blurb))
-      const tag = h('span', { class: `wallet-tag${installed && w.kind !== 'walletconnect' ? ' on' : ''}` }, state)
-      if (!installed && w.get) {
-        list.append(h('a', { class: 'wallet-row', href: w.get(), target: '_blank', rel: 'noopener' }, walletIcon(w.kind), text, tag))
-        continue
-      }
-      const row = h('button', { type: 'button', class: 'wallet-row' }, walletIcon(w.kind), text, tag)
-      if (w.kind === 'walletconnect') {
-        const warm = () => void import('./wallets.js').then((m) => m.prepareWalletConnect()).catch(() => {})
-        row.addEventListener('pointerenter', warm, { once: true })
-        row.addEventListener('focus', warm, { once: true })
-      }
-      row.onclick = async () => {
-        if (busy) return
-        busy = true
-        list.classList.add('busy')
-        row.classList.add('waiting')
-        status.classList.remove('error')
-        status.textContent = w.kind === 'walletconnect' ? 'Opening WalletConnect…' : `Approve the connection in ${w.name}…`
-        try {
-          // AppKit draws its own modal; ours sits in the top layer and would cover it, so it steps aside once that's up.
-          const { address } = w.kind === 'walletconnect'
-            ? await (await import('./wallets.js')).connectWalletConnect(() => dlg.close())
-            : await connectWallet(w.kind)
-          finish({ address, kind: w.kind })
-        } catch (e) {
-          // Closing the QR code just brings this dialog back; anything else gets said.
-          const closedQr = w.kind === 'walletconnect' && (e as { code?: number }).code === 4001
-          // Reopen on the next task: the Escape that closed the QR code would otherwise close this dialog too.
-          if (w.kind === 'walletconnect' && !dlg.open) await new Promise((r) => setTimeout(r)).then(() => !settled && dlg.showModal())
-          status.textContent = closedQr ? '' : walletErrorMessage(e)
-          status.classList.toggle('error', !closedQr)
-        } finally {
-          busy = false
-          list.classList.remove('busy')
-          row.classList.remove('waiting')
+    const renderRows = () => {
+      list.replaceChildren()
+      for (const w of WALLETS.filter((w) => !opts.only || opts.only.includes(w.kind))) {
+        const installed = w.kind === 'walletconnect' || !!w.provider()
+        const state = w.kind === 'walletconnect' ? 'QR code' : installed ? 'Detected' : mobile && w.kind !== 'pelagus' ? 'Open app' : 'Install'
+        const text = h('span', { class: 'wallet-text' }, h('b', {}, w.name), h('span', {}, w.blurb))
+        const tag = h('span', { class: `wallet-tag${installed && w.kind !== 'walletconnect' ? ' on' : ''}` }, state)
+        if (!installed && w.get) {
+          list.append(h('a', { class: 'wallet-row', href: w.get(), target: '_blank', rel: 'noopener' }, walletIcon(w.kind), text, tag))
+          continue
         }
+        const row = h('button', { type: 'button', class: 'wallet-row' }, walletIcon(w.kind), text, tag)
+        if (w.kind === 'walletconnect') {
+          const warm = () => void import('./wallets.js').then((m) => m.prepareWalletConnect()).catch(() => {})
+          row.addEventListener('pointerenter', warm, { once: true })
+          row.addEventListener('focus', warm, { once: true })
+        }
+        row.onclick = async () => {
+          if (busy) return
+          busy = true
+          list.classList.add('busy')
+          row.classList.add('waiting')
+          status.classList.remove('error')
+          status.textContent = w.kind === 'walletconnect' ? 'Opening WalletConnect…' : `Approve the connection in ${w.name}…`
+          try {
+            // AppKit draws its own modal; ours sits in the top layer and would cover it, so it steps aside once that's up.
+            const { address } = w.kind === 'walletconnect'
+              ? await (await import('./wallets.js')).connectWalletConnect(() => dlg.close())
+              : await connectWallet(w.kind)
+            finish({ address, kind: w.kind })
+          } catch (e) {
+            // Closing the QR code just brings this dialog back; anything else gets said.
+            const closedQr = w.kind === 'walletconnect' && (e as { code?: number }).code === 4001
+            // Reopen on the next task: the Escape that closed the QR code would otherwise close this dialog too.
+            if (w.kind === 'walletconnect' && !dlg.open) await new Promise((r) => setTimeout(r)).then(() => !settled && dlg.showModal())
+            status.textContent = closedQr ? '' : walletErrorMessage(e)
+            status.classList.toggle('error', !closedQr)
+          } finally {
+            busy = false
+            list.classList.remove('busy')
+            row.classList.remove('waiting')
+          }
+        }
+        list.append(row)
       }
-      list.append(row)
     }
+    renderRows()
+    // A wallet that announces itself after the dialog opened moves from "Install" to "Detected" (not mid-connection).
+    const recheck = () => { if (!busy && !settled) renderRows() }
+    window.addEventListener('gremlins:wallets', recheck)
+    dlg.addEventListener('close', () => { if (settled) window.removeEventListener('gremlins:wallets', recheck) })
+    void import('./wallets.js').then((m) => m.requestWallets())
     document.body.append(dlg)
     open = dlg
     dlg.showModal()

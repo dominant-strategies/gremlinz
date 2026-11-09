@@ -10,15 +10,20 @@ export interface Eip1193 {
 }
 
 interface Announced { info: { rdns: string; name: string; icon?: string }; provider: Eip1193 }
-type Injected = Eip1193 & { isMetaMask?: boolean; isPhantom?: boolean; isRabby?: boolean; isBraveWallet?: boolean; providers?: Injected[] }
+type Injected = Eip1193 & { isMetaMask?: boolean; isPhantom?: boolean; isRabby?: boolean; isBraveWallet?: boolean; isSelectingExtension?: boolean; providers?: Injected[] }
 
 const WALLETCONNECT_PROJECT_ID = (import.meta.env.VITE_WALLETCONNECT_PROJECT_ID as string) || '8921b9d59bb62e0dc9c063fc6babac22'
 
 const announced = new Map<string, Announced>()
 window.addEventListener('eip6963:announceProvider', (e) => {
   const d = (e as CustomEvent<Announced>).detail
-  if (d?.info?.rdns && d.provider) announced.set(d.info.rdns, d)
+  if (!d?.info?.rdns || !d.provider || announced.get(d.info.rdns)?.provider === d.provider) return
+  announced.set(d.info.rdns, d)
+  // Wallets can announce well after the page loads (Phantom: up to ~2 s); an open sign-in dialog re-checks.
+  window.dispatchEvent(new Event('gremlins:wallets'))
 })
+/** Asks every installed wallet to announce itself again (cheap; each answers once per request). */
+export const requestWallets = () => window.dispatchEvent(new Event('eip6963:requestProvider'))
 window.dispatchEvent(new Event('eip6963:requestProvider'))
 
 /** Injected globals, read without redeclaring window types (wallet libraries declare them differently). */
@@ -30,9 +35,12 @@ export const pelagus = (): Eip1193 | undefined => globals().pelagus ?? byName(/p
 export function metamask(): Eip1193 | undefined {
   const a = announced.get('io.metamask') ?? announced.get('io.metamask.flask')
   if (a) return a.provider
-  // Without EIP-6963, other wallets also set isMetaMask on window.ethereum; only trust it when nobody else claims it.
+  // MetaMask has announced itself through EIP-6963 since 2023, so if other wallets announced and it didn't, it isn't
+  // here: whatever claims isMetaMask on window.ethereum is an impostor (Phantom's MetaMask lookalike, for one). Only a
+  // browser with no announcing wallets at all falls back to the old flags.
+  if (announced.size) return undefined
   const eth = globals().ethereum
-  const real = (p?: Injected) => p?.isMetaMask && !p.isPhantom && !p.isRabby && !p.isBraveWallet
+  const real = (p?: Injected) => p?.isMetaMask && !p.isPhantom && !p.isRabby && !p.isBraveWallet && !p.isSelectingExtension
   return eth?.providers?.find(real) ?? (real(eth) ? eth : undefined)
 }
 
