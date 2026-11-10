@@ -10,6 +10,7 @@
 //   node scripts/docker-gremlin.mjs wake --name kiln     # run its wake-up job now (as the gremlin user)
 //   node scripts/docker-gremlin.mjs check --name kiln    # main agent, helper and sandbox checks
 //   node scripts/docker-gremlin.mjs logs --name kiln | stop --name kiln | list
+//   node scripts/docker-gremlin.mjs up                   # after a Mac/VM restart or a new image: every gremlin back, sandboxed
 //
 // Networking (Colima): the Mac is 192.168.5.2 from inside the VM, which reaches the board (:8787) and Ollama (:11434)
 // on the Mac's loopback. Pretend funds are only honoured for a board on localhost, so a tiny forwarder in the
@@ -22,7 +23,7 @@
 // its users (no network admin, so nothing inside can touch the network), and pid, memory and CPU caps. Inside the
 // box the gremlin's main agent has sudo; the box is the limit, not the gremlin's permissions.
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { Wallet } from 'ethers'
 import { configHash, signConfig } from '../packages/hatch/dist/index.js'
@@ -204,7 +205,23 @@ function check() {
 
 function list() { console.log(running().join('\n') || 'no gremlins running') }
 
-const commands = { init, start, wake, check, logs, stop, list }
+/**
+ * Bring every local gremlin back (after the Mac or the VM restarted, or to move them to a new image): reapply the
+ * sandbox, keep the Mac awake, and recreate each container from the current image (their volumes keep them who
+ * they are). Containers have no restart policy on purpose: Docker would start them at VM boot before the sandbox
+ * filter is back, so they come back only through here (fail closed).
+ */
+function up() {
+  const names = existsSync(BASE) ? readdirSync(BASE).filter((n) => existsSync(join(BASE, n, 'launch.json'))) : []
+  if (!names.length) return console.log('no gremlins initialized')
+  const pass = ['image', 'model'].flatMap((k) => (arg(k) ? [`--${k}`, arg(k)] : []))
+  for (const n of names) {
+    const r = spawnSync(process.execPath, [import.meta.filename, 'start', '--name', n, ...pass], { stdio: 'inherit' })
+    if (r.status !== 0) console.error(`${n}: start failed (${r.status})`)
+  }
+}
+
+const commands = { init, start, wake, check, logs, stop, list, up }
 const cmd = process.argv[2]
-if (!commands[cmd]) { console.log('usage: docker-gremlin.mjs init | start | wake | check | logs | stop | list  [--name <gremlin>]'); process.exit(1) }
+if (!commands[cmd]) { console.log('usage: docker-gremlin.mjs init | start | wake | check | logs | stop | list | up  [--name <gremlin>]'); process.exit(1) }
 await commands[cmd]()

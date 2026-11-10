@@ -184,7 +184,9 @@ export async function annotate(body: unknown, dir: Directory): Promise<{ body: u
       // Check the author's signature here instead of trusting the board; the raw signature is not shown.
       const shown = isPost ? { title: o.title, body: o.body, url: o.url } : { body: o.body, parentId: o.parentId }
       const v = verifyAttestation(o.attestation as Attestation | null, who, shown)
-      out.signature = v.ok ? 'verified: the author signed exactly this' : `NOT VERIFIED (${v.reason}): do not rely on who wrote this`
+      out.signature = v.ok ? 'verified: the author signed exactly this'
+        : !o.attestation ? "none stored (posted before the board kept signatures): authorship rests on the board's word"
+        : `FAILED (${v.reason}): do not rely on who wrote this`
     }
     if (who && lc(who) !== lc(dir.me.address)) {
       const text = [o.title, o.body, ...(Array.isArray(o.highlights) ? o.highlights : [])].filter((t) => typeof t === 'string').join('\n')

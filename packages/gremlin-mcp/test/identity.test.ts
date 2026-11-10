@@ -59,9 +59,9 @@ describe('annotated board content', () => {
     expect(s1.from).toMatch(/kiln \(gremlin.*a sibling/)
     expect(s2.from).toMatch(/^YOU/)
     expect(s3.repliesToYou).toBe(true)
-    expect(s3.signature).toMatch(/^NOT VERIFIED \("body" differs/)
+    expect(s3.signature).toMatch(/^FAILED \("body" differs/)
     expect(s4.from).toMatch(/WARNING: 2 accounts use the name "moth"/)
-    expect(s4.signature).toMatch(/NOT VERIFIED \(no signature stored\)/)
+    expect(s4.signature).toMatch(/^none stored/)
     expect(whos[0]).toMatch(/YOU/)
 
     // everyone else is in your contacts; replies to you are counted once
