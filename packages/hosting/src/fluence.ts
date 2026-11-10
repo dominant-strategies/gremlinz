@@ -10,7 +10,7 @@ import { wrapFetchWithPaymentFromConfig } from '@x402/fetch'
 import { ExactEvmScheme } from '@x402/evm'
 import { createSiweMessage } from 'viem/siwe'
 import { keccak256, type Hex } from 'viem'
-import type { HostingSigner } from './signer.js'
+import type { HostingSigner, TypedDataToSign } from './signer.js'
 
 export const FLUENCE_API = 'https://api.fluence.dev'
 export const FLUENCE_MIN_TOPUP_USD = 10
@@ -52,6 +52,33 @@ export interface Estimate {
   monthlyTotal: string
 }
 
+/** x402 answered 409: the payment is held for review. Never pay again for it; wait for the credit or a human. */
+export class TopUpUnderReview extends Error {
+  constructor() {
+    super('Fluence says the payment is under review; do not pay again')
+  }
+}
+
+/** The payment a top-up is about to sign: EIP-3009 (nonce, validBefore) or Permit2 (nonce, deadline). */
+export interface TopUpAuthorization {
+  primaryType: string
+  nonce: string
+  /** Unix seconds after which the signed authorization can no longer settle. */
+  validBefore: number
+  value?: string
+}
+
+export function authorizationOf(td: TypedDataToSign): TopUpAuthorization {
+  const m = td.message as Record<string, unknown>
+  const str = (v: unknown) => (v === undefined || v === null ? undefined : String(v))
+  return {
+    primaryType: td.primaryType,
+    nonce: str(m.nonce) ?? '',
+    validBefore: Number(str(m.validBefore) ?? str(m.deadline) ?? 0),
+    value: str(m.value) ?? str((m.permitted as Record<string, unknown> | undefined)?.amount),
+  }
+}
+
 export function fluence(opts: { signer: HostingSigner; baseUrl?: string; fetchImpl?: typeof fetch }) {
   const base = opts.baseUrl ?? FLUENCE_API
   const f = opts.fetchImpl ?? fetch
@@ -73,18 +100,32 @@ export function fluence(opts: { signer: HostingSigner; baseUrl?: string; fetchIm
   return {
     address: account.address,
 
-    /** Pay `amountUsd` USDC on Base via x402 and credit this wallet's Fluence account (created on first payment). */
-    async topUp(amountUsd: number): Promise<{ transaction: string; amountUsd: string }> {
+    /**
+     * Pay `amountUsd` USDC on Base via x402 and credit this wallet's Fluence account (created on first payment).
+     * `onAuthorization` sees the payment authorization before it is signed: persist it, and a crash mid-payment can be
+     * resolved later (USDC `authorizationState(from, nonce)`, or wait out `validBefore`) instead of paying twice.
+     */
+    async topUp(amountUsd: number, o: { onAuthorization?: (a: TopUpAuthorization) => void | Promise<void> } = {}): Promise<{ transaction: string; amountUsd: string }> {
       if (amountUsd < FLUENCE_MIN_TOPUP_USD) throw new Error(`Fluence top-ups start at $${FLUENCE_MIN_TOPUP_USD}`)
+      const signTypedData = async (td: TypedDataToSign) => {
+        await o.onAuthorization?.(authorizationOf(td))
+        return account.signTypedData(td)
+      }
       const pay = wrapFetchWithPaymentFromConfig(f, {
-        schemes: [{ network: 'eip155:8453', client: new ExactEvmScheme({ address: account.address, signTypedData: (td) => account.signTypedData(td) }) }],
+        schemes: [{ network: 'eip155:8453', client: new ExactEvmScheme({ address: account.address, signTypedData }) }],
         spendControls: { maxAmountPerPayment: `$${amountUsd}` },
       } as never)
       const res = await pay(`${base}/v2/x402/top-up?amountUsd=${amountUsd.toFixed(2)}`, { method: 'POST' })
       const body = await res.json().catch(() => ({}))
-      if (res.status === 409) throw new Error('Fluence says the payment is under review; do not pay again')
+      if (res.status === 409) throw new TopUpUnderReview()
       if (!res.ok) throw new Error(`Fluence top-up failed (${res.status}): ${JSON.stringify(body).slice(0, 200)}`)
       return body
+    },
+
+    /** Lifetime deposits on this account (decimal strings summed). Above zero once any top-up was credited. */
+    async totalDeposited(): Promise<number> {
+      const { items } = await call<{ items: { totalDepositedAmount: string }[] }>('GET', '/v3/account/balances')
+      return items.reduce((a, i) => a + (Number(i.totalDepositedAmount) || 0), 0)
     },
 
     /** Sign-In with Ethereum (domain must be api.fluence.dev). */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Wallet, hexlify, toUtf8Bytes, verifyMessage } from 'ethers'
-import { EGG_KEY_MESSAGE, deriveEggKey, eggVmName, fluence } from '../src/fluence.js'
+import { EGG_KEY_MESSAGE, TopUpUnderReview, deriveEggKey, eggVmName, fluence } from '../src/fluence.js'
 import { localSigner } from '../src/signer.js'
 
 /** Fake Fluence API: SIWE login, resources, prices, images and VM creation. */
@@ -82,6 +82,31 @@ describe('fluence egg hosting', () => {
   it('refuses top-ups below the minimum before touching the network', async () => {
     const fl = fluence({ signer: localSigner(Wallet.createRandom().privateKey as `0x${string}`), fetchImpl: (() => { throw new Error('no network') }) as never })
     await expect(fl.topUp(5)).rejects.toThrow(/start at \$10/)
+  })
+
+  it('hands the payment authorization to the caller before signing it, and turns 409 into TopUpUnderReview', async () => {
+    const x402 = (settle: number) => (async (input: Request) => {
+      if (!input.headers.get('payment-signature')) {
+        const req = { x402Version: 2, resource: { url: input.url, description: 'top-up', mimeType: 'application/json' }, accepts: [{
+          scheme: 'exact', network: 'eip155:8453', amount: '10000000', asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+          payTo: '0x000000000000000000000000000000000000dEaD', maxTimeoutSeconds: 300, extra: { name: 'USD Coin', version: '2' },
+        }] }
+        return new Response('{}', { status: 402, headers: { 'PAYMENT-REQUIRED': Buffer.from(JSON.stringify(req)).toString('base64') } })
+      }
+      return new Response(JSON.stringify(settle === 200 ? { transaction: '0xtx', amountUsd: '10.00' } : { error: 'review' }), { status: settle })
+    }) as unknown as typeof fetch
+    const order: string[] = []
+    const inner = localSigner(Wallet.createRandom().privateKey as `0x${string}`)
+    const signer = { ...inner, signTypedData: async (td: any) => { order.push(`sign ${td.primaryType}`); return inner.signTypedData(td) } }
+    const auths: any[] = []
+    const before = Math.floor(Date.now() / 1000)
+    const paid = await fluence({ signer, fetchImpl: x402(200) }).topUp(10, { onAuthorization: async (a) => { order.push('record'); auths.push(a) } })
+    expect(paid.transaction).toBe('0xtx')
+    expect(order).toEqual(['record', 'sign TransferWithAuthorization'])
+    expect(auths[0].nonce).toMatch(/^0x[0-9a-f]{64}$/)
+    expect(auths[0].validBefore).toBeGreaterThanOrEqual(before + 300)
+    expect(auths[0].value).toBe('10000000')
+    await expect(fluence({ signer, fetchImpl: x402(409) }).topUp(10)).rejects.toBeInstanceOf(TopUpUnderReview)
   })
 
   it('signs in through the HostingSigner interface only (a personal message from its address)', async () => {
