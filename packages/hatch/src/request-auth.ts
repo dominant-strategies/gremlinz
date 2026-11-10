@@ -11,8 +11,12 @@
  *
  * Headers: x-gremlins-address, x-gremlins-timestamp, x-gremlins-signature.
  * Pure functions here; replay protection (one use per signature) is done by the caller via the store.
+ *
+ * The address is an EOA (the signature recovers to it) or a Quai Smart Wallet Safe, which signs the same payload
+ * through ERC-1271: the `...With` variants take a checker for those (smart-account.ts).
  */
 import { keccak256, toUtf8Bytes, verifyMessage, type Signer } from 'ethers'
+import type { AccountSignatureChecker } from './smart-account.js'
 
 export const AUTH_HEADERS = {
   address: 'x-gremlins-address',
@@ -46,6 +50,16 @@ export function verifySignedRequest(req: {
     return { ok: false, reason: 'malformed signature' }
   }
   if (recovered.toLowerCase() !== address.toLowerCase()) return { ok: false, reason: 'signature does not match address' }
+  return { ok: true, address: address.toLowerCase() }
+}
+
+/** verifySignedRequest, also accepting smart-account (ERC-1271) signatures when `accounts` is given. */
+export async function verifySignedRequestWith(req: Parameters<typeof verifySignedRequest>[0], accounts?: AccountSignatureChecker): Promise<AuthResult> {
+  const r = verifySignedRequest(req)
+  if (r.ok || !accounts || (r.reason !== 'malformed signature' && r.reason !== 'signature does not match address')) return r
+  const { address, timestamp, signature } = req.headers as { address: string; timestamp: string; signature: string }
+  if (!(await accounts.isValidSignature(address, requestSigningPayload(req.method, req.path, timestamp, req.body), signature)))
+    return { ok: false, reason: 'signature does not match address' }
   return { ok: true, address: address.toLowerCase() }
 }
 
@@ -90,6 +104,19 @@ export function verifyAttestation(a: Attestation | null | undefined, author: str
   const signer = attestationSigner(a)
   if (!signer) return { ok: false, reason: 'malformed signature' }
   if (signer.toLowerCase() !== author.toLowerCase()) return { ok: false, reason: `signed by ${signer}, not the author` }
+  return signedShown(a, shown)
+}
+
+/** verifyAttestation, also accepting a smart-account author whose account vouches for the signature (ERC-1271, so as its owners stand now). */
+export async function verifyAttestationWith(a: Attestation | null | undefined, author: string, shown: Record<string, unknown>, accounts?: AccountSignatureChecker): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const r = verifyAttestation(a, author, shown)
+  if (r.ok || !a || !accounts || !/^(malformed signature|signed by )/.test(r.reason)) return r
+  if (!(await accounts.isValidSignature(author, requestSigningPayload(a.method, a.path, a.timestamp, a.body), a.signature))) return r
+  return signedShown(a, shown)
+}
+
+/** The signed body must carry the same fields the board shows (so the board cannot alter text after signing). */
+function signedShown(a: Attestation, shown: Record<string, unknown>): { ok: true } | { ok: false; reason: string } {
   let signed: Record<string, unknown>
   try { signed = JSON.parse(a.body) } catch { return { ok: false, reason: 'signed body is not JSON' } }
   const norm = (x: unknown) => (x === undefined || x === null || x === '' ? null : x) // omitted = empty
