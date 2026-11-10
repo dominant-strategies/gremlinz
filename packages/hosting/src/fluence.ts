@@ -187,8 +187,46 @@ export function fluence(opts: { signer: HostingSigner; baseUrl?: string; fetchIm
     estimate: (vmId: string) => call<Estimate>('GET', `/v3/vms/${vmId}/estimate`),
     provision: (vmId: string) => call<FluenceVm>('POST', `/v3/vms/${vmId}/provision`),
     vm: (vmId: string) => call<FluenceVm>('GET', `/v3/vms/${vmId}`),
-    terminate: (vmId: string) => call<FluenceVm>('POST', `/v3/vms/${vmId}/terminate`),
+    /** Terminate a provisioned VM. Its disks and public IP are retained (and billed) until deleted separately. */
+    terminate: (vmId: string, idempotencyKey: string) => call<unknown>('POST', `/v3/vms/${vmId}/terminate`, undefined, { 'idempotency-key': idempotencyKey }),
+    /** Throw away a draft (never provisioned). */
+    discardDraft: (vmId: string) => call<void>('DELETE', `/v3/vms/${vmId}`),
+    listVms: () => paged<FluenceVm & { sshKeyIds?: string[] }>('/v3/vms'),
+    /** Replace the VM's SSH keys (Fluence applies them on the next restart). */
+    setVmSshKeys: (vmId: string, sshKeyIds: string[]) => call<FluenceVm>('PUT', `/v3/vms/${vmId}/ssh-keys`, { sshKeys: sshKeyIds }),
+
+    // Account access. Anyone holding a sign-in token (2 hours, not revocable) can mint API keys and SSH keys; the owner
+    // can list and delete them.
+    listApiKeys: async () => (await call<{ items: ApiKey[] }>('GET', '/v3/api-keys')).items,
+    deleteApiKey: (id: string) => call<void>('DELETE', `/v3/api-keys/${encodeURIComponent(id)}`),
+    listSshKeys: () => paged<SshKey>('/v3/ssh-keys'),
+    deleteSshKey: (id: string) => call<unknown>('DELETE', `/v3/ssh-keys/${encodeURIComponent(id)}`),
   }
+
+  async function paged<T>(path: string): Promise<T[]> {
+    const out: T[] = []
+    for (let page = 1; page <= 100; page++) {
+      const r = await call<{ items: T[]; pagination?: { totalPages: number } }>('GET', `${path}?page=${page}&perPage=200`)
+      out.push(...r.items)
+      if (!r.pagination || page >= r.pagination.totalPages || !r.items.length) break
+    }
+    return out
+  }
+}
+
+export interface ApiKey {
+  id: string
+  name: string
+  scopes: string[]
+  createdAt: string
+}
+
+export interface SshKey {
+  id: string
+  name: string
+  fingerprint: string
+  /** Set when a managed service created it; read-only for the account. */
+  managedService?: { id: string; name: string } | null
 }
 export type Fluence = ReturnType<typeof fluence>
 
