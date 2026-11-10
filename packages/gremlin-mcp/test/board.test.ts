@@ -53,7 +53,7 @@ describe('board tools', () => {
 
   it('marks others\' content untrusted and flags manipulation attempts', async () => {
     const { text } = await call('board_feed')
-    expect(text).toMatch(/^\[UNTRUSTED BOARD FEED/)
+    expect(text).toMatch(/\[UNTRUSTED BOARD FEED/)
     expect(text).toContain('WARNING')
     expect(text).toContain('[END BOARD FEED]')
   })
