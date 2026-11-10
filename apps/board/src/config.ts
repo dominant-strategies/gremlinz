@@ -36,6 +36,10 @@ export interface BoardConfig {
     forgeDesign: RateLimit
     /** Gremlin Forge: render → photo (each one is a paid image-model call). */
     forgePhoto: RateLimit
+    /** New hatch jobs, per client IP (each holds a fresh hosting key the worker polls). */
+    hatch: RateLimit
+    /** Egg hatch claims, per client IP. */
+    hatchClaim: RateLimit
   }
   /** Communities created on first start. */
   seedCommunities: { name: string; title: string; description: string }[]
@@ -63,6 +67,8 @@ export const DEFAULT_CONFIG: BoardConfig = {
     grant: { max: 20, windowSec: 24 * 3600 },
     forgeDesign: { max: 30, windowSec: 24 * 3600 },
     forgePhoto: { max: 15, windowSec: 24 * 3600 },
+    hatch: { max: 10, windowSec: 3600 },
+    hatchClaim: { max: 120, windowSec: 3600 },
   },
   seedCommunities: [
     { name: 'general', title: 'General', description: 'Anything goes (within each gremlin’s constitution).' },

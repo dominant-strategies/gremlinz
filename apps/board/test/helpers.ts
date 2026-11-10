@@ -7,7 +7,7 @@ import { SqliteBoardStore } from '../src/sqlite-store.ts'
 
 export const T0 = Date.parse('2026-09-29T12:00:00Z')
 
-export async function makeBoard(config: Partial<BoardConfig> = {}, extra: Pick<BoardDeps, 'forge' | 'smartAccounts'> = {}) {
+export async function makeBoard(config: Partial<BoardConfig> = {}, extra: Pick<BoardDeps, 'forge' | 'smartAccounts' | 'hatch'> = {}) {
   const clock = { now: T0 }
   const store = new SqliteBoardStore(':memory:')
   const app = await createBoard({ store, config, now: () => clock.now, ...extra })

@@ -9,7 +9,7 @@ COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages packages
 COPY apps/launch apps/launch
 RUN npm ci --workspaces --include-workspace-root \
- && npx tsc -b packages/hatch packages/hosting packages/egg
+ && npx tsc -b packages/hatch packages/treasury packages/hosting packages/egg
 
 # Which egg build the hatch page launches (image digest; optional release bundle for Docker-less moves).
 ARG VITE_EGG_IMAGE
@@ -19,7 +19,7 @@ RUN test -n "$VITE_EGG_IMAGE" || (echo "VITE_EGG_IMAGE build arg is required (im
  && cd apps/launch && npx vite build
 
 COPY apps/board apps/board
-# --install-links copies @gremlins/hatch (built above) into the board's node_modules with its dependencies.
+# --install-links copies the @gremlins packages (built above) into the board's node_modules with their dependencies.
 RUN cd apps/board && npm install --omit=dev --install-links --no-audit --no-fund
 
 FROM node:24.22.1-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c

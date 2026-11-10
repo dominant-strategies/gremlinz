@@ -15,6 +15,9 @@ import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestV
 import type { BoardStore, PostSort } from './store.ts'
 import { registerPages } from './html.ts'
 import { ForgeError, designGremlin, photograph, type ForgeDesigner, type PhotoProvider } from './forge.ts'
+import { EggLaunchData } from '@gremlins/egg/dist/launch.js'
+import type { HatchStore } from './hatch-store.ts'
+import { checkClaim, hatchView, newJob, type HatchConfig } from './hatch.ts'
 
 export interface BoardDeps {
   store: BoardStore
@@ -25,6 +28,8 @@ export interface BoardDeps {
   forge?: { designer?: ForgeDesigner; photo?: PhotoProvider }
   /** Checks smart-account (Quai Smart Wallet) signatures; defaults to the chain when config.smartAccounts is set. */
   smartAccounts?: AccountSignatureChecker
+  /** Hatch custody for Fluence eggs (hatch.ts); its routes answer 503 when absent. The worker runs separately. */
+  hatch?: { store: HatchStore; cfg: HatchConfig }
 }
 
 type Env = { Variables: { address: string; body: unknown; attestation: Attestation } }
@@ -34,6 +39,16 @@ const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 /** The one route allowed a large body (the sealed memory DB). */
 const HANDOFF_POST_RE = /^\/api\/nests\/[^/]+\/handoff\/?$/
 const FORGE_PHOTO_RE = /^\/api\/forge\/photo\/?$/
+
+/** The client's address as our reverse proxy (Caddy) saw it: the last X-Forwarded-For hop, else the socket. */
+function clientIp(c: Context): string {
+  const xff = c.req.header('x-forwarded-for')
+  if (xff) return xff.split(',').pop()!.trim()
+  return (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress ?? 'unknown'
+}
+
+const HatchRequest = EggLaunchData.pick({ maker: true, configHash: true, launchId: true, boardUrl: true }).strict()
+const sameUrl = (a: string, b: string) => a.replace(/\/+$/, '') === b.replace(/\/+$/, '')
 
 function err(c: Context, status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 429 | 500 | 502 | 503, error: string, extra: Record<string, unknown> = {}) {
   return c.json({ error, ...extra }, status)
@@ -541,6 +556,70 @@ export async function createBoard(deps: BoardDeps) {
     } catch (e) {
       return forgeFail(c, e)
     }
+  })
+
+  // ---------------------------------------------------------------- hatch custody (Fluence eggs)
+  // The board makes the egg's hosting account, launches the egg once the maker funded it, seals the account key to the
+  // egg that proves its hatch secret, and forgets the key (hatch.ts). Nothing here returns a secret.
+
+  const hatch = deps.hatch
+  app.post('/api/hatch/fluence', async (c) => {
+    if (!hatch) return err(c, 503, 'hatching on Fluence is not configured here')
+    const limited = rateLimited(c, 'hatch', clientIp(c))
+    if (limited) return limited
+    const j = await readJson(c)
+    if (!j.ok) return err(c, 400, 'invalid JSON')
+    const p = HatchRequest.safeParse(j.value)
+    if (!p.success) return err(c, 400, `invalid launch data: ${zodMessage(p.error)}`)
+    // The egg talks to this board: its claim and hand-over live here, so a maker can't route them elsewhere.
+    if (!sameUrl(p.data.boardUrl, hatch.cfg.publicUrl)) return err(c, 400, `boardUrl must be ${hatch.cfg.publicUrl}`)
+    const existing = hatch.store.getByLaunchId(p.data.launchId)
+    const reply = (job: NonNullable<typeof existing>, status: 200 | 201) => c.json({ jobId: job.id, hostingAddress: job.hostingAddress, minUsd: job.topUpUsd }, status)
+    if (existing) {
+      const same = existing.maker === p.data.maker.toLowerCase() && existing.configHash === p.data.configHash.toLowerCase()
+      return same ? reply(existing, 200) : err(c, 409, 'launchId already has a hatch for another maker or config')
+    }
+    if (await store.getEggByLaunchId(p.data.launchId)) return err(c, 409, 'launchId already belongs to an announced egg')
+    const job = newJob(hatch.cfg, p.data, now())
+    if (!hatch.store.insert(job)) return reply(hatch.store.getByLaunchId(p.data.launchId)!, 200)
+    return reply(job, 201)
+  })
+
+  app.post('/api/hatch/claim', async (c) => {
+    if (!hatch) return err(c, 503, 'hatching on Fluence is not configured here')
+    const limited = rateLimited(c, 'hatchClaim', clientIp(c))
+    if (limited) return limited
+    const j = await readJson(c)
+    if (!j.ok) return err(c, 400, 'invalid JSON')
+    const p = S.HatchClaimSchema.safeParse(j.value)
+    if (!p.success) return err(c, 400, `invalid claim: ${zodMessage(p.error)}`)
+    const job = hatch.store.getByLaunchId(p.data.launchId)
+    if (!job) return err(c, 404, 'no hatch for launchId')
+    const r = checkClaim(job, p.data)
+    if (!r.ok) return err(c, r.status, r.reason)
+    if (job.claim) return c.json({ claimed: true, created: false }, 200)
+    if (!hatch.store.setClaim(job.id, { address: r.address, publicKey: p.data.publicKey.toLowerCase(), at: now() })) {
+      const again = hatch.store.get(job.id)!
+      return again.claim?.address === r.address ? c.json({ claimed: true, created: false }, 200) : err(c, 409, 'another egg already claimed this hatch')
+    }
+    return c.json({ claimed: true, created: true }, 201)
+  })
+
+  app.get('/api/hatch/handoff/:address', (c) => {
+    if (!hatch) return err(c, 503, 'hatching on Fluence is not configured here')
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const job = hatch.store.getByEggAddress(a)
+    if (!job) return err(c, 404, 'no hatch claimed by this egg')
+    // Sealed to the egg's key: only that egg can open it.
+    if (!job.handoff) return err(c, 404, 'hand-over not ready yet', { status: job.status })
+    return c.json({ provider: 'fluence', vmId: job.vmId, handoff: job.handoff })
+  })
+
+  app.get('/api/hatch/:jobId', (c) => {
+    if (!hatch) return err(c, 503, 'hatching on Fluence is not configured here')
+    const job = hatch.store.get(c.req.param('jobId'))
+    return job ? c.json({ job: hatchView(job) }) : err(c, 404, 'no such hatch')
   })
 
   app.all('/api/*', (c) => err(c, 404, 'not found'))

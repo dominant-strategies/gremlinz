@@ -15,6 +15,11 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       FORGE_PHOTO_PROVIDER: ${FORGE_PHOTO_PROVIDER:-}
       FORGE_PHOTO_MODEL: ${FORGE_PHOTO_MODEL:-}
+      # Hatch custody for Fluence eggs (apps/board/src/hatch-live.ts): on when all three of the first are set.
+      BOARD_HATCH_SECRET: ${BOARD_HATCH_SECRET:-}
+      BOARD_EGG_IMAGE: ${BOARD_EGG_IMAGE:-}
+      BOARD_PUBLIC_URL: ${BOARD_PUBLIC_URL:-}
+      BOARD_EGG_DEV_SSH_KEYS: ${BOARD_EGG_DEV_SSH_KEYS:-}
     expose:
       - "8787"
   caddy:

@@ -59,6 +59,13 @@ export const NestAnnouncementSchema = z.looseObject({
   bootedAt: isoTime,
 })
 
+/** An egg claiming its hosting account (hatch custody): its board key and hatchProof(secret, key, address). */
+export const HatchClaimSchema = z.strictObject({
+  launchId: z.string().min(1).max(128),
+  publicKey: uncompressedKey,
+  proof: bytes32,
+})
+
 export const HandoffSchema = z.looseObject({
   kind: z.literal('handoff'),
   address,
