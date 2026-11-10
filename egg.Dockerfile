@@ -19,6 +19,8 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages packages
 COPY apps/launch/package.json apps/launch/package.json
+# The site workspace's file: dependency (Quai Smart Wallet SDK) must exist for npm ci, even though the egg doesn't use it.
+COPY apps/launch/vendor apps/launch/vendor
 RUN npm ci --workspaces --include-workspace-root \
  && npx tsc -b packages/hatch packages/treasury packages/hosting packages/egg packages/gremlin-mcp \
  && npm prune --omit=dev --workspaces --include-workspace-root
