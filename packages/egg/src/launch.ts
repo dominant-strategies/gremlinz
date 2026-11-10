@@ -27,6 +27,11 @@ export const EggLaunchData = z.object({
   mode: z.literal('egg').default('egg'),
   maker: address,
   configHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  /**
+   * Hatch custody (eggs the hatch backend launched): the secret proves to the backend that this server is the egg it
+   * launched, so it seals the hosting account to this egg and nobody else (see hatch/hosting-handover.ts).
+   */
+  hatch: z.object({ secret: z.string().regex(/^0x[0-9a-fA-F]{64}$/) }).optional(),
   ...common,
 })
 

@@ -6,6 +6,11 @@ const launch = { maker: '0x' + 'ab'.repeat(20), configHash: '0x' + '11'.repeat(3
 const image = 'ghcr.io/gremlins/egg@sha256:' + 'c'.repeat(64)
 
 describe('cloud-init', () => {
+  it('keeps launch data root-only when it carries a hatch secret', () => {
+    const perms = (l: object) => parse(renderCloudInit({ launch: l as typeof launch, image })).write_files.find((f: { path: string }) => f.path === '/etc/gremlin/launch.json').permissions
+    expect(perms(launch)).toBe('0644')
+    expect(perms({ ...launch, hatch: { secret: '0x' + '22'.repeat(32) } })).toBe('0600')
+  })
   it('pins the image by digest and refuses tags', () => {
     expect(renderCloudInit({ launch, image })).toContain(image)
     expect(() => renderCloudInit({ launch, image: 'ghcr.io/gremlins/egg:latest' })).toThrow()

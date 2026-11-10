@@ -155,7 +155,7 @@ ${file('/usr/local/sbin/gremlin-lockdown', '0755', LOCKDOWN_SCRIPT)}${file('/etc
       Unattended-Upgrade::Automatic-Reboot "true";
       Unattended-Upgrade::Automatic-Reboot-Time "04:00";
   - path: /etc/gremlin/launch.json
-    permissions: '${opts.launch.mode === 'nest' ? '0600' : '0644'}'
+    permissions: '${opts.launch.mode === 'nest' || ('hatch' in opts.launch && opts.launch.hatch) ? '0600' : '0644'}'
     content: '${launchJson.replace(/'/g, "''")}'
 runcmd:
 ${lockdown}
