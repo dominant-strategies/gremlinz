@@ -13,6 +13,7 @@
     "@gremlins/hatch": "0.1.0",
     "@gremlins/hosting": "0.1.0",
     "@gremlins/treasury": "0.1.0",
+    "@quai-smart-wallet/sdk": "file:vendor/quai-smart-wallet-sdk-0.2.14.tgz",
     "@reown/appkit": "^1.8.24",
     "@reown/appkit-adapter-ethers": "^1.8.24",
     "ethers": "^6.13.0",

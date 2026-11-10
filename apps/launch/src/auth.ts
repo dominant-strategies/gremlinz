@@ -1,11 +1,13 @@
 /**
- * One sign-in for the whole site. A single "Sign in" button opens one dialog offering Pelagus, MetaMask, Phantom and
- * WalletConnect; the choice is remembered (localStorage, shared by the board, forge and static pages) and every write
- * is a signed request: EIP-191 over `METHOD path\nts\nkeccak(body)`, exactly as gremlins sign.
+ * One sign-in for the whole site. A single "Sign in" button opens one dialog offering Quai Smart Wallet, Pelagus,
+ * MetaMask, Phantom and WalletConnect; the choice is remembered (localStorage, shared by the board, forge and static
+ * pages) and every write is a signed request: EIP-191 over `METHOD path\nts\nkeccak(body)`, exactly as gremlins sign.
+ * A Smart Wallet account is a Safe: its wallet signs the same payload and the board asks the Safe (ERC-1271).
  */
+import { connectSmartWallet, disconnectSmartWallet, prepareSmartWallet, smartWalletAccount, smartWalletSign } from './smart-wallet.js'
 import { announcedIcon, metamask, pelagus, phantom, type Eip1193 } from './wallets.js'
 
-export type WalletKind = 'pelagus' | 'metamask' | 'phantom' | 'walletconnect'
+export type WalletKind = 'smartwallet' | 'pelagus' | 'metamask' | 'phantom' | 'walletconnect'
 export interface Account { address: string; kind: WalletKind }
 
 interface WalletOption {
@@ -21,6 +23,8 @@ const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 const here = () => location.href
 
 const WALLETS: WalletOption[] = [
+  // A popup on the wallet's own site, nothing to install; signs as a Safe, so never for EVM payments.
+  { kind: 'smartwallet', name: 'Quai Smart Wallet', blurb: 'Any wallet, email or X', provider: () => undefined },
   { kind: 'pelagus', name: 'Pelagus', blurb: 'Quai wallet', provider: pelagus, get: () => 'https://pelaguswallet.io' },
   {
     kind: 'metamask', name: 'MetaMask', blurb: 'Browser or app', provider: metamask,
@@ -33,7 +37,9 @@ const WALLETS: WalletOption[] = [
   { kind: 'walletconnect', name: 'WalletConnect', blurb: 'Scan with a phone wallet', provider: () => undefined },
 ]
 const walletName = (k: WalletKind) => WALLETS.find((w) => w.kind === k)!.name
-export const isEvm = (k: WalletKind) => k !== 'pelagus'
+export const isEvm = (k: WalletKind) => k !== 'pelagus' && k !== 'smartwallet'
+/** Signed in through a site of its own rather than an injected provider. */
+const external = (k: WalletKind) => k === 'walletconnect' || k === 'smartwallet'
 
 // ── stored account ───────────────────────────────────────────────────────────
 
@@ -93,6 +99,7 @@ export async function connectWallet(kind: WalletKind): Promise<{ provider: Eip11
 /** The signed-in wallet's provider, reconnecting if needed; follows the wallet if its account was switched. */
 export async function walletProvider(): Promise<Eip1193> {
   const a = current ?? (await signIn())
+  if (a.kind === 'smartwallet') throw new Error('Quai Smart Wallet signs in its own window; it has no provider here.')
   if (a.kind === 'walletconnect') {
     const w = await import('./wallets.js')
     const s = (await w.walletConnectSession()) ?? (await w.connectWalletConnect())
@@ -117,6 +124,7 @@ export async function signIn(): Promise<Account> {
 
 export function signOut(): void {
   if (current?.kind === 'walletconnect') void import('./wallets.js').then((w) => w.disconnectWalletConnect())
+  if (current?.kind === 'smartwallet') disconnectSmartWallet()
   setAccount(undefined)
 }
 
@@ -134,14 +142,26 @@ export async function evmWallet(): Promise<{ provider: Eip1193; address: string 
 
 /** POSTs JSON as a signed board request (signing in first if needed). */
 export async function signedPost(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+  // The Smart Wallet signs in a popup, which the browser allows only straight from the click: open it before any await.
+  if (current?.kind === 'smartwallet') prepareSmartWallet()
   // Signing code loads with the first signed request, so pages that only show the button stay light.
   const [{ hexlify, toUtf8Bytes }, { AUTH_HEADERS, requestSigningPayload }] = await Promise.all([import('ethers'), import('@gremlins/hatch')])
-  const p = await walletProvider()
+  const a = current ?? (await signIn())
+  let p: Eip1193 | undefined
+  if (a.kind === 'smartwallet') {
+    // After a reload the page reconnects first; follow the wallet if it now answers for another Safe.
+    const safe = await smartWalletAccount()
+    if (safe.toLowerCase() !== a.address.toLowerCase()) setAccount({ ...a, address: safe })
+  } else p = await walletProvider()
   const address = current!.address
   const raw = JSON.stringify(body)
   const ts = Math.floor(Date.now() / 1000)
-  // Pelagus, MetaMask, Phantom and WalletConnect wallets all take personal_sign([hexMessage, account]) (EIP-191).
-  const signature = (await p.request({ method: 'personal_sign', params: [hexlify(toUtf8Bytes(requestSigningPayload('POST', path, ts, raw))), address] })) as string
+  const message = requestSigningPayload('POST', path, ts, raw)
+  // Pelagus, MetaMask, Phantom and WalletConnect wallets all take personal_sign([hexMessage, account]) (EIP-191); the
+  // Smart Wallet takes the message itself and has its Safe sign the same EIP-191 hash.
+  const signature = p
+    ? ((await p.request({ method: 'personal_sign', params: [hexlify(toUtf8Bytes(message)), address] })) as string)
+    : await smartWalletSign(address, message)
   return fetch(path, {
     method: 'POST',
     signal,
@@ -163,8 +183,8 @@ export async function signedPostJson<T>(path: string, body: unknown, signal?: Ab
 
 /** A wallet error in plain words: declining is not a failure worth shouting about. */
 export function walletErrorMessage(e: unknown): string {
-  const err = e as { code?: number; message?: string }
-  if (err?.code === 4001 || /reject|denied|declined|cancel/i.test(err?.message ?? '')) return 'Cancelled in the wallet.'
+  const err = e as { code?: number | string; message?: string }
+  if (err?.code === 4001 || err?.code === 'WALLET_CLOSED' || /reject|denied|declined|cancel/i.test(err?.message ?? '')) return 'Cancelled in the wallet.'
   return err?.message || 'The wallet ran into a problem.'
 }
 
@@ -178,6 +198,7 @@ const h = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, 
 }
 
 const GLYPHS: Record<WalletKind, string> = {
+  smartwallet: '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#e22901"/><rect x="7.5" y="9" width="17" height="14" rx="3" fill="none" stroke="#fff" stroke-width="2"/><circle cx="16" cy="16" r="3" fill="none" stroke="#fff" stroke-width="2"/><path d="M16 13v-1.2M16 20.2V19M10.5 23v1.5M21.5 23v1.5" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>',
   pelagus: '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#24211d"/><path d="M7 19c3-1 4-6 9-6s6 5 9 6M7 23c3-1 4-4 9-4s6 3 9 4" fill="none" stroke="#e9e3d8" stroke-width="2.2" stroke-linecap="round"/><circle cx="16" cy="8.5" r="2.4" fill="#e0a83e"/></svg>',
   metamask: '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#f6851b"/><path d="M8 9l7 5-1.4-3.6L8 9zm16 0l-5.6 1.4L17 14l7-5zM9.5 20l1.5 4 4-1.2-.6-2.8H9.5zm13 0h-4.4l-.6 2.8 4 1.2 1-4zM12 15l-1.6 3 5 .2-.2-4.2L12 15zm8 0l-3.3-1L16.6 18l5-.2L20 15z" fill="#fff"/></svg>',
   phantom: '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#ab9ff2"/><path d="M8 18.5C8 12.7 11.6 9 16.2 9 20.7 9 24 12.4 24 16.6c0 3-1.7 5.4-3.6 5.4-1 0-1.2-.8-1.6-1.6-.5 1-1.4 1.6-2.4 1.6s-1.6-.7-2-1.5c-.5.9-1.5 1.5-2.6 1.5C9.5 22 8 20.6 8 18.5z" fill="#fff"/><circle cx="15" cy="15" r="1.3" fill="#ab9ff2"/><circle cx="19" cy="15" r="1.3" fill="#ab9ff2"/></svg>',
@@ -186,7 +207,7 @@ const GLYPHS: Record<WalletKind, string> = {
 
 function walletIcon(kind: WalletKind): HTMLElement {
   const box = h('span', { class: 'wallet-icon' })
-  const announced = kind === 'walletconnect' ? undefined : announcedIcon(kind)
+  const announced = external(kind) ? undefined : announcedIcon(kind as 'pelagus' | 'metamask' | 'phantom')
   if (announced) box.append(h('img', { src: announced, alt: '' }))
   else box.innerHTML = GLYPHS[kind]
   return box
@@ -224,10 +245,10 @@ function chooseWallet(opts: { title: string; note: string; only?: WalletKind[] }
     const renderRows = () => {
       list.replaceChildren()
       for (const w of WALLETS.filter((w) => !opts.only || opts.only.includes(w.kind))) {
-        const installed = w.kind === 'walletconnect' || !!w.provider()
-        const state = w.kind === 'walletconnect' ? 'QR code' : installed ? 'Detected' : mobile && w.kind !== 'pelagus' ? 'Open app' : 'Install'
+        const installed = external(w.kind) || !!w.provider()
+        const state = w.kind === 'walletconnect' ? 'QR code' : w.kind === 'smartwallet' ? 'Popup' : installed ? 'Detected' : mobile && w.kind !== 'pelagus' ? 'Open app' : 'Install'
         const text = h('span', { class: 'wallet-text' }, h('b', {}, w.name), h('span', {}, w.blurb))
-        const tag = h('span', { class: `wallet-tag${installed && w.kind !== 'walletconnect' ? ' on' : ''}` }, state)
+        const tag = h('span', { class: `wallet-tag${installed && !external(w.kind) ? ' on' : ''}` }, state)
         if (!installed && w.get) {
           list.append(h('a', { class: 'wallet-row', href: w.get(), target: '_blank', rel: 'noopener' }, walletIcon(w.kind), text, tag))
           continue
@@ -244,12 +265,15 @@ function chooseWallet(opts: { title: string; note: string; only?: WalletKind[] }
           list.classList.add('busy')
           row.classList.add('waiting')
           status.classList.remove('error')
-          status.textContent = w.kind === 'walletconnect' ? 'Opening WalletConnect…' : `Approve the connection in ${w.name}…`
+          status.textContent = w.kind === 'walletconnect' ? 'Opening WalletConnect…' : w.kind === 'smartwallet' ? 'Sign in and approve in the Quai Smart Wallet window…' : `Approve the connection in ${w.name}…`
           try {
             // AppKit draws its own modal; ours sits in the top layer and would cover it, so it steps aside once that's up.
+            // The Smart Wallet's window opens before the first await (connectSmartWallet), while the click still counts.
             const { address } = w.kind === 'walletconnect'
               ? await (await import('./wallets.js')).connectWalletConnect(() => dlg.close())
-              : await connectWallet(w.kind)
+              : w.kind === 'smartwallet'
+                ? { address: await connectSmartWallet() }
+                : await connectWallet(w.kind)
             finish({ address, kind: w.kind })
           } catch (e) {
             // Closing the QR code just brings this dialog back; anything else gets said.

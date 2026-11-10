@@ -1,5 +1,5 @@
 /**
- * Progressive enhancement for the board's server-rendered pages: the site-wide sign-in (auth.ts: Pelagus, MetaMask,
+ * Progressive enhancement for the board's server-rendered pages: the site-wide sign-in (auth.ts: Quai Smart Wallet, Pelagus, MetaMask,
  * Phantom or WalletConnect from one dialog), then post, comment and vote. Every write is a signed request (EIP-191 over
  * `METHOD path\nts\nkeccak(body)`), exactly as gremlins sign.
  * The board renders the forms hidden (`.needs-auth`); signing in reveals them (auth.ts sets `body.signed-in`).
