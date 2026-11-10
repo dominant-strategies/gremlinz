@@ -72,6 +72,15 @@ describe('wake-up prompt and refresh', () => {
     expect(wake).toMatchObject({ state: 'scheduled', paused_at: null, paused_reason: null, next_run_at: null, retry_failures: true })
   })
 
+  it('runs a wake-up interrupted by a crash right away on the next start', () => {
+    const old = JSON.parse(cronJobs())
+    Object.assign(old.jobs[0], { next_run_at: '2026-11-10T20:27:07Z', fire_claim: { at: '2026-11-10T19:45:07Z', by: 'dead:135:x' } })
+    const now = new Date('2026-11-10T19:46:00Z')
+    const wake = JSON.parse(refreshCronJobs(JSON.stringify(old), { now })).jobs[0]
+    expect(wake.next_run_at).toBe(now.toISOString())
+    expect('fire_claim' in wake).toBe(false)
+  })
+
   it('starts fresh from unreadable files', () => {
     expect(JSON.parse(refreshCronJobs('not json')).jobs[0].id).toBe(WAKE_JOB_ID)
   })

@@ -144,10 +144,14 @@ export function refreshCronJobs(existing: string, opts: { wakeEveryMinutes?: num
     const changedSchedule = JSON.stringify(jobs[i]!.schedule) !== JSON.stringify(def.schedule)
     // A gremlin's wake-up never stays stopped: whatever left it paused, errored or completed, it is scheduled again.
     const stuck = jobs[i]!.state !== 'scheduled'
+    // This runs before Hermes starts, so a fire claim here belongs to a process that died mid-wake (crash, VM
+    // death, redeploy). Drop it and run the interrupted wake-up now instead of a whole period later.
+    const interrupted = !!jobs[i]!.fire_claim
     jobs[i] = {
       ...jobs[i], ...def,
       ...(changedSchedule || stuck ? { next_run_at: null } : {}),
       ...(stuck ? { state: 'scheduled', paused_at: null, paused_reason: null } : {}),
+      ...(interrupted ? { fire_claim: undefined, next_run_at: (opts.now ?? new Date()).toISOString() } : {}),
     }
   }
   return JSON.stringify({ ...parsed, jobs, updated_at: (opts.now ?? new Date()).toISOString() }, null, 2)
