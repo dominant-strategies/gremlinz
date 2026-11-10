@@ -13,7 +13,7 @@ import { BrowserProvider, Contract as QuaiContract } from 'quais'
 import {
   CHAIN, QUAI_SYNTH, QUAI_SYNTH_PERMIT_DOMAIN, USDC, WQUAI, buildAppData, bridgeStatus, createSymbiosis, gaslessSell, quaiProvider, quoteBridge, quoteSell,
 } from '@gremlins/treasury'
-import { EGG_KEY_MESSAGE, FLUENCE_MIN_TOPUP_USD, deriveEggKey, eggVmName, fluence } from '@gremlins/hosting'
+import { EGG_KEY_MESSAGE, FLUENCE_MIN_TOPUP_USD, deriveEggKey, eggVmName, fluence, localSigner } from '@gremlins/hosting'
 import type { Hex } from 'viem'
 import { pelagus } from './pelagus.js'
 import type { StepHandle } from './progress.js'
@@ -132,7 +132,7 @@ export async function swapBridgedQuai(key: Wallet, bridgeTx: string | undefined,
 
 /** Top up Fluence from the egg key's USDC, then create and provision the egg VM. Returns the VM id. */
 export async function launchOnFluence(key: Wallet, o: { launchId: string; cloudInit: string; topUpUsd?: number }, step: StepHandle): Promise<string> {
-  const fl = fluence({ privateKey: key.privateKey as Hex })
+  const fl = fluence({ signer: localSigner(key.privateKey as Hex) })
   const topUp = o.topUpUsd ?? FLUENCE_MIN_TOPUP_USD
   step.waiting(`Paying $${topUp} to Fluence (x402, no gas)`)
   const paid = await fl.topUp(topUp)

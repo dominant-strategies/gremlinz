@@ -8,9 +8,9 @@
  */
 import { wrapFetchWithPaymentFromConfig } from '@x402/fetch'
 import { ExactEvmScheme } from '@x402/evm'
-import { privateKeyToAccount } from 'viem/accounts'
 import { createSiweMessage } from 'viem/siwe'
 import { keccak256, type Hex } from 'viem'
+import type { HostingSigner } from './signer.js'
 
 export const FLUENCE_API = 'https://api.fluence.dev'
 export const FLUENCE_MIN_TOPUP_USD = 10
@@ -52,10 +52,10 @@ export interface Estimate {
   monthlyTotal: string
 }
 
-export function fluence(opts: { privateKey: Hex; baseUrl?: string; fetchImpl?: typeof fetch }) {
+export function fluence(opts: { signer: HostingSigner; baseUrl?: string; fetchImpl?: typeof fetch }) {
   const base = opts.baseUrl ?? FLUENCE_API
   const f = opts.fetchImpl ?? fetch
-  const account = privateKeyToAccount(opts.privateKey)
+  const account = opts.signer
   let token: string | undefined
 
   const call = async <T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> => {
@@ -77,7 +77,7 @@ export function fluence(opts: { privateKey: Hex; baseUrl?: string; fetchImpl?: t
     async topUp(amountUsd: number): Promise<{ transaction: string; amountUsd: string }> {
       if (amountUsd < FLUENCE_MIN_TOPUP_USD) throw new Error(`Fluence top-ups start at $${FLUENCE_MIN_TOPUP_USD}`)
       const pay = wrapFetchWithPaymentFromConfig(f, {
-        schemes: [{ network: 'eip155:8453', client: new ExactEvmScheme(account) }],
+        schemes: [{ network: 'eip155:8453', client: new ExactEvmScheme({ address: account.address, signTypedData: (td) => account.signTypedData(td) }) }],
         spendControls: { maxAmountPerPayment: `$${amountUsd}` },
       } as never)
       const res = await pay(`${base}/v2/x402/top-up?amountUsd=${amountUsd.toFixed(2)}`, { method: 'POST' })
@@ -91,7 +91,7 @@ export function fluence(opts: { privateKey: Hex; baseUrl?: string; fetchImpl?: t
     async login(): Promise<void> {
       const { nonce } = (await (await f(`${base}/v1/auth/siwe/nonce`)).json()) as { nonce: string }
       const message = createSiweMessage({ domain: 'api.fluence.dev', address: account.address, uri: 'https://api.fluence.dev', version: '1', chainId: 8453, nonce })
-      const signature = await account.signMessage({ message })
+      const signature = await account.signMessage(message)
       const res = await f(`${base}/v1/auth/siwe`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message, signature }) })
       if (!res.ok) throw new Error(`Fluence sign-in failed (${res.status}): ${(await res.text()).slice(0, 200)}`)
       token = ((await res.json()) as { accessToken: string }).accessToken

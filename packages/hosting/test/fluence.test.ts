@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { Wallet, hexlify, toUtf8Bytes } from 'ethers'
+import { Wallet, hexlify, toUtf8Bytes, verifyMessage } from 'ethers'
 import { EGG_KEY_MESSAGE, deriveEggKey, eggVmName, fluence } from '../src/fluence.js'
+import { localSigner } from '../src/signer.js'
 
 /** Fake Fluence API: SIWE login, resources, prices, images and VM creation. */
 function fakeApi() {
@@ -49,7 +50,7 @@ describe('fluence egg hosting', () => {
 
   it('signs in with a SIWE message for api.fluence.dev and sends the bearer token', async () => {
     const api = fakeApi()
-    const fl = fluence({ privateKey: Wallet.createRandom().privateKey as `0x${string}`, fetchImpl: api.fetchImpl })
+    const fl = fluence({ signer: localSigner(Wallet.createRandom().privateKey as `0x${string}`), fetchImpl: api.fetchImpl })
     await fl.login()
     await fl.cheapestPlan()
     expect(api.calls.find((c) => c.path === '/v1/clusters/resources')!.headers.authorization).toBe('Bearer tok')
@@ -57,7 +58,7 @@ describe('fluence egg hosting', () => {
 
   it('picks the cheapest config that meets the size and still has a public IPv4', async () => {
     const api = fakeApi()
-    const fl = fluence({ privateKey: Wallet.createRandom().privateKey as `0x${string}`, fetchImpl: api.fetchImpl })
+    const fl = fluence({ signer: localSigner(Wallet.createRandom().privateKey as `0x${string}`), fetchImpl: api.fetchImpl })
     await fl.login()
     expect(await fl.cheapestPlan(1, 2)).toMatchObject({ clusterId: 'b', configurationId: 'small-b', hourlyUsd: 0.004 })
     expect(await fl.ubuntuImageId()).toBe('u24')
@@ -65,7 +66,7 @@ describe('fluence egg hosting', () => {
 
   it('creates eggs with no SSH keys, a public IPv4 and private cloud-init', async () => {
     const api = fakeApi()
-    const fl = fluence({ privateKey: Wallet.createRandom().privateKey as `0x${string}`, fetchImpl: api.fetchImpl })
+    const fl = fluence({ signer: localSigner(Wallet.createRandom().privateKey as `0x${string}`), fetchImpl: api.fetchImpl })
     await fl.login()
     const plan = await fl.cheapestPlan()
     await fl.createDraft({ name: eggVmName('AbC-123_xyz'), plan, imageId: 'u24', cloudInit: '#cloud-config\n', idempotencyKey: 'egg-1' })
@@ -79,7 +80,20 @@ describe('fluence egg hosting', () => {
   })
 
   it('refuses top-ups below the minimum before touching the network', async () => {
-    const fl = fluence({ privateKey: Wallet.createRandom().privateKey as `0x${string}`, fetchImpl: (() => { throw new Error('no network') }) as never })
+    const fl = fluence({ signer: localSigner(Wallet.createRandom().privateKey as `0x${string}`), fetchImpl: (() => { throw new Error('no network') }) as never })
     await expect(fl.topUp(5)).rejects.toThrow(/start at \$10/)
+  })
+
+  it('signs in through the HostingSigner interface only (a personal message from its address)', async () => {
+    const api = fakeApi()
+    const key = Wallet.createRandom()
+    const inner = localSigner(key.privateKey as `0x${string}`)
+    const seen: string[] = []
+    const signer = { address: inner.address, signMessage: (m: string) => { seen.push(m); return inner.signMessage(m) }, signTypedData: inner.signTypedData }
+    await fluence({ signer, fetchImpl: api.fetchImpl }).login()
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toContain(key.address)
+    const sent = api.calls.find((c) => c.path === '/v1/auth/siwe')!.body
+    expect(verifyMessage(sent.message, sent.signature)).toBe(key.address)
   })
 })
