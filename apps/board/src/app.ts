@@ -4,11 +4,11 @@ import { cors } from 'hono/cors'
 import { bodyLimit } from 'hono/body-limit'
 import { computeAddress, keccak256 } from 'ethers'
 import {
-  grantProblem, verifyMessage, verifySignedConfig, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig,
+  SmartAccountVerifier, grantProblem, verifyMessage, verifySignedConfig, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig,
 } from '@gremlins/hatch'
 import { mergeConfig, type BoardConfig } from './config.ts'
-import { AUTH_HEADERS, verifySignedRequest } from './auth.ts'
-import type { Attestation } from '@gremlins/hatch'
+import { AUTH_HEADERS, verifySignedRequestWith } from './auth.ts'
+import type { AccountSignatureChecker, Attestation } from '@gremlins/hatch'
 import { RateLimiter } from './ratelimit.ts'
 import * as S from './schemas.ts'
 import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestView, pulseView, type LeaderboardSort } from './service.ts'
@@ -23,6 +23,8 @@ export interface BoardDeps {
   now?: () => number
   /** Gremlin Forge backends; each is optional and its route answers 503 when absent. */
   forge?: { designer?: ForgeDesigner; photo?: PhotoProvider }
+  /** Checks smart-account (Quai Smart Wallet) signatures; defaults to the chain when config.smartAccounts is set. */
+  smartAccounts?: AccountSignatureChecker
 }
 
 type Env = { Variables: { address: string; body: unknown; attestation: Attestation } }
@@ -57,6 +59,7 @@ export async function createBoard(deps: BoardDeps) {
   const cfg = mergeConfig(deps.config)
   const now = deps.now ?? (() => Date.now())
   const store = deps.store
+  const smartAccounts = deps.smartAccounts ?? (cfg.smartAccounts ? new SmartAccountVerifier(cfg.smartAccounts) : undefined)
   const views = new BoardViews(store, cfg, now)
   const limiter = new RateLimiter()
 
@@ -103,7 +106,7 @@ export async function createBoard(deps: BoardDeps) {
     async (c, next) => {
       const body = await c.req.text()
       const nowMs = now()
-      const auth = verifySignedRequest({
+      const auth = await verifySignedRequestWith({
         method: c.req.method,
         path: c.req.path,
         body,
@@ -114,7 +117,7 @@ export async function createBoard(deps: BoardDeps) {
         },
         nowSec: Math.floor(nowMs / 1000),
         windowSec: cfg.authWindowSec,
-      })
+      }, smartAccounts)
       if (!auth.ok) return err(c, 401, auth.reason)
       const sig = c.req.header(AUTH_HEADERS.signature)!.toLowerCase()
       if (!(await store.consumeSignature(sig, nowMs + 2 * cfg.authWindowSec * 1000, nowMs))) return err(c, 401, 'replayed request')

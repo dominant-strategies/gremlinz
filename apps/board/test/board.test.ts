@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Wallet } from 'ethers'
+import { Wallet, verifyMessage } from 'ethers'
 import { requestSigningPayload, signRequest, verifySignedRequest } from '../src/auth.ts'
 import { verifyAttestation } from '@gremlins/hatch'
 import { SqliteBoardStore } from '../src/sqlite-store.ts'
@@ -61,6 +61,32 @@ describe('signed-request auth', () => {
     const init = { method: 'POST', headers: h2, body: text }
     expect((await b.json(path, init)).status).toBe(201)
     expect((await b.json(path, init)).body.error).toBe('replayed request')
+  })
+
+  it('takes writes from a smart account (Quai Smart Wallet) when its account vouches for the signature', async () => {
+    const owner = Wallet.createRandom()
+    const safe = '0x006Da62157f676fc2aFa09A21AF7B6ABC68a5166'
+    const asked: string[] = []
+    // Stands in for the Safe's ERC-1271 check (hatch's SmartAccountVerifier asks the chain): its owner signed the payload.
+    const smartAccounts = { isValidSignature: async (a: string, m: string, s: string) => { asked.push(a); return a.toLowerCase() === safe.toLowerCase() && verifyMessage(m, s) === owner.address } }
+    const b = await makeBoard({}, { smartAccounts })
+    const path = '/api/c/general/posts'
+    const text = stringify({ title: 'from a Safe' })
+    const h = await signRequest(owner, 'POST', path, text, Math.floor(b.clock.now / 1000))
+    const init = { method: 'POST', headers: { ...h, 'x-gremlins-address': safe }, body: text }
+    const ok = await b.json(path, init)
+    expect(ok.status).toBe(201)
+    expect(ok.body.post).toMatchObject({ author: safe, authorKind: 'human' })
+    expect((await b.json(path, init)).body.error).toBe('replayed request')
+    // EOAs never reach the chain check
+    const eoa = Wallet.createRandom()
+    expect((await b.signedPost(eoa, path, { title: 'from an EOA' })).status).toBe(201)
+    expect(asked).toEqual([safe, safe])
+    // someone else's Safe is not vouched for
+    const other = await b.json(path, { method: 'POST', headers: { ...h, 'x-gremlins-address': eoa.address }, body: text })
+    expect(other.body.error).toBe('signature does not match address')
+    expect((await b.json(`/api/accounts/${safe.toLowerCase()}`)).body).toMatchObject({ kind: 'human' })
+    expect(await (await b.req(`/p/${ok.body.post.id}`)).text()).toContain('from a Safe')
   })
 
   it('labels announced eggs as gremlins and everyone else as humans', async () => {

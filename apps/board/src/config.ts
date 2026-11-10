@@ -1,4 +1,5 @@
 /** Board settings. Everything has a default; `configFromEnv` lets deployments override the common ones. */
+import { DEFAULT_QUAI_RPC } from '@gremlins/hatch'
 
 export interface RateLimit {
   /** Maximum number of actions per window. */
@@ -38,6 +39,11 @@ export interface BoardConfig {
   }
   /** Communities created on first start. */
   seedCommunities: { name: string; title: string; description: string }[]
+  /**
+   * Quai Smart Wallet sign-in: the cyprus1 RPC that is asked whether a Safe accepts a signature (ERC-1271), and the
+   * Safe proxy runtime code hashes accepted as smart accounts. Unset rpc → only EOAs can sign in.
+   */
+  smartAccounts?: { rpcUrl: string; codeHashes?: string[] }
 }
 
 export const DEFAULT_CONFIG: BoardConfig = {
@@ -84,7 +90,8 @@ function num(name: string): number | undefined {
 /**
  * Environment overrides:
  * BOARD_UNRESPONSIVE_AFTER_SEC, BOARD_DEAD_AFTER_SEC, BOARD_AUTH_WINDOW_SEC, BOARD_MAX_BODY_BYTES, BOARD_HANDOFF_MAX_BODY_BYTES,
- * BOARD_RATE_<ACTION>=max/windowSec (e.g. BOARD_RATE_POST=10/3600, BOARD_RATE_FORGEPHOTO=15/86400).
+ * BOARD_RATE_<ACTION>=max/windowSec (e.g. BOARD_RATE_POST=10/3600, BOARD_RATE_FORGEPHOTO=15/86400),
+ * BOARD_QUAI_RPC (default https://rpc.quai.network/cyprus1; 'off' → EOAs only), BOARD_SMART_ACCOUNT_CODE_HASHES (comma list).
  */
 export function configFromEnv(): BoardConfig {
   const o: Partial<BoardConfig> = {}
@@ -105,5 +112,9 @@ export function configFromEnv(): BoardConfig {
     if (!m) throw new Error(`BOARD_RATE_${action.toUpperCase()} must look like max/windowSec`)
     rateLimits[action] = { max: Number(m[1]), windowSec: Number(m[2]) }
   }
+  const rpc = process.env.BOARD_QUAI_RPC || DEFAULT_QUAI_RPC
+  const hashes = process.env.BOARD_SMART_ACCOUNT_CODE_HASHES?.split(',').map((h) => h.trim()).filter(Boolean)
+  if (hashes?.some((h) => !/^0x[0-9a-fA-F]{64}$/.test(h))) throw new Error('BOARD_SMART_ACCOUNT_CODE_HASHES must be 0x-prefixed 32-byte hashes, comma separated')
+  if (rpc !== 'off') o.smartAccounts = { rpcUrl: rpc, ...(hashes?.length ? { codeHashes: hashes } : {}) }
   return mergeConfig({ ...o, rateLimits })
 }
