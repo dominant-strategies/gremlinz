@@ -13,6 +13,10 @@
     "./node": {
       "types": "./dist/symbiosis-node.d.ts",
       "import": "./dist/symbiosis-node.js"
+    },
+    "./base": {
+      "types": "./dist/base-usdc.d.ts",
+      "import": "./dist/base-usdc.js"
     }
   },
   "scripts": {

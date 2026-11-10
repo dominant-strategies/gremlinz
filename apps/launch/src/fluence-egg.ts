@@ -8,10 +8,10 @@
  * Every step reports through a StepHandle (progress.ts): signatures, transactions with explorer links, and
  * background checks, so the maker always sees what is happening.
  */
-import { Contract, JsonRpcProvider, Wallet, formatUnits, hexlify, toUtf8Bytes } from 'ethers'
+import { JsonRpcProvider, Wallet, formatUnits, hexlify, toUtf8Bytes } from 'ethers'
 import { BrowserProvider, Contract as QuaiContract } from 'quais'
 import {
-  CHAIN, QUAI_SYNTH, QUAI_SYNTH_PERMIT_DOMAIN, USDC, WQUAI, buildAppData, bridgeStatus, createSymbiosis, gaslessSell, quaiProvider, quoteBridge, quoteSell,
+  CHAIN, QUAI_SYNTH, USDC, WQUAI, buildAppData, bridgeStatus, createSymbiosis, quaiProvider, quoteBridge, quoteSell, quaiOnBase as quaiAt, sellQuaiOnBaseForUsdc, usdcOnBase,
 } from '@gremlins/treasury'
 import { EGG_KEY_MESSAGE, FLUENCE_MIN_TOPUP_USD, deriveEggKey, eggVmName, fluence, localSigner } from '@gremlins/hosting'
 import type { Hex } from 'viem'
@@ -19,13 +19,12 @@ import { pelagus } from './pelagus.js'
 import type { StepHandle } from './progress.js'
 
 const base = () => new JsonRpcProvider('https://mainnet.base.org', CHAIN.base, { staticNetwork: true })
-const ERC20 = ['function balanceOf(address) view returns (uint256)']
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 export const fmtUsd = (micro: bigint) => `$${Number(formatUnits(micro, 6)).toFixed(2)}`
 
-export const usdcBalance = async (addr: string) => (await new Contract(USDC[CHAIN.base]!, ERC20, base()).balanceOf(addr)) as bigint
+export const usdcBalance = (addr: string) => usdcOnBase(base(), addr)
 /** QUAI (synthetic) already at the egg key on Base, e.g. from a bridge whose page session was lost. */
-export const quaiOnBase = async (addr: string) => (await new Contract(QUAI_SYNTH[CHAIN.base], ERC20, base()).balanceOf(addr)) as bigint
+export const quaiOnBase = (addr: string) => quaiAt(base(), addr)
 
 /** Ask the maker's wallet for the deterministic egg-hosting key. */
 export async function eggKey(maker: string, step: StepHandle): Promise<Wallet> {
@@ -123,7 +122,7 @@ export async function swapBridgedQuai(key: Wallet, bridgeTx: string | undefined,
   if (amount === 0n) return swap.skip('nothing to swap')
   swap.waiting(`Swapping ${Number(formatUnits(amount, 18)).toFixed(0)} QUAI to USDC on CoW (no gas needed)`)
   const p = base()
-  const r = await gaslessSell({ signer: key.connect(p), provider: p, chainId: CHAIN.base, sellToken: QUAI_SYNTH[CHAIN.base], sellTokenPermitDomain: QUAI_SYNTH_PERMIT_DOMAIN, buyToken: USDC[CHAIN.base]!, amount, appCode: 'gremlins-egg' })
+  const r = await sellQuaiOnBaseForUsdc({ signer: key.connect(p), provider: p, amount })
   swap.tx('cow-base', r.uid, 'CoW order', r.status === 'fulfilled' ? 'confirmed' : 'failed')
   if (r.txHash) swap.tx('base', r.txHash, 'Swap settled', 'confirmed')
   if (r.status !== 'fulfilled') throw new Error(`swap ${r.status}`)
