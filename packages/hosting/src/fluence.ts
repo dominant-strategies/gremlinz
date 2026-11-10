@@ -1,6 +1,6 @@
 /**
- * Fluence CPU cloud client for egg servers. Browser-safe (fetch + Web Crypto): the launch page uses it directly
- * (api.fluence.dev allows any origin), and gremlins can use it from Node too.
+ * Fluence CPU cloud client for egg servers. Browser-safe (fetch + Web Crypto; api.fluence.dev allows any origin). The
+ * board's hatch service uses it to launch eggs, and gremlins to run (and sweep) the account they take over.
  *
  * Flow: pay USDC on Base via x402 (the paying wallet *is* the account) → Sign-In with Ethereum → create a VM draft
  * with our cloud-init (private; not readable back) → check the estimate → provision → wait for `launched`.
@@ -9,26 +9,10 @@
 import { wrapFetchWithPaymentFromConfig } from '@x402/fetch'
 import { ExactEvmScheme } from '@x402/evm'
 import { createSiweMessage } from 'viem/siwe'
-import { keccak256, type Hex } from 'viem'
 import type { HostingSigner, TypedDataToSign } from './signer.js'
 
 export const FLUENCE_API = 'https://api.fluence.dev'
 export const FLUENCE_MIN_TOPUP_USD = 10
-
-const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n
-
-/** The fixed message a maker signs to derive their egg-hosting key (deterministic, so recoverable). */
-export const EGG_KEY_MESSAGE = 'gremlins: derive my egg hosting key (v1).\nOnly sign this on the gremlins hatch page.'
-
-/**
- * Egg hosting key from the maker's signature of EGG_KEY_MESSAGE. Wallet signatures are deterministic (RFC 6979),
- * so the maker can re-derive it later to reach leftover Fluence balance. It only ever holds hosting money.
- */
-export function deriveEggKey(signature: Hex): Hex {
-  const k = BigInt(keccak256(signature))
-  if (k === 0n || k >= SECP256K1_N) throw new Error('derived key out of range; sign again')
-  return keccak256(signature)
-}
 
 export interface Plan {
   clusterId: string

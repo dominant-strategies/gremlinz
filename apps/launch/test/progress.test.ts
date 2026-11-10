@@ -9,7 +9,7 @@ const make = () => {
 
 describe('hatch progress', () => {
   it('counts the signatures each plan needs', () => {
-    expect(FLUENCE_STEPS.reduce((a, d) => a + d.sigs, 0)).toBe(6) // connect 1 + egg key 1 + wrap/approve/bridge 3 + config 1
+    expect(FLUENCE_STEPS.reduce((a, d) => a + d.sigs, 0)).toBe(5) // connect 1 + wrap/approve/bridge 3 + config 1 (no egg-key signature: the hatch service holds the account)
     expect(SPORESTACK_STEPS.reduce((a, d) => a + d.sigs, 0)).toBe(2)
   })
 
@@ -41,7 +41,7 @@ describe('hatch progress', () => {
 
   it('skipped steps count as finished', () => {
     const { p } = make()
-    for (const id of ['fund-egg', 'bridge', 'swap']) p.step(id).skip('egg key already holds USDC')
+    for (const id of ['fund-egg', 'bridge', 'swap']) p.step(id).skip('hosting address already holds USDC')
     expect(['fund-egg', 'bridge', 'swap'].every((id) => p.isDone(id))).toBe(true)
   })
 })

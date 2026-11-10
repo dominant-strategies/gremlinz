@@ -1,20 +1,16 @@
 /**
- * Launch an egg on Fluence from the browser, funded with QUAI from Pelagus or USDC on Base.
+ * Fund a Fluence egg from the browser. The hatch service on the board holds the egg's hosting account (a fresh key
+ * nobody else has) until the egg runs, then seals it to the egg and deletes its copy; the maker only pays its address.
  *
- *   maker signs EGG_KEY_MESSAGE ─► egg hosting key (deterministic, never stored)
- *   QUAI ─wrap+Symbiosis─► QUAI on Base (egg key) ─CoW gasless─► USDC (egg key) ─x402─► Fluence balance
- *   ─SIWE─► create VM draft with cloud-init ─► estimate ─► provision ─► launched
+ *   USDC on Base ─────────────────────────────────────────► hosting address ─(board)─x402─► Fluence ─► egg VM
+ *   QUAI ─wrap+Symbiosis─► QUAI on Base at the hosting address ─(board)─CoW gasless─► USDC ─┘
  *
  * Every step reports through a StepHandle (progress.ts): signatures, transactions with explorer links, and
  * background checks, so the maker always sees what is happening.
  */
-import { JsonRpcProvider, Wallet, formatUnits, hexlify, toUtf8Bytes } from 'ethers'
+import { JsonRpcProvider, formatUnits } from 'ethers'
 import { BrowserProvider, Contract as QuaiContract } from 'quais'
-import {
-  CHAIN, QUAI_SYNTH, USDC, WQUAI, buildAppData, bridgeStatus, createSymbiosis, quaiProvider, quoteBridge, quoteSell, quaiOnBase as quaiAt, sellQuaiOnBaseForUsdc, usdcOnBase,
-} from '@gremlins/treasury'
-import { EGG_KEY_MESSAGE, FLUENCE_MIN_TOPUP_USD, deriveEggKey, eggVmName, fluence, localSigner } from '@gremlins/hosting'
-import type { Hex } from 'viem'
+import { CHAIN, QUAI_SYNTH, USDC, WQUAI, buildAppData, bridgeStatus, createSymbiosis, quaiProvider, quoteBridge, quoteSell, quaiOnBase as quaiAt, usdcOnBase } from '@gremlins/treasury'
 import { pelagus } from './pelagus.js'
 import type { StepHandle } from './progress.js'
 
@@ -23,18 +19,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 export const fmtUsd = (micro: bigint) => `$${Number(formatUnits(micro, 6)).toFixed(2)}`
 
 export const usdcBalance = (addr: string) => usdcOnBase(base(), addr)
-/** QUAI (synthetic) already at the egg key on Base, e.g. from a bridge whose page session was lost. */
+/** QUAI (synthetic) already at the hosting address on Base, e.g. from a bridge whose page session was lost. */
 export const quaiOnBase = (addr: string) => quaiAt(base(), addr)
-
-/** Ask the maker's wallet for the deterministic egg-hosting key. */
-export async function eggKey(maker: string, step: StepHandle): Promise<Wallet> {
-  step.signing('Confirm the message in Pelagus')
-  const sig = (await pelagus().request({ method: 'personal_sign', params: [hexlify(toUtf8Bytes(EGG_KEY_MESSAGE)), maker] })) as Hex
-  const key = new Wallet(deriveEggKey(sig))
-  step.signed()
-  step.done(`egg key ${key.address.slice(0, 8)}…`)
-  return key
-}
 
 /**
  * Wait for a Quai transaction through our own RPC connection. Pelagus only signs and sends: its bundled quais
@@ -56,18 +42,18 @@ export async function waitQuaiTx(hash: string, onCheck?: () => void, timeoutMs =
   }
 }
 
-/** QUAI (wei) to bridge so the egg key ends up with at least `usdMicro` USDC after bridge + swap. */
-export async function quaiNeededFor(usdMicro: bigint, eggAddress: string): Promise<bigint> {
+/** QUAI (wei) to bridge so the hosting address ends up with at least `usdMicro` USDC after bridge + swap. */
+export async function quaiNeededFor(usdMicro: bigint, hostingAddress: string): Promise<bigint> {
   const probe = 1000n * 10n ** 18n
-  const q = await quoteSell({ chainId: CHAIN.base, sellToken: QUAI_SYNTH[CHAIN.base], buyToken: USDC[CHAIN.base]!, from: eggAddress, receiver: eggAddress, sellAmountBeforeFee: probe, app: buildAppData({ appCode: 'gremlins-egg' }) })
+  const q = await quoteSell({ chainId: CHAIN.base, sellToken: QUAI_SYNTH[CHAIN.base], buyToken: USDC[CHAIN.base]!, from: hostingAddress, receiver: hostingAddress, sellAmountBeforeFee: probe, app: buildAppData({ appCode: 'gremlins-egg' }) })
   return ((usdMicro * probe) / q.buyAmount) * 105n / 100n + 5n * 10n ** 18n // +5% swap fee/slippage, +5 QUAI bridge fee
 }
 
 /**
- * Maker wraps and bridges QUAI to the egg key on Base with Pelagus (three signatures). `onSent` gets the bridge
- * hash the moment it is broadcast, so a reload never loses track of money in flight.
+ * Maker wraps and bridges QUAI to the hosting address on Base with Pelagus (three signatures). `onSent` gets the
+ * bridge hash the moment it is broadcast, so a reload never loses track of money in flight.
  */
-export async function bridgeQuaiToEgg(maker: string, eggAddress: string, quaiWei: bigint, step: StepHandle, onSent: (hash: string) => void): Promise<string> {
+export async function bridgeQuaiTo(maker: string, hostingAddress: string, quaiWei: bigint, step: StepHandle, onSent: (hash: string) => void): Promise<string> {
   step.start('Preparing the bridge')
   const signer = await new BrowserProvider(pelagus() as never).getSigner(maker)
   const wquai = new QuaiContract(WQUAI, ['function deposit() payable', 'function approve(address,uint256) returns (bool)', 'function balanceOf(address) view returns (uint256)', 'function allowance(address,address) view returns (uint256)'], signer)
@@ -87,7 +73,7 @@ export async function bridgeQuaiToEgg(maker: string, eggAddress: string, quaiWei
   if (have < quaiWei) await send(1, 'Wrap QUAI', () => wquai.deposit({ value: quaiWei - have }))
   else step.signed('QUAI already wrapped')
 
-  const quote = await quoteBridge({ symbiosis: createSymbiosis({ clientId: 'gremlins-hatch' }), direction: { from: 'quai', to: CHAIN.base }, amount: quaiWei, sender: maker, receiver: eggAddress })
+  const quote = await quoteBridge({ symbiosis: createSymbiosis({ clientId: 'gremlins-hatch' }), direction: { from: 'quai', to: CHAIN.base }, amount: quaiWei, sender: maker, receiver: hostingAddress })
   if ((await wquai.allowance(maker, quote.approveTo)) < quaiWei) await send(2, 'Approve bridge', () => wquai.approve(quote.approveTo, quaiWei))
   else step.signed('Bridge already approved')
 
@@ -101,59 +87,18 @@ export async function bridgeQuaiToEgg(maker: string, eggAddress: string, quaiWei
   return hash
 }
 
-/** Follow the bridge to Base, then swap the egg key's QUAI on Base to USDC gaslessly (CoW, permit). */
-export async function swapBridgedQuai(key: Wallet, bridgeTx: string | undefined, bridge: StepHandle, swap: StepHandle): Promise<void> {
-  if (bridgeTx) {
-    bridge.tx('symbiosis', bridgeTx, 'Symbiosis transfer')
-    for (;;) {
-      const s = await bridgeStatus(CHAIN.quai, bridgeTx).catch(() => ({ status: 'unknown' as const, outHash: undefined }))
-      if (s.status === 'success') {
-        bridge.tx('symbiosis', bridgeTx, 'Symbiosis transfer', 'confirmed')
-        if (s.outHash) bridge.tx('base', s.outHash, 'Arrived on Base', 'confirmed')
-        break
-      }
-      if (s.status === 'stuck' || s.status === 'reverted') throw new Error(`bridge ${s.status}; contact Symbiosis support with tx ${bridgeTx}`)
-      bridge.waiting('Symbiosis relayers are moving your QUAI to Base')
-      await sleep(15_000)
-    }
-  }
-  bridge.done()
-  const amount = await quaiOnBase(key.address)
-  if (amount === 0n) return swap.skip('nothing to swap')
-  swap.waiting(`Swapping ${Number(formatUnits(amount, 18)).toFixed(0)} QUAI to USDC on CoW (no gas needed)`)
-  const p = base()
-  const r = await sellQuaiOnBaseForUsdc({ signer: key.connect(p), provider: p, amount })
-  swap.tx('cow-base', r.uid, 'CoW order', r.status === 'fulfilled' ? 'confirmed' : 'failed')
-  if (r.txHash) swap.tx('base', r.txHash, 'Swap settled', 'confirmed')
-  if (r.status !== 'fulfilled') throw new Error(`swap ${r.status}`)
-  swap.done(`received ${fmtUsd(r.executedBuyAmount)} USDC`)
-}
-
-/** Top up Fluence from the egg key's USDC, then create and provision the egg VM. Returns the VM id. */
-export async function launchOnFluence(key: Wallet, o: { launchId: string; cloudInit: string; topUpUsd?: number }, step: StepHandle): Promise<string> {
-  const fl = fluence({ signer: localSigner(key.privateKey as Hex) })
-  const topUp = o.topUpUsd ?? FLUENCE_MIN_TOPUP_USD
-  step.waiting(`Paying $${topUp} to Fluence (x402, no gas)`)
-  const paid = await fl.topUp(topUp)
-  if (paid.transaction) step.tx('base', paid.transaction, `Fluence top-up $${topUp}`, 'confirmed')
-  step.waiting('Signing in to Fluence with the egg key')
-  await fl.login()
-  step.waiting('Choosing the cheapest small server')
-  const [plan, imageId] = await Promise.all([fl.cheapestPlan(1, 2), fl.ubuntuImageId()])
-  const draft = await fl.createDraft({ name: eggVmName(o.launchId), plan, imageId, cloudInit: o.cloudInit, idempotencyKey: `egg-${o.launchId}` })
-  step.tx('fluence', draft.id, 'Server')
-  const est = await fl.estimate(draft.id)
-  step.waiting(`Starting the server (about $${Number(est.monthlyTotal).toFixed(2)}/month, billed per second)`)
-  await fl.provision(draft.id)
+/** Follow a Symbiosis transfer until it lands on Base (the hatch service swaps it from there). */
+export async function followBridge(bridgeTx: string, step: StepHandle): Promise<void> {
+  step.tx('symbiosis', bridgeTx, 'Symbiosis transfer')
   for (;;) {
-    const vm = await fl.vm(draft.id)
-    if (vm.status === 'launched') {
-      step.tx('fluence', draft.id, 'Server', 'confirmed')
-      step.done('server running')
-      return draft.id
+    const s = await bridgeStatus(CHAIN.quai, bridgeTx).catch(() => ({ status: 'unknown' as const, outHash: undefined }))
+    if (s.status === 'success') {
+      step.tx('symbiosis', bridgeTx, 'Symbiosis transfer', 'confirmed')
+      if (s.outHash) step.tx('base', s.outHash, 'Arrived on Base', 'confirmed')
+      return step.done()
     }
-    if (vm.status === 'failed') throw new Error(`Fluence could not start the server: ${JSON.stringify(vm.failure ?? '')}`)
-    step.waiting(`Server ${vm.status}`)
-    await sleep(10_000)
+    if (s.status === 'stuck' || s.status === 'reverted') throw new Error(`bridge ${s.status}; contact Symbiosis support with tx ${bridgeTx}`)
+    step.waiting('Symbiosis relayers are moving your QUAI to Base')
+    await sleep(15_000)
   }
 }

@@ -167,13 +167,15 @@ Advanced makers can configure the harness and pick skills; anyone can write skil
 
 ## Required before launch
 
-- **Multiparty hatch key (2-of-2).** Nobody may keep control of a gremlin's hosting account. Today the Fluence hosting key
-  is derived from the maker's signature (`deriveEggKey`), so the maker can always re-derive it. Interim plan: a backend
-  hatch process generates the account key (on Fluence the paying wallet *is* the account: x402 + SIWE), the maker funds
-  its address, the backend launches the VM, seals the key to the new egg (the gremlin then owns and renews its own
-  hosting) and deletes its copy; its signer sits behind a small interface. Before launch that signer becomes 2-of-2
-  multiparty ECDSA (browser shard + backend shard, e.g. DKLs23): the key is never reconstructed until both shards are
-  sealed to the egg, so neither the maker nor we can take control alone.
+- **Multiparty hatch key (2-of-2).** Nobody may keep control of a gremlin's hosting account. Interim (built): the
+  board's hatch service (`apps/board/src/hatch.ts`) generates the account key (on Fluence the paying wallet *is* the
+  account: x402 + SIWE), the maker funds its address, the board launches the VM with a cloud-init it renders itself
+  (including a random hatch secret), seals the key to the egg that proves the secret, and deletes its copy; the egg keeps
+  it as `hosting.json` and sweeps the account (below). Until then the key sits encrypted in the board's hatch store, so
+  the board operator could still take it: its signer is behind `HostingSigner` (`packages/hosting/src/signer.ts`). Before
+  launch that signer becomes 2-of-2 multiparty ECDSA (browser shard + backend shard, e.g. DKLs23): the key is never
+  reconstructed until both shards are sealed to the egg, so neither the maker nor we can take control alone. The CoW
+  swap of bridged QUAI also signs with the key (permit + order typed data) and needs the same treatment.
   Fluence sessions (checked 2026-11-09 against its API spec and x402 guide, plus a live sign-in):
   - Sign-in returns a refresh token, but "the public API has no endpoint that accepts it": not a back door.
   - The access token lasts 2 hours (measured) and cannot be revoked. Whoever sends the sign-in request holds it, even
@@ -181,8 +183,10 @@ Advanced makers can configure the harness and pick skills; anyone can write skil
     (`PUT /v3/vms/{id}/ssh-keys`, applied on restart), terminate or create VMs (spending the balance), and mint a VM
     access token (`POST /v3/vms/{id}/vm-api-access-token`, an "attach" JWT: almost certainly a serial console).
   - The owner can list and delete API keys (`GET`/`DELETE /v3/api-keys`), list its VMs and SSH keys.
-  So the gremlin cleans up twice, at first boot and again after the 2-hour window: delete every API key, terminate any
-  VM that isn't itself, and clear SSH keys. Cloud-init also closes the console path: no getty on the serial console,
+  So the gremlin cleans up on receiving its account, again 2h15m after the hatch service's last sign-in, then daily:
+  delete every API key, terminate any VM that isn't itself (discard drafts), clear its VM's SSH keys and delete the
+  account's (`packages/hosting/src/fluence-cleanup.ts`). Terminated strays keep their disks and public IPs (billed until
+  deleted): not swept yet. Cloud-init also closes the console path: no getty on the serial console,
   locked boot menu (no recovery entry, a random GRUB password nobody keeps). To verify on the first funded Fluence
   hatch: the attach token's lifetime and what attaching gives.
 - **End dev mode.** During development every hatched gremlin is a dev gremlin (launch data `dev`: the team keeps SSH

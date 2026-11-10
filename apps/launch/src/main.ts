@@ -309,44 +309,28 @@ function stepHost() {
   }
 }
 
-// ── 4. Fluence: egg key → funding → launch ────────────────────────────────────
+// ── 4. Fluence: hatch job → funding → launch ──────────────────────────────────
+// The board's hatch service makes the egg's hosting account (a fresh key you never see), launches the egg once you
+// fund it, seals the key to the egg and deletes its copy. Nobody but the gremlin keeps its hosting.
 async function stepFluence() {
   // Loaded on demand: it pulls in the Symbiosis SDK (large), which only Fluence eggs funded with QUAI need.
   show(`<p class="muted">Loading…</p>`)
-  const { eggKey, bridgeQuaiToEgg, swapBridgedQuai, launchOnFluence, quaiNeededFor, quaiOnBase, usdcBalance, fmtUsd } = await import('./fluence-egg.js')
+  const { bridgeQuaiTo, followBridge, quaiNeededFor, fmtUsd } = await import('./fluence-egg.js')
 
-  // The egg key is never stored: re-derive it by signing again (signatures are deterministic).
-  const keyStep = progress.step('egg-key')
-  show(`<h2>Unlock your egg hosting key</h2>
-    <p>Sign a fixed message in Pelagus. It derives a key that only pays for the egg's server, and you can re-derive it later to reach any leftover balance. It never holds your gremlin's money.</p>
-    <button id="key">Sign with Pelagus</button>`)
-  keyStep.start(s.eggKeyAddress ? 'Sign again to unlock the same key' : 'Waiting for you')
-  const key = await new Promise<Awaited<ReturnType<typeof eggKey>>>((resolve) => {
-    $('#key').onclick = () => void eggKey(s.maker!, keyStep).then(resolve, (e) => { keyStep.fail(e); fail(e) })
-  })
-  if (s.eggKeyAddress && s.eggKeyAddress !== key.address) throw new Error('That signature derived a different egg key. Sign with the same Pelagus account you started with.')
-  s.eggKeyAddress = key.address
+  s.hatch ??= await board.createHatch({ maker: s.maker!, configHash: configHash(s.config!), launchId: s.launchId, boardUrl: BOARD })
   save()
+  const { jobId, hostingAddress, minUsd } = s.hatch
+  const fund = progress.step('fund-egg'), bridge = progress.step('bridge'), swap = progress.step('swap'), start = progress.step('start')
+  const target = BigInt(Math.round(minUsd * 1e6))
+  let job = await board.hatchJob(jobId)
 
-  const fund = progress.step('fund-egg'), bridge = progress.step('bridge'), swap = progress.step('swap')
-  const target = BigInt(FLUENCE_MIN_TOPUP_USD) * 1_000_000n
-  show(`<h2>Checking the egg key…</h2>`)
-  const have = await usdcBalance(key.address)
-  if (have >= target) {
-    for (const [id, st] of [['fund-egg', fund], ['bridge', bridge], ['swap', swap]] as const) if (!progress.isDone(id)) st.skip('egg key already holds USDC')
-  } else if (s.bridgeTx || (await quaiOnBase(key.address)) > 0n) {
-    // A bridge is in flight (or already landed): never ask to pay twice.
-    if (!progress.isDone('fund-egg')) fund.done(s.bridgeTx ? 'bridge already sent' : 'QUAI already on Base')
-    show(`<h2>Funding the egg</h2><p class="muted">Your QUAI is on its way. Follow it in the progress window.</p>`)
-    await swapBridgedQuai(key, s.bridgeTx, bridge, swap)
-  } else {
-    const need = target - have
-    const quaiWei = await quaiNeededFor(need, key.address)
-    fund.start('Choose how to pay')
+  if (job.status === 'funding' && !s.bridgeTx && !(BigInt(job.funds?.quai ?? 0) > 0n)) {
+    const quaiWei = await quaiNeededFor(target, hostingAddress)
+    if (!progress.isDone('fund-egg')) fund.start('Choose how to pay')
     show(`<h2>Fund the egg</h2>
-      <p>The egg needs <b>${fmtUsd(target)}</b> of hosting credit.</p>
+      <p>The egg needs <b>${fmtUsd(target)}</b> of hosting credit. It goes to the egg's own hosting account, which the egg takes over once it runs: neither you nor gremlinz keeps it.</p>
       <p><button id="quai">Pay ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI with Pelagus</button></p>
-      <p class="muted">Pelagus will ask for three confirmations: wrap, approve, bridge. Or send ${fmtUsd(need)} USDC on Base to <code>${esc(key.address)}</code>; this page continues once it arrives.</p>`)
+      <p class="muted">Pelagus will ask for three confirmations: wrap, approve, bridge. Or send ${fmtUsd(target)} USDC on Base to <code>${esc(hostingAddress)}</code>; this page continues once it arrives.</p>`)
     await new Promise<void>((resolve) => {
       let paying = false
       $('#quai').onclick = async () => {
@@ -355,33 +339,58 @@ async function stepFluence() {
         $('#quai').setAttribute('disabled', '')
         show(`<h2>Funding the egg</h2><p class="muted">Confirm each step in Pelagus. The progress window shows where you are.</p>`)
         try {
-          await bridgeQuaiToEgg(s.maker!, key.address, quaiWei, fund, (hash) => { s.bridgeTx = hash; save() })
-          await swapBridgedQuai(key, s.bridgeTx, bridge, swap)
+          await bridgeQuaiTo(s.maker!, hostingAddress, quaiWei, fund, (hash) => { s.bridgeTx = hash; save() })
           resolve()
-        } catch (e) { (s.bridgeTx ? bridge : fund).fail(e); fail(e); paying = false }
+        } catch (e) { fund.fail(e); fail(e); paying = false }
       }
       void (async () => {
-        while ((await usdcBalance(key.address).catch(() => 0n)) < target) {
+        while ((job = await board.hatchJob(jobId).catch(() => job)).status === 'funding' && !(BigInt(job.funds?.usdc ?? 0) >= target)) {
           if (!paying) fund.touch('Waiting for you to pay')
           await sleep(15_000)
         }
         if (!paying) { fund.done('USDC received'); bridge.skip(); swap.skip(); resolve() }
       })()
     })
-  }
+  } else if (!progress.isDone('fund-egg')) fund.done(s.bridgeTx ? 'bridge sent' : job.status === 'funding' ? 'QUAI already on Base' : 'funded')
 
-  const start = progress.step('start')
-  start.start('Waiting for your go-ahead')
-  show(`<h2>Ready to start the egg</h2>
-    <p>The egg key holds ${fmtUsd(await usdcBalance(key.address))} of USDC on Base. Starting the egg pays <b>$${FLUENCE_MIN_TOPUP_USD}</b> to Fluence and starts a small server, billed per second from that credit.</p>
-    <p class="muted">Not ready? Leave this page; the USDC stays on your egg key and you can come back later.</p>
-    <button id="start">Pay $${FLUENCE_MIN_TOPUP_USD} and start the egg</button>`)
-  await new Promise<void>((resolve) => { $('#start').onclick = () => resolve() })
-  show(`<h2>Launching the egg…</h2><p class="muted">The server locks itself down (no SSH, no passwords) before the egg starts. Follow it in the progress window.</p>`)
-  const vmId = await launchOnFluence(key, { launchId: s.launchId, cloudInit: eggCloudInit() }, start)
-  s.machineId = `fluence:${vmId}`
+  show(`<h2>Starting the egg…</h2><p class="muted">The hatch service pays Fluence and starts the server as soon as the money is there. The server locks itself down (no passwords, no keys but the team's during the dev phase) before the egg starts. Follow it in the progress window.</p>`)
+  if (s.bridgeTx && !progress.isDone('bridge')) await followBridge(s.bridgeTx, bridge)
+  for (;;) {
+    job = await board.hatchJob(jobId).catch(() => job)
+    const swapped = job.swaps.at(-1)
+    if (swapped && !progress.isDone('swap')) {
+      swap.tx('cow-base', swapped.uid, 'CoW order', swapped.status === 'fulfilled' ? 'confirmed' : swapped.status === 'open' ? 'sent' : 'failed')
+      if (swapped.status === 'fulfilled') swap.done('swapped to USDC')
+    }
+    if (job.status === 'failed') throw new Error(job.error ?? 'the egg could not be started')
+    if (job.status === 'funding') {
+      ;(BigInt(job.funds?.quai ?? 0) > 0n ? swap : fund).waiting(BigInt(job.funds?.quai ?? 0) > 0n ? 'Swapping your QUAI to USDC on CoW (no gas needed)' : 'Waiting for the funds to arrive')
+    } else {
+      for (const [id, st] of [['bridge', bridge], ['swap', swap]] as const) if (!progress.isDone(id)) st.skip()
+      if (job.topUp?.transaction && !progress.isDone('start')) start.tx('base', job.topUp.transaction, `Fluence top-up $${minUsd}`, 'confirmed')
+      if (job.vmId) start.tx('fluence', job.vmId, 'Server', ['launched', 'handed-off', 'done'].includes(job.status) ? 'confirmed' : 'sent')
+      if (['launched', 'handed-off', 'done'].includes(job.status)) break
+      start.waiting(job.error ?? (job.status === 'paying' ? `Paying $${minUsd} to Fluence (x402, no gas)` : `Server ${job.status === 'launching' ? 'starting' : 'being created'}`))
+    }
+    await sleep(10_000)
+  }
+  start.done('server running')
+  s.machineId = `fluence:${job.vmId}`
   save()
   route()
+}
+
+/** Fluence: show the egg taking over its hosting account (and the hatch service forgetting the key). */
+async function watchCustody() {
+  if (s.host !== 'fluence' || !s.hatch || progress.isDone('custody')) return
+  const st = progress.step('custody')
+  for (;;) {
+    const job = await board.hatchJob(s.hatch.jobId).catch(() => undefined)
+    if (job?.status === 'done') return st.done('the hatch service deleted its copy of the key')
+    if (job?.status === 'handed-off') st.waiting('Handed to the egg; the hatch service is deleting its copy')
+    else st.waiting('Waiting for the egg to claim its hosting account')
+    await sleep(15_000)
+  }
 }
 
 // ── 5. launch (SporeStack) ────────────────────────────────────────────────────
@@ -402,6 +411,7 @@ async function stepLaunch() {
 // ── 6–7. wait for the egg, hand it the config ─────────────────────────────────
 async function stepHatch() {
   const announce = progress.step('announce'), sign = progress.step('sign-config'), feed = progress.step('feed'), hatched = progress.step('hatched')
+  void watchCustody()
   show(`<h2>Waiting for your egg to announce itself…</h2><p class="muted">The server installs and starts the egg, which generates its own keys and announces itself on the board. Usually a few minutes.</p>`)
   let egg = await board.findEgg(s.launchId)
   while (!egg) {

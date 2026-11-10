@@ -9,8 +9,8 @@ export interface Session {
   signed?: SignedConfig & { message: { issuedAt: bigint | string } }
   /** Where the egg server runs. */
   host?: 'fluence' | 'sporestack'
-  /** Fluence funding progress (the egg key itself is re-derived from the maker's signature, never stored). */
-  eggKeyAddress?: string
+  /** Fluence: the board's hatch job, which holds the egg's hosting account until the egg takes it over. */
+  hatch?: { jobId: string; hostingAddress: string; minUsd: number }
   bridgeTx?: string
   sporestackToken?: string
   invoiceUri?: string

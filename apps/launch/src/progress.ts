@@ -52,12 +52,13 @@ const HATCH_STEPS: StepDef[] = [
 
 export const FLUENCE_STEPS: StepDef[] = [
   ...COMMON_STEPS,
-  { id: 'egg-key', title: 'Unlock your egg hosting key', sigs: 1, who: 'you' },
-  { id: 'fund-egg', title: 'Pay for the egg with QUAI', sigs: 3, expect: '~1 min', who: 'you' },
+  { id: 'fund-egg', title: 'Pay for the egg (QUAI or USDC)', sigs: 3, expect: '~1 min', who: 'you' },
   { id: 'bridge', title: 'Bridge QUAI to Base', sigs: 0, expect: '5–10 min', who: 'auto' },
   { id: 'swap', title: 'Swap to USDC (no gas)', sigs: 0, expect: '~1 min', who: 'auto' },
   { id: 'start', title: 'Pay Fluence and start the server', sigs: 0, expect: '2–5 min', who: 'auto' },
-  ...HATCH_STEPS,
+  HATCH_STEPS[0]!,
+  { id: 'custody', title: 'Egg takes over its hosting account', sigs: 0, expect: '~1 min after it announces', who: 'auto' },
+  ...HATCH_STEPS.slice(1),
 ]
 
 export const SPORESTACK_STEPS: StepDef[] = [

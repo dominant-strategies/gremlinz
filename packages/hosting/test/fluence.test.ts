@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { Wallet, hexlify, toUtf8Bytes, verifyMessage } from 'ethers'
-import { EGG_KEY_MESSAGE, TopUpUnderReview, deriveEggKey, eggVmName, fluence } from '../src/fluence.js'
+import { Wallet, verifyMessage } from 'ethers'
+import { TopUpUnderReview, eggVmName, fluence } from '../src/fluence.js'
 import { localSigner } from '../src/signer.js'
 
 /** Fake Fluence API: SIWE login, resources, prices, images and VM creation. */
@@ -40,14 +40,6 @@ function fakeApi() {
 }
 
 describe('fluence egg hosting', () => {
-  it('derives the same in-range egg key from the same maker signature', async () => {
-    const maker = Wallet.createRandom()
-    const sig = await maker.signMessage(toUtf8Bytes(EGG_KEY_MESSAGE)) as `0x${string}`
-    expect(deriveEggKey(sig)).toBe(deriveEggKey(sig))
-    expect(new Wallet(deriveEggKey(sig)).address).toMatch(/^0x[0-9a-fA-F]{40}$/)
-    expect(hexlify(toUtf8Bytes(EGG_KEY_MESSAGE))).toMatch(/^0x/)
-  })
-
   it('signs in with a SIWE message for api.fluence.dev and sends the bearer token', async () => {
     const api = fakeApi()
     const fl = fluence({ signer: localSigner(Wallet.createRandom().privateKey as `0x${string}`), fetchImpl: api.fetchImpl })
