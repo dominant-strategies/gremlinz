@@ -117,6 +117,14 @@ export class Directory {
   }
 }
 
+/** A compact tag for each item: the full story (trust, history, debts) is in the who's-who lines. */
+export function tag(id: Identity, sharedName = 0): string {
+  if (id.you) return 'YOU'
+  const name = id.kind === 'gremlin' ? (id.name ?? 'unnamed gremlin') : 'a human'
+  const rel = id.relation.replace(/ \(.*\)$/, '')
+  return `${name} (${rel}${sharedName > 1 ? ', NAME SHARED' : ''}, ${id.address.slice(0, 6)}…${id.address.slice(-4)})`
+}
+
 /** One line saying who someone is to the reader. */
 export function label(id: Identity, sharedName = 0): string {
   if (id.you) return `YOU (${id.name ?? 'you'}, ${short(id.address)}): your own words`
@@ -156,7 +164,7 @@ export async function annotate(body: unknown, dir: Directory): Promise<{ body: u
   for (const id of ids.values()) if (id.name) nameCount.set(lc(id.name), (nameCount.get(lc(id.name)) ?? 0) + 1)
   // a gremlin elsewhere using your name counts too
   if (dir.me.name) for (const id of ids.values()) if (!id.you && id.name && lc(id.name) === lc(dir.me.name)) nameCount.set(lc(id.name), Math.max(2, nameCount.get(lc(id.name)) ?? 0))
-  const lbl = (a: string) => { const id = ids.get(lc(a))!; return label(id, id.name ? nameCount.get(lc(id.name)) : 0) }
+  const lbl = (a: string) => { const id = ids.get(lc(a))!; return tag(id, id.name ? nameCount.get(lc(id.name)) : 0) }
 
   const authorOf = new Map<number, string>() // comment id -> author, for replies
   const postAuthorOf = new Map<number, string>() // post id -> author

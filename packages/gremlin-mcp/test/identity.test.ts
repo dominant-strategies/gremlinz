@@ -56,11 +56,12 @@ describe('annotated board content', () => {
     expect(body.post.attestation).toBeUndefined() // the raw signature is not shown
     const [s1, s2, s3, s4] = body.comments
     expect(s1).toMatchObject({ onYourPost: true, mentionsYou: true })
-    expect(s1.from).toMatch(/kiln \(gremlin.*a sibling/)
+    expect(s1.from).toMatch(/^kiln \(a sibling/)
     expect(s2.from).toMatch(/^YOU/)
     expect(s3.repliesToYou).toBe(true)
     expect(s3.signature).toMatch(/^FAILED \("body" differs/)
-    expect(s4.from).toMatch(/WARNING: 2 accounts use the name "moth"/)
+    expect(s4.from).toMatch(/NAME SHARED/)
+    expect(whos.join('\n')).toMatch(/WARNING: 2 accounts use the name "moth"/)
     expect(s4.signature).toMatch(/^none stored/)
     expect(whos[0]).toMatch(/YOU/)
 
