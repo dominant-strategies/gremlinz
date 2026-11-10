@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { SigningKey, Wallet, hexlify, randomBytes } from 'ethers'
 import { configHash, hatchProof, openHostingHandover, signMessage } from '@gremlins/hatch'
 import { TopUpUnderReview, type TopUpAuthorization } from '@gremlins/hosting'
+import { EggLaunchData, announcement as eggAnnouncement, generatePhrase, hostingStep, httpBoardClient, keysFromPhrase, type HostingFile } from '@gremlins/egg'
 import { HatchStore } from '../src/hatch-store.ts'
 import { hatchWorker, type FluenceClient, type HatchConfig, type HatchDeps } from '../src/hatch.ts'
 import { announcement, makeBoard, makeConfig, type Board } from './helpers.ts'
@@ -225,6 +226,35 @@ describe('hatch custody: state machine', () => {
     expect(s.w.logins).toHaveLength(logins)
     const view = (await s.b.json(`/api/hatch/${jobId}`)).body.job
     expect(view).toMatchObject({ status: 'done', keyDeleted: true, eggAddress: egg.address, vmId: launching.vmId })
+  })
+
+  it('an egg running its own board client and hosting step ends up owning the account', async () => {
+    const s = await setup()
+    const { jobId, hostingAddress } = (await s.b.postJson('/api/hatch/fluence', s.body)).body
+    s.w.usdc.set(hostingAddress, 10n * MICRO)
+    const launching = await until(s, jobId, 'launching')
+    s.w.vms.get(launching.vmId!)!.status = 'launched'
+    await until(s, jobId, 'launched')
+
+    // the egg, as packages/egg runs it: launch data from the cloud-init we rendered, the board over HTTP
+    const launch = JSON.parse(/content: '(\{.*\})'/.exec(s.w.drafts[0]!.cloudInit)![1]!.replace(/''/g, "'"))
+    const el = EggLaunchData.parse(launch)
+    expect(el).toMatchObject({ maker: s.maker.address.toLowerCase(), launchId: s.launchId, boardUrl: cfg.publicUrl, hatch: { secret: expect.stringMatching(/^0x/) } })
+    const keys = keysFromPhrase(generatePhrase())
+    const board = httpBoardClient(cfg.publicUrl, ((url: string, init?: RequestInit) => s.b.app.request(new URL(url).pathname + new URL(url).search, init)) as typeof fetch)
+    await board.announce(await signMessage(keys.evm, eggAnnouncement({ keys, launch: el }, new Date(s.b.clock.now).toISOString())))
+    let file: HostingFile | undefined
+    const swept: string[] = []
+    const deps = { launch: el, keys, board, now: () => new Date(s.b.clock.now), load: () => file, save: (f: HostingFile) => { file = f }, cleanup: async (f: HostingFile) => { swept.push(f.vmId); return { at: '', apiKeysDeleted: [], vmsTerminated: [], draftsDiscarded: [], accountSshKeysDeleted: [], vmSshKeysCleared: true, errors: [] } } }
+    const mem = {}
+    expect(await hostingStep(deps, mem)).toBe('waiting')
+    await until(s, jobId, 'done')
+    expect(await hostingStep(deps, mem)).toBe('received')
+    expect(file).toMatchObject({ hostingAddress, vmId: launching.vmId })
+    expect(new Wallet(file!.hostingKey).address).toBe(hostingAddress)
+    expect(await hostingStep(deps, mem)).toBe('swept')
+    expect(swept).toEqual([launching.vmId])
+    expect(s.hatchStore.get(jobId)!.key).toBeNull()
   })
 
   it('swaps QUAI bridged to the hosting address with the hosting key, then pays', async () => {

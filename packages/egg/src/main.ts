@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { renderCloudInit } from './cloud-init.js'
 import { httpBoardClient } from './board-client.js'
 import { rpcBalanceReader } from '@gremlins/treasury'
-import { sporestack, unusableSshKey, type Provider } from '@gremlins/hosting'
+import { cleanupFluenceAccount, fluence, localSigner, sporestack, unusableSshKey, type Provider } from '@gremlins/hosting'
 import { step } from './egg.js'
 import { loadOrCreateKeys } from './keys.js'
 import { readLaunchData, EggLaunchData, type NestLaunchData } from './launch.js'
@@ -27,6 +27,7 @@ import { fileStore } from './store.js'
 import { loadOrCreateTransportKey, nestStep, type NestState } from './nest.js'
 import { moveOutStep, nestBuild, startMoveOut, isQuiet, type MoveOutDeps, type MoveOutState } from './moveout.js'
 import { collectPayload, restorePayload } from './payload.js'
+import { hostingFileStore, hostingStep } from './hosting.js'
 
 const home = process.env.GREMLIN_HOME ?? '/var/lib/gremlin'
 const runtimeDir = process.env.AUTOMATON_DIR ?? join(homedir(), '.automaton')
@@ -173,12 +174,22 @@ async function runEgg() {
     collect: () => collectPayload({ phrase: keys.phrase, gremlinHome: home, runtimeDir, launch: el }),
     pulseSeq: () => store.load()?.pulseSeq ?? 0,
     wipe: async () => {
-      for (const f of ['seed', 'state.json', 'config.json', 'signed-config.json', 'status.json']) rmSync(join(home, f), { force: true })
+      for (const f of ['seed', 'state.json', 'config.json', 'signed-config.json', 'status.json', 'hosting.json']) rmSync(join(home, f), { force: true })
       rmSync(runtimeDir, { recursive: true, force: true })
       writeFileSync(join(home, 'MOVED'), `${moveOut?.nestAddress ?? 'unknown nest'} at ${new Date().toISOString()}\n`)
     },
   })
   if (isQuiet(moveOut)) paused = true
+
+  // Hatch custody: take over the hosting account the hatch backend made for this egg, and keep it swept.
+  const hosting = hostingFileStore(join(home, 'hosting.json'))
+  const hostingMem = {}
+  const hostingDeps = {
+    launch: el, keys, board, now: () => new Date(), ...hosting,
+    cleanup: (f: { hostingKey: string; vmId: string; keepVmIds?: string[] }) =>
+      cleanupFluenceAccount(fluence({ signer: localSigner(f.hostingKey as `0x${string}`) }), { vmId: f.vmId, keepVmIds: f.keepVmIds }),
+  }
+  let lastHosting = ''
 
   let last = ''
   for (;;) {
@@ -205,6 +216,15 @@ async function runEgg() {
         const s = await step(deps)
         if (s.stage !== last) log('stage', (last = s.stage))
         if (s.stage === 'initialized' || s.stage === 'hatched') startRuntime()
+        // After announcing: the board only hands over to an egg it has seen announced.
+        if (s.stage !== 'booted') {
+          try {
+            const h = await hostingStep(hostingDeps, hostingMem)
+            if (h !== lastHosting && h !== 'idle') log('hosting', (lastHosting = h), h === 'swept' ? hosting.load()?.cleanups.at(-1)?.summary ?? '' : '')
+          } catch (e) {
+            log('hosting step failed:', (e as Error).message)
+          }
+        }
       }
     } catch (e) {
       log('step failed:', (e as Error).message)

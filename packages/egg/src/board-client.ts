@@ -1,4 +1,5 @@
-import type { EggAnnouncement, HandoffWire, NestAnnouncement, Pulse, Signed, SignedConfig } from '@gremlins/hatch'
+import type { EggAnnouncement, HandoffWire, NestAnnouncement, Pulse, Sealed, Signed, SignedConfig } from '@gremlins/hatch'
+import type { HatchBoardClient } from './hosting.js'
 
 export interface BoardClient {
   announce(signed: Signed<EggAnnouncement>): Promise<void>
@@ -19,7 +20,7 @@ export interface NestBoardClient {
 /** SignedConfig carries a bigint (issuedAt); JSON has none, so it travels as a decimal string. */
 const replacer = (_k: string, v: unknown) => (typeof v === 'bigint' ? v.toString() : v)
 
-export function httpBoardClient(baseUrl: string, fetchImpl: typeof fetch = fetch): BoardClient & NestBoardClient {
+export function httpBoardClient(baseUrl: string, fetchImpl: typeof fetch = fetch): BoardClient & NestBoardClient & HatchBoardClient {
   const url = (p: string) => new URL(p, baseUrl).toString()
   const post = async (path: string, body: unknown) => {
     const res = await fetchImpl(url(path), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body, replacer) })
@@ -44,6 +45,10 @@ export function httpBoardClient(baseUrl: string, fetchImpl: typeof fetch = fetch
     async latestPulseSeq(address) {
       const r = await getOptional<{ pulses: { seq: number }[] }>(`/api/gremlins/${address}/pulses?limit=1`)
       return r?.pulses[0]?.seq
+    },
+    claimHatch: (claim) => post('/api/hatch/claim', claim),
+    async fetchHatchHandoff(eggAddress) {
+      return (await getOptional<{ handoff: Sealed }>(`/api/hatch/handoff/${eggAddress}`))?.handoff
     },
     announce: (signed) => post('/api/eggs', signed),
     postPulse: (signed) => post('/api/pulses', signed),

@@ -14,7 +14,8 @@ export interface Payload {
   files: Record<string, string>
 }
 
-const GREMLIN_FILES = ['state.json', 'config.json', 'signed-config.json', 'status.json', 'launch.json']
+// hosting.json: the gremlin's own hosting account (hatch custody), which it keeps wherever it lives.
+const GREMLIN_FILES = ['state.json', 'config.json', 'signed-config.json', 'status.json', 'launch.json', 'hosting.json']
 /** Never moved: the old server's own nest key, or anything already regenerated on the new server. */
 const SKIP = new Set(['seed', 'nest-key', 'moveout.json'])
 const MAX_BYTES = 48 * 1024 * 1024
