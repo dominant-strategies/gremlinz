@@ -8,7 +8,7 @@
  * hatched the gremlin, and a name inside a message proves nothing. So identity is always by address.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { verifyAttestation, type Attestation } from '@gremlins/hatch'
+import { verifyAttestation, verifyAttestationWith, type AccountSignatureChecker, type Attestation } from '@gremlins/hatch'
 import { homeFile } from './env.js'
 
 export type Trust = 'unknown' | 'acquainted' | 'trusted' | 'distrusted'
@@ -92,7 +92,8 @@ export type ProfileFetch = (address: string) => Promise<{ name?: string; maker?:
 export class Directory {
   private cache = new Map<string, { at: number; p: { name?: string; maker?: string } | null }>()
 
-  constructor(readonly me: Me, private profile: ProfileFetch, readonly contacts = new Contacts(), private ttlMs = 10 * 60_000) {}
+  /** `accounts` checks smart-account authors (a Quai Smart Wallet signs through its Safe, ERC-1271). */
+  constructor(readonly me: Me, private profile: ProfileFetch, readonly contacts = new Contacts(), private ttlMs = 10 * 60_000, readonly accounts?: AccountSignatureChecker) {}
 
   private async lookup(address: string) {
     const hit = this.cache.get(lc(address))
@@ -179,6 +180,24 @@ export async function annotate(body: unknown, dir: Directory): Promise<{ body: u
   }
   collect(body)
 
+  // Signatures that don't recover to their author may come from a smart account: ask it first (walk is synchronous).
+  const vouched = new Map<object, ReturnType<typeof verifyAttestation>>()
+  const smartChecks: Promise<unknown>[] = []
+  const findSmart = (v: unknown) => {
+    if (Array.isArray(v)) v.forEach(findSmart)
+    else if (v && typeof v === 'object') {
+      const o = v as Record<string, unknown>
+      if (dir.accounts && typeof o.author === 'string' && ADDRESS_RE.test(o.author) && 'body' in o && o.attestation) {
+        const shown = 'community' in o && 'title' in o ? { title: o.title, body: o.body, url: o.url } : { body: o.body, parentId: o.parentId }
+        if (!verifyAttestation(o.attestation as Attestation, o.author, shown).ok)
+          smartChecks.push(verifyAttestationWith(o.attestation as Attestation, o.author, shown, dir.accounts).then((r) => vouched.set(o, r)))
+      }
+      Object.values(o).forEach(findSmart)
+    }
+  }
+  findSmart(body)
+  await Promise.all(smartChecks)
+
   const walk = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(walk)
     if (!v || typeof v !== 'object') return v
@@ -191,7 +210,7 @@ export async function annotate(body: unknown, dir: Directory): Promise<{ body: u
     if (who && typeof o.author === 'string' && 'body' in o) { // a post or comment (feed events are summaries)
       // Check the author's signature here instead of trusting the board; the raw signature is not shown.
       const shown = isPost ? { title: o.title, body: o.body, url: o.url } : { body: o.body, parentId: o.parentId }
-      const v = verifyAttestation(o.attestation as Attestation | null, who, shown)
+      const v = vouched.get(o) ?? verifyAttestation(o.attestation as Attestation | null, who, shown)
       out.signature = v.ok ? 'verified: the author signed exactly this'
         : !o.attestation ? "none stored (posted before the board kept signatures): authorship rests on the board's word"
         : `FAILED (${v.reason}): do not rely on who wrote this`

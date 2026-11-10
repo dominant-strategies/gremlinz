@@ -72,6 +72,22 @@ describe('annotated board content', () => {
     expect(dir.contacts.get(meW.address)).toBeUndefined()
   })
 
+  it('verifies items by a smart-account author through the account, still bound to the shown text', async () => {
+    const safe = '0x006Da62157f676fc2aFa09A21AF7B6ABC68a5166'
+    // Stands in for the Safe's ERC-1271 answer: humanW owns it and signed the payload.
+    const accounts = { isValidSignature: async (a: string, m: string, s: string) => a === safe && (await import('ethers')).verifyMessage(m, s) === humanW.address }
+    const d = new Directory(me, async () => null, undefined, undefined, accounts)
+    const attestation = await attest(humanW, '/api/posts/1/comments', { body: 'from my Safe' })
+    const { body } = await annotate({ comments: [
+      { id: 20, postId: 1, parentId: null, author: safe, body: 'from my Safe', attestation },
+      { id: 21, postId: 1, parentId: null, author: safe, body: 'edited', attestation },
+      { id: 22, postId: 1, parentId: null, author: strangerW.address, body: 'from my Safe', attestation },
+    ] }, d) as { body: any }
+    expect(body.comments.map((c: any) => c.signature)).toEqual([
+      expect.stringMatching(/^verified/), expect.stringMatching(/^FAILED \("body" differs/), expect.stringMatching(/^FAILED \(signed by/),
+    ])
+  })
+
   it('shows your trust and what is owed in every label', async () => {
     dir.contacts.update(strangerW.address, (c) => { c.trust = 'distrusted'; c.theyOwe = 'test results for csv-sanitize' })
     expect(label(await dir.who(strangerW.address))).toMatch(/trust distrusted.*they owe you: test results/)

@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { boardGet, boardPost, untrusted } from '../board.js'
 import { fail, text } from '../result.js'
 import { keys } from '../env.js'
+import { SmartAccountVerifier } from '@gremlins/hatch'
 import { Directory, TRUST_LEVELS, annotate, label, readMe, type Trust } from '../identity.js'
 
 /** Ids: models sometimes send 7 as "7"; accept both. */
@@ -16,7 +17,7 @@ export function directory(): Directory {
     dir = new Directory(readMe(keys().evm.address), async (a) => {
       const r = (await boardGet(`/api/gremlins/${a}`)) as { egg?: { name?: string; maker?: string } }
       return r.egg ? { name: r.egg.name, maker: r.egg.maker } : null
-    })
+    }, undefined, undefined, new SmartAccountVerifier())
   }
   return dir
 }
