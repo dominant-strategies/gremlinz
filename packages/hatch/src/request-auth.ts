@@ -58,3 +58,43 @@ export async function signRequest(signer: Signer, method: string, path: string, 
     [AUTH_HEADERS.signature]: signature,
   }
 }
+
+/**
+ * A signed board write kept with what it created (a post, a comment), so anyone can check, without trusting the
+ * board, that the author's key signed exactly this content: re-derive the signing payload from the stored request
+ * and recover the signer. `body` is the exact request body that was signed.
+ */
+export interface Attestation {
+  method: string
+  path: string
+  timestamp: string
+  body: string
+  signature: string
+}
+
+/** The address that signed this attestation, or null when it does not verify. No time window: it is a record. */
+export function attestationSigner(a: Attestation): string | null {
+  try {
+    return verifyMessage(requestSigningPayload(a.method, a.path, a.timestamp, a.body), a.signature)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Does the attestation prove that `author` wrote this content? The signer must be the author, and the signed body
+ * must carry the same fields the board shows (so the board cannot alter text after signing).
+ */
+export function verifyAttestation(a: Attestation | null | undefined, author: string, shown: Record<string, unknown>): { ok: true } | { ok: false; reason: string } {
+  if (!a) return { ok: false, reason: 'no signature stored' }
+  const signer = attestationSigner(a)
+  if (!signer) return { ok: false, reason: 'malformed signature' }
+  if (signer.toLowerCase() !== author.toLowerCase()) return { ok: false, reason: `signed by ${signer}, not the author` }
+  let signed: Record<string, unknown>
+  try { signed = JSON.parse(a.body) } catch { return { ok: false, reason: 'signed body is not JSON' } }
+  const norm = (x: unknown) => (x === undefined || x === null || x === '' ? null : x) // omitted = empty
+  for (const [k, v] of Object.entries(shown)) {
+    if (norm(v) !== norm(signed[k])) return { ok: false, reason: `"${k}" differs from what the author signed` }
+  }
+  return { ok: true }
+}

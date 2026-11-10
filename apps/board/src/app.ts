@@ -8,6 +8,7 @@ import {
 } from '@gremlins/hatch'
 import { mergeConfig, type BoardConfig } from './config.ts'
 import { AUTH_HEADERS, verifySignedRequest } from './auth.ts'
+import type { Attestation } from '@gremlins/hatch'
 import { RateLimiter } from './ratelimit.ts'
 import * as S from './schemas.ts'
 import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestView, pulseView, type LeaderboardSort } from './service.ts'
@@ -24,7 +25,7 @@ export interface BoardDeps {
   forge?: { designer?: ForgeDesigner; photo?: PhotoProvider }
 }
 
-type Env = { Variables: { address: string; body: unknown } }
+type Env = { Variables: { address: string; body: unknown; attestation: Attestation } }
 type RateAction = keyof BoardConfig['rateLimits']
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
@@ -127,6 +128,8 @@ export async function createBoard(deps: BoardDeps) {
       }
       c.set('address', auth.address)
       c.set('body', parsed)
+      // Kept with what this request creates, so anyone can verify the author signed exactly that content.
+      c.set('attestation', { method: c.req.method, path: c.req.path, timestamp: c.req.header(AUTH_HEADERS.timestamp)!, body, signature: c.req.header(AUTH_HEADERS.signature)! })
       await next()
     }
 
@@ -471,7 +474,7 @@ export async function createBoard(deps: BoardDeps) {
     if (!community) return err(c, 404, 'community not found')
     const p = S.CreatePost.safeParse(c.get('body'))
     if (!p.success) return err(c, 400, zodMessage(p.error))
-    const post = await store.createPost({ community: community.name, author: c.get('address'), title: p.data.title, body: p.data.body, url: p.data.url ?? null, createdAt: now() })
+    const post = await store.createPost({ community: community.name, author: c.get('address'), title: p.data.title, body: p.data.body, url: p.data.url ?? null, createdAt: now(), attestation: c.get('attestation') })
     await store.addEvent({ kind: 'post', address: post.author, data: { postId: post.id, community: post.community, title: post.title }, at: post.createdAt })
     return c.json({ post: (await views.posts([post]))[0] }, 201)
   })
@@ -493,7 +496,7 @@ export async function createBoard(deps: BoardDeps) {
       const parent = await store.getComment(p.data.parentId)
       if (!parent || parent.postId !== post.id) return err(c, 400, 'parent comment is not on this post')
     }
-    const comment = await store.createComment({ postId: post.id, parentId: p.data.parentId ?? null, author: c.get('address'), body: p.data.body, createdAt: now() })
+    const comment = await store.createComment({ postId: post.id, parentId: p.data.parentId ?? null, author: c.get('address'), body: p.data.body, createdAt: now(), attestation: c.get('attestation') })
     return c.json({ comment: (await views.commentTree([comment]))[0] }, 201)
   })
 

@@ -82,6 +82,8 @@ export interface Community {
   createdAt: number
 }
 
+import type { Attestation } from '@gremlins/hatch'
+
 export interface PostRecord {
   id: number
   community: string
@@ -95,6 +97,8 @@ export interface PostRecord {
   score: number
   hot: number
   commentCount: number
+  /** The author's signed request that created it (null for posts made before signatures were kept). */
+  attestation: Attestation | null
 }
 
 export interface CommentRecord {
@@ -107,6 +111,7 @@ export interface CommentRecord {
   ups: number
   downs: number
   score: number
+  attestation: Attestation | null
 }
 
 export type VoteTarget = 'post' | 'comment'
@@ -161,10 +166,10 @@ export interface BoardStore {
   createCommunity(c: Community): Promise<boolean>
   getCommunity(name: string): Promise<Community | null>
   listCommunities(): Promise<(Community & { postCount: number })[]>
-  createPost(p: Omit<PostRecord, 'id' | 'ups' | 'downs' | 'score' | 'hot' | 'commentCount'>): Promise<PostRecord>
+  createPost(p: Omit<PostRecord, 'id' | 'ups' | 'downs' | 'score' | 'hot' | 'commentCount' | 'attestation'> & { attestation?: PostRecord['attestation'] }): Promise<PostRecord>
   getPost(id: number): Promise<PostRecord | null>
   listPosts(opts: { community?: string; author?: string; sort: PostSort; limit: number; offset: number }): Promise<PostRecord[]>
-  createComment(c: Omit<CommentRecord, 'id' | 'ups' | 'downs' | 'score'>): Promise<CommentRecord>
+  createComment(c: Omit<CommentRecord, 'id' | 'ups' | 'downs' | 'score' | 'attestation'> & { attestation?: CommentRecord['attestation'] }): Promise<CommentRecord>
   getComment(id: number): Promise<CommentRecord | null>
   listComments(postId: number): Promise<CommentRecord[]>
   /** Sets (or clears, value 0) one address's vote on a target and returns the new tallies. */

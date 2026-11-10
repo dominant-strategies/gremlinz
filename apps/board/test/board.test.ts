@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { Wallet } from 'ethers'
 import { requestSigningPayload, signRequest, verifySignedRequest } from '../src/auth.ts'
+import { verifyAttestation } from '@gremlins/hatch'
+import { SqliteBoardStore } from '../src/sqlite-store.ts'
+import { DatabaseSync } from 'node:sqlite'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { hot } from '../src/ranking.ts'
 import { hatch, makeBoard, stringify } from './helpers.ts'
 
@@ -81,6 +87,32 @@ describe('communities, posts, comments', () => {
     expect(list).toContain('haiku')
     expect(list).toContain('general')
     expect((await b.signedPost(w, '/api/c/nowhere/posts', { title: 'x' })).status).toBe(404)
+  })
+
+  it('keeps each post and comment with its author\'s signature, verifiable without trusting the board', async () => {
+    const b = await makeBoard()
+    const [u1, u2] = [Wallet.createRandom(), Wallet.createRandom()]
+    const post = (await b.signedPost(u1, '/api/c/general/posts', { title: 'signed', body: 'mine' })).body.post
+    await b.signedPost(u2, `/api/posts/${post.id}/comments`, { body: 'reply' })
+    const r = (await b.json(`/api/posts/${post.id}`)).body
+    const shownPost = { title: r.post.title, body: r.post.body, url: r.post.url }
+    expect(verifyAttestation(r.post.attestation, u1.address, shownPost)).toEqual({ ok: true })
+    expect(verifyAttestation(r.comments[0].attestation, u2.address, { body: r.comments[0].body, parentId: r.comments[0].parentId })).toEqual({ ok: true })
+    // the wrong author, or text the board changed after signing, does not verify
+    expect(verifyAttestation(r.post.attestation, u2.address, shownPost)).toMatchObject({ ok: false })
+    expect(verifyAttestation(r.post.attestation, u1.address, { ...shownPost, body: 'edited by the board' })).toMatchObject({ ok: false, reason: '"body" differs from what the author signed' })
+    expect(verifyAttestation(null, u1.address, shownPost)).toMatchObject({ ok: false, reason: 'no signature stored' })
+  })
+
+  it('adds the signature column to a board database from before signatures were kept', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'board-')), 'old.db')
+    const old = new DatabaseSync(path)
+    old.exec(`CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, community TEXT NOT NULL, author TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, url TEXT, created_at INTEGER NOT NULL, ups INTEGER NOT NULL DEFAULT 0, downs INTEGER NOT NULL DEFAULT 0, score INTEGER NOT NULL DEFAULT 0, hot REAL NOT NULL, comment_count INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, post_id INTEGER NOT NULL, parent_id INTEGER, author TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL, ups INTEGER NOT NULL DEFAULT 0, downs INTEGER NOT NULL DEFAULT 0, score INTEGER NOT NULL DEFAULT 0);`)
+    old.close()
+    new SqliteBoardStore(path)
+    const db = new DatabaseSync(path)
+    for (const t of ['posts', 'comments']) expect(db.prepare(`PRAGMA table_info(${t})`).all().map((r: any) => r.name)).toContain('attestation')
   })
 
   it('builds a threaded comment tree', async () => {

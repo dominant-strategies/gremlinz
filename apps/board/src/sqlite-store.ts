@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS posts (
   downs         INTEGER NOT NULL DEFAULT 0,
   score         INTEGER NOT NULL DEFAULT 0,
   hot           REAL NOT NULL,
-  comment_count INTEGER NOT NULL DEFAULT 0
+  comment_count INTEGER NOT NULL DEFAULT 0,
+  attestation   TEXT
 );
 CREATE INDEX IF NOT EXISTS posts_hot ON posts(community, hot DESC);
 CREATE INDEX IF NOT EXISTS posts_new ON posts(community, created_at DESC);
@@ -73,7 +74,8 @@ CREATE TABLE IF NOT EXISTS comments (
   created_at INTEGER NOT NULL,
   ups        INTEGER NOT NULL DEFAULT 0,
   downs      INTEGER NOT NULL DEFAULT 0,
-  score      INTEGER NOT NULL DEFAULT 0
+  score      INTEGER NOT NULL DEFAULT 0,
+  attestation TEXT
 );
 CREATE INDEX IF NOT EXISTS comments_post ON comments(post_id);
 
@@ -180,6 +182,7 @@ const post = (r: Row): PostRecord => ({
   score: r.score as number,
   hot: r.hot as number,
   commentCount: r.comment_count as number,
+  attestation: r.attestation ? JSON.parse(r.attestation as string) : null,
 })
 
 const comment = (r: Row): CommentRecord => ({
@@ -192,6 +195,7 @@ const comment = (r: Row): CommentRecord => ({
   ups: r.ups as number,
   downs: r.downs as number,
   score: r.score as number,
+  attestation: r.attestation ? JSON.parse(r.attestation as string) : null,
 })
 
 const community = (r: Row): Community => ({
@@ -217,6 +221,11 @@ export class SqliteBoardStore implements BoardStore {
     // secure_delete: freed pages are zeroed, so deleted handoff ciphertexts don't linger in the file.
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA secure_delete = ON;')
     this.db.exec(SCHEMA)
+    // Databases from before signatures were kept: add the column (old rows stay unsigned).
+    for (const table of ['posts', 'comments']) {
+      const cols = this.all(`PRAGMA table_info(${table})`).map((r) => r.name)
+      if (!cols.includes('attestation')) this.db.exec(`ALTER TABLE ${table} ADD COLUMN attestation TEXT`)
+    }
   }
 
   private tx<T>(fn: () => T): T {
@@ -411,10 +420,10 @@ export class SqliteBoardStore implements BoardStore {
 
   // posts
 
-  async createPost(p: Omit<PostRecord, 'id' | 'ups' | 'downs' | 'score' | 'hot' | 'commentCount'>) {
+  async createPost(p: Omit<PostRecord, 'id' | 'ups' | 'downs' | 'score' | 'hot' | 'commentCount' | 'attestation'> & { attestation?: PostRecord['attestation'] }) {
     const r = this.db
-      .prepare('INSERT INTO posts (community, author, title, body, url, created_at, hot) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(p.community, p.author, p.title, p.body, p.url, p.createdAt, hot(0, 0, p.createdAt))
+      .prepare('INSERT INTO posts (community, author, title, body, url, created_at, hot, attestation) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(p.community, p.author, p.title, p.body, p.url, p.createdAt, hot(0, 0, p.createdAt), p.attestation ? JSON.stringify(p.attestation) : null)
     return (await this.getPost(Number(r.lastInsertRowid)))!
   }
 
@@ -434,11 +443,11 @@ export class SqliteBoardStore implements BoardStore {
 
   // comments
 
-  async createComment(c: Omit<CommentRecord, 'id' | 'ups' | 'downs' | 'score'>) {
+  async createComment(c: Omit<CommentRecord, 'id' | 'ups' | 'downs' | 'score' | 'attestation'> & { attestation?: CommentRecord['attestation'] }) {
     const id = this.tx(() => {
       const r = this.db
-        .prepare('INSERT INTO comments (post_id, parent_id, author, body, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(c.postId, c.parentId, c.author, c.body, c.createdAt)
+        .prepare('INSERT INTO comments (post_id, parent_id, author, body, created_at, attestation) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(c.postId, c.parentId, c.author, c.body, c.createdAt, c.attestation ? JSON.stringify(c.attestation) : null)
       this.db.prepare('UPDATE posts SET comment_count = comment_count + 1 WHERE id = ?').run(c.postId)
       return Number(r.lastInsertRowid)
     })
