@@ -5,9 +5,11 @@ import { GatewayConfig } from './config.js'
 import { createGateway } from './server.js'
 import { Ledger, type LedgerEntry } from './ledger.js'
 import { loadRatings, observe, type ModelRating, type Observed } from './ratings.js'
-import { boardUrl, homeFile, keys } from '../env.js'
+import { boardUrl, chainKeys, homeFile, keys, phrase } from '../env.js'
 import { allowance, fetchGrants, lentOffers, period, remainingUsd, type OpenGrant } from './grants.js'
 import { veniceFetch } from './venice.js'
+import { setKnownSecrets } from './glean.js'
+import { base58 } from '@scure/base'
 import { hashferenceFetch } from './providers.js'
 
 const cfg = GatewayConfig.parse(JSON.parse(readFileSync(process.env.GATEWAY_CONFIG ?? '/etc/gremlin/gateway.json', 'utf8')))
@@ -16,6 +18,10 @@ const ledgerFile = homeFile('inference-ledger.jsonl')
 const ledger = new Ledger(ledgerFile)
 
 // Wallet-signed providers sign with the gremlin's EVM key; the last reported balance is kept for the runway.
+// The gremlin's own secrets are never sent to a free endpoint, wherever they turn up in a request.
+setKnownSecrets([phrase(), keys().evm.privateKey, keys().quai.privateKey])
+void chainKeys().then((k) => setKnownSecrets([phrase(), keys().evm.privateKey, keys().quai.privateKey, base58.encode(k.solana.secretKey)])).catch(() => {})
+
 const keepBalance = (id: string) => (b: unknown) => writeFileSync(homeFile(`balance-${id}.json`), JSON.stringify(b), { mode: 0o600 })
 const fetchers = Object.fromEntries([
   ...cfg.providers.filter((p) => p.kind === 'venice-x402').map((p) => [p.id, veniceFetch(p, keys().evm.privateKey, keepBalance(p.id))]),

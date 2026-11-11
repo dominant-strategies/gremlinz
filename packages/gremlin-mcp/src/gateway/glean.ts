@@ -5,6 +5,7 @@
  * endpoints are on by default; free tiers that need an account are on only when the maker supplied a key at hatch
  * (gremlins don't farm accounts). Requests that look like they contain secrets are never sent to a free endpoint.
  */
+import { LangEn } from 'ethers'
 import type { ProviderConfig, RouteTarget } from './config.js'
 
 export interface GleanEndpoint {
@@ -63,19 +64,54 @@ export const GLEAN_ENDPOINTS: GleanEndpoint[] = [
   },
 ]
 
-/** Patterns that look like secrets. Never sent to free endpoints. */
+/** Secret formats distinctive enough to match on their own. Never sent to free endpoints. */
 const SECRET_PATTERNS = [
-  /\b0x[0-9a-fA-F]{64}\b/, // private key
-  /\b(?:[a-z]{3,8}\s+){11,23}[a-z]{3,8}\b/, // 12–24 lowercase words in a row (seed phrase)
   /\b(sk|pk|rk)-[A-Za-z0-9_-]{20,}\b/, // API keys
+  /\bhf_[A-Za-z0-9_-]{16,}\b/, // Hashference key
   /\bss_t_[0-9a-z]{27}\b/, // SporeStack token
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
 ]
-
-export function looksSensitive(body: unknown): boolean {
-  const text = JSON.stringify(body)
-  return SECRET_PATTERNS.some((r) => r.test(text))
+/**
+ * 32 bytes of hex is a private key, or just a transaction/config hash, which fill a gremlin's context. Count it as a
+ * secret unless a hash-like label comes just before it; the gremlin's own keys are matched exactly (setKnownSecrets).
+ */
+const HEX32 = /\b(?:0x)?[0-9a-fA-F]{64}\b/g
+const HASH_LABEL = /(?:hash|tx|txid|transaction|block|digest|config|root|commit|\bid|\/tx\/|\/block\/)[^0-9a-zA-Z]{0,4}(?:[a-z_ -]{0,16}[:=\s"'])?\s*(?:0x)?$/i
+function hasUnlabelledHex(text: string): boolean {
+  for (const m of text.matchAll(HEX32)) if (!HASH_LABEL.test(text.slice(Math.max(0, m.index! - 40), m.index!))) return true
+  return false
 }
+/** Twelve or more BIP-39 words in a row is a seed phrase; ordinary prose rarely manages that. */
+const SEED_RUN = 12
+const BIP39 = LangEn.wordlist()
+
+let known: string[] = []
+/** The gremlin's own secrets (seed phrase, private keys), matched exactly in any request bound for a free endpoint. */
+export function setKnownSecrets(secrets: string[]) {
+  known = secrets.flatMap((s) => [s, s.replace(/^0x/i, '')]).filter((s) => s.length >= 32)
+}
+
+function hasSeedPhrase(text: string): boolean {
+  let run = 0
+  for (const w of text.split(/[^a-z]+/)) {
+    run = w && BIP39.getWordIndex(w) >= 0 ? run + 1 : 0
+    if (run >= SEED_RUN) return true
+  }
+  return false
+}
+
+/** Why a request looks like it holds a secret (a rule name, never the secret), or undefined. */
+export function sensitiveReason(body: unknown): string | undefined {
+  const text = JSON.stringify(body)
+  if (known.some((k) => text.includes(k))) return 'one of your own keys'
+  const p = SECRET_PATTERNS.find((r) => r.test(text))
+  if (p) return `a secret-shaped token (${['API key', 'Hashference key', 'SporeStack token', 'PEM private key'][SECRET_PATTERNS.indexOf(p)]})`
+  if (hasSeedPhrase(text)) return 'a run of seed-phrase words'
+  if (hasUnlabelledHex(text)) return 'an unlabelled 32-byte hex value (could be a private key)'
+  return undefined
+}
+
+export const looksSensitive = (body: unknown): boolean => sensitiveReason(body) !== undefined
 
 /** Providers and the gremlin-glean route for the endpoints available to this gremlin (keyless, or keyed and configured). */
 export function gleanRoute(env: NodeJS.ProcessEnv = process.env, models: Record<string, string[]> = {}): { providers: ProviderConfig[]; route: RouteTarget[] } {

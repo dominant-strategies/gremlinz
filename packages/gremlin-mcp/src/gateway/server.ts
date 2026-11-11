@@ -6,7 +6,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { GatewayConfig, ProviderConfig, RouteTarget } from './config.js'
 import { providerFetch, retryable, type UpstreamFetch } from './providers.js'
-import { gleanRoute, looksSensitive } from './glean.js'
+import { gleanRoute, sensitiveReason } from './glean.js'
 import { classify, isRefusal, mayRetryRefusal, permissiveRoute, routeFor, type RouterInput } from './router.js'
 
 export const AUTO = 'gremlin-auto'
@@ -83,7 +83,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
       if (!route) return json(res, 404, { error: { message: `unknown model "${alias}"; use one of: ${[...Object.keys(cfg.routes), ...(deps.router ? [AUTO] : [])].join(', ')}` } })
 
       const errors: string[] = []
-      const sensitive = looksSensitive(body.messages)
+      const sensitive = sensitiveReason(body.messages)
       const tried = new Set<string>()
       const lent = alias === 'gremlin-glean' ? [] : deps.lent?.() ?? []
       for (const l of lent) { providers.set(l.provider.id, l.provider); fetchers.set(l.provider.id, l.fetch) }
@@ -104,7 +104,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         if (!p || !f) { errors.push(`${target.provider}: not configured`); continue }
         const c = cooldown.get(p.id)
         if (c && c.until > now()) { errors.push(`${p.id}: cooling down`); continue }
-        if (p.free && sensitive) { errors.push(`${p.id}: skipped, the request looks like it contains a secret`); continue }
+        if (p.free && sensitive) { errors.push(`${p.id}: skipped, the request looks like it contains a secret: ${sensitive}`); continue }
         if (p.minIntervalMs && now() - (lastCall.get(p.id) ?? -Infinity) < p.minIntervalMs) {
           // On the last resort, wait out a free provider's short interval rather than fail the whole request.
           const wait = p.minIntervalMs - (now() - (lastCall.get(p.id) ?? -Infinity))

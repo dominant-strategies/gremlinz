@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http'
 import { Wallet } from 'ethers'
 import { GatewayConfig } from '../src/gateway/config.js'
 import { createGateway, withGlean } from '../src/gateway/server.js'
-import { gleanRoute, looksSensitive } from '../src/gateway/glean.js'
+import { gleanRoute, looksSensitive, setKnownSecrets } from '../src/gateway/glean.js'
 
 describe('glean endpoints', () => {
   it('uses keyless endpoints by default and keyed free tiers only when the maker supplied a key and model', () => {
@@ -19,6 +19,25 @@ describe('glean endpoints', () => {
     expect(looksSensitive([{ role: 'user', content: w.mnemonic!.phrase }])).toBe(true)
     expect(looksSensitive([{ role: 'user', content: 'token ss_t_' + 'a'.repeat(27) }])).toBe(true)
     expect(looksSensitive([{ role: 'user', content: 'What is the capital of France?' }])).toBe(false)
+  })
+
+  it('lets an agent\'s ordinary context through: transaction and config hashes, long prose', () => {
+    const tx = '0x' + 'ab12'.repeat(16)
+    expect(looksSensitive([{ role: 'tool', content: `Sent 5 QUAI: https://quaiscan.io/tx/${tx}` }])).toBe(false)
+    expect(looksSensitive([{ role: 'system', content: `Your config hash is 0x${'7b'.repeat(32)}. Signed by your maker.` }])).toBe(false)
+    expect(looksSensitive([{ role: 'system', content: 'You are a small creature who lives on its own server and pays for its own thinking, and you choose what to do with every turn you are given each day.' }])).toBe(false)
+  })
+
+  it('catches labelled keys, real seed phrases, Hashference keys and the gremlin\'s own secrets anywhere', () => {
+    const own = Wallet.createRandom()
+    expect(looksSensitive([{ role: 'user', content: `private_key: ${Wallet.createRandom().privateKey.slice(2)}` }])).toBe(true)
+    expect(looksSensitive([{ role: 'user', content: 'use hf_' + 'x'.repeat(24) }])).toBe(true)
+    expect(looksSensitive([{ role: 'tool', content: `value ${own.privateKey}` }])).toBe(true) // unlabelled 32 bytes: assume a key
+    // Even mislabelled as a hash, the gremlin's own key is caught once it's known.
+    expect(looksSensitive([{ role: 'tool', content: `tx ${own.privateKey}` }])).toBe(false)
+    setKnownSecrets([own.mnemonic!.phrase, own.privateKey])
+    expect(looksSensitive([{ role: 'tool', content: `tx ${own.privateKey.slice(2)}` }])).toBe(true)
+    setKnownSecrets([])
   })
 })
 
