@@ -9,7 +9,8 @@ import * as T from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
-import { FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec } from '@gremlins/hatch'
+import { FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints } from '@gremlins/hatch'
+import { applyIsolate, applyPose, drawLabels, forgetIsolate, mountLabels, resetView, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, view } from './forge-motion.js'
 import { addDecals, artReady, wearFor, wearFrame, wearMaterial } from './forge-surfaces.js'
 import { creatureSvg } from '@gremlins/hatch/creature'
 import { account, mountAuth, onAccountChange, signIn, signOut, signedPostJson, walletErrorMessage } from './auth.ts'
@@ -94,6 +95,7 @@ let selected = new Set() // indices into spec().parts picked in the 3D view
 let lastSurface = { missed: 0, missingPictures: 0 }
 
 // ---------------------------------------------------------------------------------------------------- studio
+const STUDIO = '#e6e1d7' // pale studio: reads in a feed, and the accent stands out on it
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 let renderer, scene, camera, controls, rig, robot = null, spin = !reduceMotion, glOK = false
 
@@ -113,7 +115,7 @@ function initStudio() {
   renderer.domElement.className = 'studio'
   stage.prepend(renderer.domElement)
   scene = new T.Scene()
-  scene.background = new T.Color('#d8cebf')
+  scene.background = new T.Color(STUDIO)
   scene.environment = new T.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture
   camera = new T.PerspectiveCamera(26, 1, 0.1, 80)
   controls = new OrbitControls(camera, renderer.domElement)
@@ -121,7 +123,7 @@ function initStudio() {
   // The backdrop and lights orbit with the camera, like a photographer walking round with the studio, so the paper
   // sweep is always behind the robot and never between it and the camera.
   rig = new T.Group(); scene.add(rig)
-  const sweep = new T.Mesh(sweepGeometry(), new T.MeshStandardMaterial({ color: '#d8cebf', roughness: 0.95 }))
+  const sweep = new T.Mesh(sweepGeometry(), new T.MeshStandardMaterial({ color: STUDIO, roughness: 0.95 }))
   sweep.receiveShadow = true
   rig.add(sweep)
   const cv = document.createElement('canvas'); cv.width = cv.height = 128
@@ -145,13 +147,28 @@ function initStudio() {
     if (placing) placeAt(e)
     else selectAt(e)
   })
+  renderer.domElement.addEventListener('pointerdown', () => { if (view.tour) { stopTour(); syncConsole(true) } })
+  mountLabels(stage)
+  let lastT = 0, avg = 1 / 60, slow = 0
   renderer.setAnimationLoop(() => {
     if (document.hidden) return
+    const now = performance.now() / 1000, dt = lastT ? Math.min(0.1, now - lastT) : 0; lastT = now
+    // Quality step for integrated GPUs: drop to 1x pixels after ~2 s of frames slower than 32 fps.
+    avg = avg * 0.95 + dt * 0.05
+    if (avg > 1 / 32 && ++slow > 120 && renderer.getPixelRatio() > 1) { renderer.setPixelRatio(1); resize(); slow = 0 }
     if (spin && robot && !placing && !selected.size) robot.rotation.y += 0.004
+    if (inner && spec()) {
+      const still = !!placing || selected.size > 0, rig = inner.userData.rig
+      applyPose(rig, spec(), stepView(spec(), dt, now, still, reduceMotion))
+      applyIsolate(rig, still ? null : view.isolate)
+      focusCamera(dt)
+      syncConsole()
+    }
     controls.update()
     rig.rotation.y = controls.getAzimuthalAngle()
     if (robot) { robot.updateMatrixWorld(); wearFrame.value.copy(robot.matrixWorld).invert() }
     renderer.render(scene, camera)
+    if (inner) drawLabels(inner.userData.rig, camera, renderer.domElement.clientWidth, renderer.domElement.clientHeight)
   })
 }
 function resize() {
@@ -177,6 +194,28 @@ function frame(fresh) {
   controls.target.set(0, Math.max(0.9, c.y), 0)
   camera.position.copy(controls.target).addScaledVector(dir, dist)
   controls.update()
+  hero = { target: controls.target.clone(), dist }
+  focusId = `${view.isolate || ''}|${view.explodeTo > 0}`; camAnim = null
+}
+// Isolating an assembly glides the camera in on it; clearing glides back to the hero framing. Orbiting stays free.
+let hero = null, focusId = null, camAnim = null
+function focusCamera(dt) {
+  const id = view.isolate, want = `${id || ''}|${view.explodeTo > 0}`
+  if (want !== focusId && hero) {
+    focusId = want
+    const r = id && inner.userData.rig[id]
+    const toT = r?.anchor ? r.anchor.getWorldPosition(new T.Vector3()) : hero.target.clone()
+    // isolate moves in on the part; the exploded view steps back so the flown-out assemblies stay in frame
+    const toD = hero.dist * (r ? 0.72 : 1) * (view.explodeTo > 0 ? 1.4 : 1)
+    camAnim = { t: 0, fromT: controls.target.clone(), toT, fromD: camera.position.distanceTo(controls.target), toD }
+  }
+  if (!camAnim) return
+  camAnim.t = reduceMotion ? 1 : Math.min(1, camAnim.t + dt / 0.9)
+  const k = camAnim.t < 0.5 ? 4 * camAnim.t ** 3 : 1 - (-2 * camAnim.t + 2) ** 3 / 2
+  const dir = new T.Vector3().subVectors(camera.position, controls.target).normalize()
+  controls.target.lerpVectors(camAnim.fromT, camAnim.toT, k)
+  camera.position.copy(controls.target).addScaledVector(dir, camAnim.fromD + (camAnim.toD - camAnim.fromD) * k)
+  if (camAnim.t >= 1) camAnim = null
 }
 
 // ---------------------------------------------------------------------------------------------------- materials + geometry
@@ -184,13 +223,13 @@ function materials(pal) {
   return {
     enamel: new T.MeshPhysicalMaterial({ color: pal.enamel, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.06 }),
     accent: new T.MeshPhysicalMaterial({ color: pal.accent, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.06 }),
-    chrome: new T.MeshStandardMaterial({ color: '#ffffff', metalness: 1, roughness: 0.06, envMapIntensity: 2.1 }),
+    chrome: new T.MeshStandardMaterial({ color: '#ffffff', metalness: 1, roughness: 0.14, envMapIntensity: 1.6 }),
     brass: new T.MeshStandardMaterial({ color: '#e0ad55', metalness: 1, roughness: 0.2, envMapIntensity: 1.6 }),
     copper: new T.MeshStandardMaterial({ color: '#d0805a', metalness: 1, roughness: 0.24, envMapIntensity: 1.5 }),
     glass: new T.MeshPhysicalMaterial({ color: '#0b1016', roughness: 0.04, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.02 }),
     glow: new T.MeshBasicMaterial({ color: pal.glow, toneMapped: false }),
     rubber: new T.MeshStandardMaterial({ color: '#1e1f21', roughness: 0.85 }),
-    steel: new T.MeshStandardMaterial({ color: '#3a3f45', metalness: 0.85, roughness: 0.38 }),
+    steel: new T.MeshStandardMaterial({ color: '#3a3f45', metalness: 0.85, roughness: 0.48 }),
     ivory: new T.MeshPhysicalMaterial({ color: '#f4ecd8', roughness: 0.4, clearcoat: 0.6 }),
     __wear: new Map(),
   }
@@ -329,21 +368,76 @@ function buildOne(p, M0, spec) {
   if (p.scale) g.scale.set(p.scale[0], p.scale[1], p.scale[2])
   return g
 }
+/**
+ * Builds a part with its mirror and array copies. Returns the copies (`plain` and, kept apart for "open" joints,
+ * `mirrored`) plus `holders`: the group directly holding each copy, so a bend can swap every copy's shape at once.
+ */
 function expand(p, M, spec) {
-  const base = buildOne(p, M, spec), out = new T.Group(), items = [base]
-  if (p.mirror === 'x') { const mg = new T.Group(); mg.scale.x = -1; mg.add(base.clone()); items.push(mg) }
+  const base = buildOne(p, M, spec), plain = new T.Group(), mirrored = new T.Group(), holders = []
+  const items = [{ it: base, m: false }]
+  if (p.mirror === 'x') items.push({ it: base.clone(), m: true })
   const n = p.array ? p.array.count : 1
-  for (let i = 0; i < n; i++) for (const it of items) {
-    const g = new T.Group(); g.add(i === 0 ? it : it.clone())
+  for (let i = 0; i < n; i++) for (const { it, m } of items) {
+    const g = new T.Group(), hold = m ? new T.Group() : g
+    if (m) { hold.scale.x = -1; g.add(hold) }
+    hold.add(i === 0 ? it : it.clone()); holders.push(hold)
     if (p.array && p.array.type === 'radial') g.rotation.y = (i / n) * Math.PI * 2
     if (p.array && p.array.type === 'linear') g.position.set(p.array.step[0] * i, p.array.step[1] * i, p.array.step[2] * i)
-    out.add(g)
+    ;(m ? mirrored : plain).add(g)
   }
-  return out
+  return { plain, mirrored, holders }
 }
+const tagPart = (o, i) => o.traverse((n) => { if (n.isMesh) n.userData.part = i })
+/**
+ * The scene graph the motion code poses: one node per assembly (moved by explode), holding a pivot group at its joint
+ * (turned, slid or scaled), holding the parts offset back so they sit where the design put them. "open" assemblies get a
+ * second pivot at the mirror-image hinge for their mirrored copies. inner.userData.rig maps assembly id to all of it.
+ */
 function buildParts(spec, M) {
-  const g = new T.Group()
-  spec.parts.forEach((p, i) => { const e = expand(p, M, spec); e.traverse((n) => { if (n.isMesh) n.userData.part = i }); g.add(e) })
+  const g = new T.Group(), rig = {}
+  const asms = spec.assemblies?.length ? spec.assemblies : [{ id: 'body', name: 'Body', role: '', explode: [0, 0, 0], states: ['READY', 'ACTIVE'] }]
+  for (const a of asms) {
+    const node = new T.Group(); node.name = `asm:${a.id}`; g.add(node)
+    const pivotGroup = (pv0) => {
+      const pv = new T.Group(); pv.position.set(pv0[0], pv0[1], pv0[2])
+      const content = new T.Group(); content.position.set(-pv0[0], -pv0[1], -pv0[2]); pv.add(content); node.add(pv)
+      return { pv, content }
+    }
+    const j = a.joint, piv = j ? j.pivot : [0, 0, 0]
+    rig[a.id] = {
+      a, node, bends: [], bent: 0,
+      main: pivotGroup(piv),
+      mirror: j?.move === 'open' ? pivotGroup([-piv[0], piv[1], piv[2]]) : null,
+      axis: j ? new T.Vector3(...j.axis).normalize() : new T.Vector3(0, 1, 0),
+      mirrorAxis: j ? new T.Vector3(-j.axis[0], j.axis[1], j.axis[2]).normalize() : new T.Vector3(0, 1, 0),
+    }
+  }
+  const fallback = rig.body || Object.values(rig)[0]
+  spec.parts.forEach((p, i) => {
+    const r = rig[p.asm] || fallback, { plain, mirrored, holders } = expand(p, M, spec)
+    tagPart(plain, i); tagPart(mirrored, i)
+    r.main.content.add(plain)
+    ;(r.mirror ? r.mirror.content : r.main.content).add(mirrored)
+    // Curling limbs: rebuild the part along bent points and swap it into every copy.
+    if (r.a.joint?.move === 'curl' && pathed(p)) {
+      r.bends.push((deg) => {
+        const bent = buildOne({ ...p, points: curlPoints(p.points, r.a.joint.axis, deg) }, M, spec)
+        tagPart(bent, i)
+        holders.forEach((h, k) => {
+          for (const old of [...h.children]) { h.remove(old); if (k === 0) old.traverse((n) => n.geometry?.dispose()) }
+          h.add(k === 0 ? bent : bent.clone())
+        })
+      })
+    }
+  })
+  // A label anchor at each assembly's centre, inside its node so it follows the explode.
+  g.updateMatrixWorld(true)
+  for (const r of Object.values(rig)) {
+    const bb = new T.Box3().setFromObject(r.node)
+    if (bb.isEmpty()) continue
+    r.anchor = new T.Object3D(); bb.getCenter(r.anchor.position); r.node.add(r.anchor)
+  }
+  g.userData.rig = rig
   return g
 }
 function disposeTree(o) {
@@ -388,6 +482,7 @@ function rebuild(fresh) {
   const rot = robot ? robot.rotation.y : 0
   if (robot) { scene.remove(robot); disposeTree(robot) }
   inner = buildParts(sp, materials(sp.palette))
+  forgetIsolate(); resetView(sp)
   const bb = new T.Box3().setFromObject(inner), size = new T.Vector3(), c = new T.Vector3(); bb.getSize(size); bb.getCenter(c)
   let s = Math.min(2.2, Math.max(0.4, 2.4 / Math.max(0.3, size.y)))
   if (size.x * s > 3.4) s = 3.4 / size.x
@@ -403,9 +498,50 @@ function rebuild(fresh) {
     const lamp = new T.PointLight(sp.palette.glow, 2.4, 1.8, 2); lamp.position.copy(avg).add(new T.Vector3(0, 0, 0.3)); robot.add(lamp)
   }
   scene.add(robot)
+  renderer.compileAsync?.(scene, camera).catch(() => {}) // warm every program in parallel so the first frames don't stall
+  renderConsole(sp)
   const key = JSON.stringify(sp.parts).length + ':' + sp.parts.length
   if (fresh || key !== lastShapeKey) { lastShapeKey = key; frame(fresh) }
 }
+
+// ---------------------------------------------------------------------------------------------------- console
+/** Buttons for the design's assemblies and modes, rebuilt when the design changes. */
+function renderConsole(sp) {
+  const asms = sp.assemblies || [], modes = (sp.modes || []).filter((m) => m.id !== 'idle')
+  $('console').hidden = asms.length < 2 && !modes.length
+  $('asmChips').replaceChildren(...asms.map((a) => {
+    const b = document.createElement('button'); b.type = 'button'; b.dataset.asm = a.id; b.textContent = a.name; b.title = a.role || a.name
+    b.addEventListener('click', () => { toggleIsolate(a.id); syncConsole(true) })
+    return b
+  }))
+  $('modeRow').hidden = !modes.length
+  $('modeChips').replaceChildren(...modes.map((m) => {
+    const b = document.createElement('button'); b.type = 'button'; b.dataset.mode = m.id; b.textContent = m.name
+    b.addEventListener('click', () => { toggleMode(m.id); syncConsole(true) })
+    return b
+  }))
+  syncConsole(true)
+}
+let consoleKey = ''
+/** Keeps the pressed states and the big mode label in step with the viewer (cheap: only touches the DOM on change). */
+function syncConsole(force) {
+  const m = spec()?.modes?.find((x) => x.id === view.mode)
+  const up = view.mode !== 'idle' && (view.inputTo > 0 || view.input > 0.02)
+  const key = [view.isolate, up && view.mode, view.explodeTo, view.labels, view.tour].join('|')
+  if (!force && key === consoleKey) return
+  consoleKey = key
+  for (const b of $('asmChips').children) b.setAttribute('aria-pressed', String(view.isolate === b.dataset.asm))
+  for (const b of $('modeChips').children) b.setAttribute('aria-pressed', String(up && view.mode === b.dataset.mode))
+  $('dLabels').setAttribute('aria-pressed', String(view.labels))
+  $('dExplode').setAttribute('aria-pressed', String(view.explodeTo > 0))
+  $('dTour').setAttribute('aria-pressed', String(view.tour))
+  const ml = $('modeLabel'), word = up ? m?.name : view.explodeTo > 0 ? 'Exploded' : view.isolate ? spec()?.assemblies?.find((a) => a.id === view.isolate)?.name : ''
+  ml.classList.toggle('rest', !word)
+  if (word) ml.lastChild.textContent = word
+}
+$('dLabels').addEventListener('click', () => { view.labels = !view.labels; syncConsole(true) })
+$('dExplode').addEventListener('click', () => { toggleExplode(); syncConsole(true) })
+$('dTour').addEventListener('click', () => { if (view.tour) stopTour(); else startTour(performance.now() / 1000); syncConsole(true) })
 
 /** A square studio frame (1024×1024 PNG for the image model, small JPEGs for history) without disturbing the live view. */
 function captureRender(size = 1024, type = 'image/png') {
@@ -444,7 +580,7 @@ function applySelection() {
   overlays = []
   if (!inner || !selected.size) return
   const hits = []
-  inner.traverse((n) => { if (n.isMesh && !n.userData.overlay && selected.has(n.userData.part)) hits.push(n) })
+  inner.traverse((n) => { if (n.isMesh && !n.userData.overlay && !n.userData.decal && selected.has(n.userData.part)) hits.push(n) })
   for (const n of hits) {
     const tint = overlayOf(n, selMat), line = overlayOf(n, outlineMat)
     tint.userData.overlay = line.userData.overlay = true; tint.renderOrder = 3
@@ -455,7 +591,7 @@ function pickPart(e) {
   if (!robot || !inner) return null
   const r = renderer.domElement.getBoundingClientRect()
   const ray = new T.Raycaster(); ray.setFromCamera(new T.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera)
-  const targets = []; inner.traverse((n) => { if (n.isMesh && !n.userData.overlay) targets.push(n) })
+  const targets = []; inner.traverse((n) => { if (n.isMesh && !n.userData.overlay && !n.userData.decal) targets.push(n) })
   const hit = ray.intersectObjects(targets, false)[0]
   return hit ? hit.object.userData.part : null
 }
@@ -629,7 +765,7 @@ function placeAt(e) {
   if (!robot || !inner) return
   const r = renderer.domElement.getBoundingClientRect()
   const ray = new T.Raycaster(); ray.setFromCamera(new T.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera)
-  const targets = []; inner.traverse((n) => { if (n.isMesh && !n.userData.glow && !n.userData.overlay) targets.push(n) })
+  const targets = []; inner.traverse((n) => { if (n.isMesh && !n.userData.glow && !n.userData.overlay && !n.userData.decal) targets.push(n) })
   const hit = ray.intersectObjects(targets, false).find((h) => h.face)
   if (!hit) return setStatus('That missed the robot. Click on its body.', true)
   const toInner = new T.Matrix4().copy(inner.matrixWorld).invert()

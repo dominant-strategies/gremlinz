@@ -196,7 +196,7 @@ function decalMaterial(finish, map, glow) {
 }
 
 /**
- * Projects the spec's decals onto `inner` (the built parts, in design coordinates) and adds them to `root`, whose world
+ * Projects the spec's decals onto `inner` (the built parts, in design coordinates) and attaches each to the part it lands on (so it moves with it); `root`'s world
  * matrix must be the identity while this runs. Returns how many decals missed or had no picture.
  */
 export function addDecals(spec, inner, root, uploads, worldScale) {
@@ -204,7 +204,7 @@ export function addDecals(spec, inner, root, uploads, worldScale) {
   if (!decals.length) return { missed: 0, missingPictures: 0 }
   const targets = []
   // DecalGeometry projects a single mesh's own geometry, so instanced detail (chains, rivets) can't carry decals.
-  inner.traverse((n) => { if (n.isMesh && !n.isInstancedMesh && !n.userData.glow) targets.push(n) })
+  inner.traverse((n) => { if (n.isMesh && !n.isInstancedMesh && !n.userData.glow && !n.userData.decal) targets.push(n) })
   const ray = new T.Raycaster(), helper = new T.Object3D()
   let missed = 0, missingPictures = 0
   for (const d of decals) {
@@ -234,7 +234,8 @@ export function addDecals(spec, inner, root, uploads, worldScale) {
       const under = best.h.object.userData.wear
       if (under && under.length && ['paint', 'ink', 'sticker'].includes(d.finish)) { const wm = wearMaterial(mat, under); mat.dispose(); mat = wm }
       const m = new T.Mesh(geo, mat); m.receiveShadow = true; m.userData.decal = true; m.renderOrder = 1
-      root.add(m)
+      // attach (not add) keeps it where it landed and makes it ride along when the part moves or explodes
+      best.h.object.attach(m)
     }
   }
   return { missed, missingPictures }

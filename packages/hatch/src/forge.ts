@@ -228,7 +228,7 @@ export const FORGE_EXAMPLES: Record<'toaster' | 'octopod' | 'foreman', unknown> 
       { kind: 'cylinder', mat: 'brass', asm: 'stacks', size: [0.07, 0.07, 0.9], pos: [0.42, 2.05, -0.3], mirror: 'x', rivets: [{ y: 0.3, count: 10, mat: 'steel' }] },
       { kind: 'cylinder', mat: 'brass', asm: 'stacks', size: [0.11, 0.09, 0.08], pos: [0.42, 2.54, -0.3], mirror: 'x' },
     ],
-    wear: [{ kind: 'chipped', amount: 0.25, pattern: 'spots', on: ['enamel'] }, { kind: 'oil', amount: 0.3, pattern: 'streaks' }],
+    wear: [{ kind: 'chipped', amount: 0.25, pattern: 'spots', on: ['enamel'] }, { kind: 'oil', amount: 0.3, pattern: 'streaks', on: ['enamel', 'steel'] }],
     art: { kraken: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><g fill="none" stroke="#e9dcc0" stroke-width="5" stroke-linecap="round"><path d="M50 52 C30 60 20 80 8 78"/><path d="M50 52 C70 60 80 80 92 78"/><path d="M50 56 C40 74 36 90 24 94"/><path d="M50 56 C60 74 64 90 76 94"/></g><path d="M50 8 C72 8 80 26 74 44 C70 54 30 54 26 44 C20 26 28 8 50 8Z" fill="#e9dcc0"/><circle cx="40" cy="32" r="6" fill="#c9302c"/><circle cx="60" cy="32" r="6" fill="#c9302c"/></svg>' },
     decals: [{ art: 'kraken', at: [0.55, 1.25, 0.55], dir: [0.72, 0, 0.7], size: 0.34, rot: -8, finish: 'ink', mirror: 'x' }] },
   foreman: { name: 'Foreman', tagline: 'Runs the boiler room. Keeps the pressure up.', menace: 3,
