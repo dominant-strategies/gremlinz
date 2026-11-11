@@ -65,7 +65,7 @@ RUN set -eu; \
       echo "${XMRIG_SRC_SHA256}  src.tgz" | sha256sum -c -; \
       tar xzf src.tgz; mkdir "xmrig-${XMRIG_VERSION}/build"; cd "xmrig-${XMRIG_VERSION}/build"; \
       cmake .. -DWITH_HWLOC=OFF -DWITH_TLS=OFF -DWITH_OPENCL=OFF -DWITH_CUDA=OFF -DUV_LIBRARY="/usr/lib/$(gcc -dumpmachine)/libuv_a.a"; \
-      make -j"$(nproc)"; install -m 0755 xmrig /usr/local/bin/xmrig; \
+      make -j"$(nproc)"; install -m 0755 xmrig-notls /usr/local/bin/xmrig; \
     fi; \
     /usr/local/bin/xmrig --version
 
