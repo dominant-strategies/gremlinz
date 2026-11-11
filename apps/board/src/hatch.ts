@@ -11,8 +11,8 @@
  *
  * 2-of-2 custody (`cfg.custody: 'mpc'`, @gremlins/hosting/mpc): there is no account key here, only the board's share;
  * the maker's hatch page holds the other and co-signs each signature (after checking it is one this hatch needs). The
- * board seals its share to the egg, the page seals its own, and the egg alone multiplies them into the key. While the
- * page is closed, steps that sign wait (MakerAway); a final signature that fails its check freezes the job (MpcAbort).
+ * board seals its share to the egg, the page seals its own, and the egg alone adds them up into the key. While the
+ * page is closed, steps that sign wait (MakerAway); a key-bit leak reported by cb-mpc would freeze the job (MpcAbort).
  *
  * Every step persists before it acts and is safe to resume after a crash. Money moves in one place only, the x402
  * top-up, and never twice: each payment authorization is recorded before it is signed, and an unfinished top-up is
@@ -127,13 +127,13 @@ export function checkClaim(job: HatchJob, c: HatchClaim): { ok: true; address: s
 function signerOf(deps: HatchDeps, job: HatchJob): HostingSigner & { ready?: () => boolean } {
   if (job.custody !== 'mpc') return localSigner(job.key as `0x${string}`)
   if (!deps.mpc) throw new Error('2-of-2 hatch without an MPC coordinator')
-  return deps.mpc.signer(job.id, job.key!, { aborted: !!job.mpcAbortedAt })
+  return deps.mpc.signer(job.id, job.key!, job.hostingAddress, { aborted: !!job.mpcAbortedAt })
 }
 
 /** Signing needs the maker's page (2-of-2): check before starting anything that journals a payment. */
 function needSigner(deps: HatchDeps, job: HatchJob) {
   const signer = signerOf(deps, job)
-  if (signer.ready && !signer.ready()) throw job.mpcAbortedAt ? new MpcAbort('an earlier signature failed its check') : new MakerAway()
+  if (signer.ready && !signer.ready()) throw job.mpcAbortedAt ? new MpcAbort('cb-mpc reported a key-bit leak earlier') : new MakerAway()
   return signer
 }
 
@@ -175,7 +175,7 @@ export async function hatchStep(deps: HatchDeps, cfg: HatchConfig, job: HatchJob
     return await step(deps, cfg, job, save)
   } catch (e) {
     if (!(e instanceof MpcAbort)) throw e
-    // Lindell 2017: a party 1 that keeps signing after a bad final signature leaks its share. Never again.
+    // cb-mpc reported a possible key-bit leak: this share never signs again (its secure-usage guidance).
     deps.mpc?.forget(job.id)
     job.mpcAbortedAt ??= deps.now()
     job.status = 'failed'
@@ -293,7 +293,7 @@ async function step(deps: HatchDeps, cfg: HatchConfig, job: HatchJob, save: (eve
         launchedAt: new Date(job.launchedAt!).toISOString(), lastSessionAt: new Date(job.lastSessionAt ?? job.launchedAt!).toISOString(),
       }
       // 2-of-2: only our share goes; the maker's page seals its own to the same egg (POST …/mpc/handoff).
-      job.handoff = await sealHostingHandover(job.claim.publicKey, job.custody === 'mpc' ? { v: 2, custody: 'mpc', shard: shareScalar(job.key!), ...account } : { v: 1, hostingKey: job.key!, ...account })
+      job.handoff = await sealHostingHandover(job.claim.publicKey, job.custody === 'mpc' ? { v: 2, custody: 'mpc', shard: await shareScalar(job.key!), ...account } : { v: 1, hostingKey: job.key!, ...account })
       deps.mpc?.forget(job.id)
       job.handedOffAt = deps.now()
       job.status = 'handed-off'

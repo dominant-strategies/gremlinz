@@ -4,11 +4,11 @@
  * the browser except sealed to the egg (the caller does that, @gremlins/hatch sealHostingShard).
  */
 import { checkSignRequest, type PolicyContext, type Verdict } from './mpc-policy.js'
-import { digestOf, party2Keygen, party2Sign, type MpcAnswer, type MpcSignRequest } from './mpc.js'
+import { digestOf, encodeBatch, party2Keygen, party2Sign, type MpcAnswer, type MpcSignRequest } from './mpc.js'
 
 /** The board's per-job MPC endpoints, authenticated with the job's browser secret. */
 export interface MpcTransport {
-  keygen(msg: string | null): Promise<{ msg: string; hostingAddress?: string }>
+  keygen(msg: string | null): Promise<{ msg: string; done: boolean; hostingAddress?: string }>
   confirmKeygen(hostingAddress: string): Promise<void>
   poll(): Promise<MpcSignRequest | null>
   answer(reqId: string, a: MpcAnswer): Promise<{ msg: string; done: boolean }>
@@ -38,11 +38,23 @@ export function httpMpcTransport(boardUrl: string, jobId: string, secret: string
  */
 export async function browserKeygen(t: MpcTransport, jobId: string): Promise<{ share: string; address: string }> {
   const p2 = party2Keygen(jobId)
-  const { msg: msg1 } = await t.keygen(null)
-  const { msg: msg3, hostingAddress } = await t.keygen(await p2.first(msg1))
-  const mine = await p2.finish(msg3) // checks party 1's proofs (Paillier key, PDL, dlog)
-  if (!hostingAddress || hostingAddress.toLowerCase() !== mine.address.toLowerCase()) throw new Error('the hatch service and this page disagree on the hosting address')
-  return mine
+  try {
+    let board = await t.keygen(null)
+    for (let i = 0; i < 32; i++) {
+      const mine = await p2.step(board.msg) // checks the board's proofs as they come
+      board = board.done ? { ...board, msg: encodeBatch([]) } : await t.keygen(mine.msg)
+      if (mine.done) {
+        if (!board.done) board = await t.keygen(encodeBatch([])) // let the board finish
+        if (!board.done || !board.hostingAddress || board.hostingAddress.toLowerCase() !== mine.address!.toLowerCase())
+          throw new Error('the hatch service and this page disagree on the hosting address')
+        return { share: mine.share!, address: mine.address! }
+      }
+    }
+    throw new Error('key generation did not finish')
+  } catch (e) {
+    p2.cancel()
+    throw e
+  }
 }
 
 export type CosignEvent = { request: MpcSignRequest; verdict: Verdict } | { request: MpcSignRequest; signed: true } | { request: MpcSignRequest; error: string }
@@ -63,12 +75,16 @@ export async function cosignOnce(t: MpcTransport, jobId: string, share: string, 
   try {
     // Our own digest of the payload we checked: the board never tells us what the hash is.
     const p2 = party2Sign(jobId, request.id, share, digestOf(request.payload))
-    let msg = request.msg
-    for (let round = 0; round < 3; round++) {
-      const out = await p2.step(msg)
-      if (out.done) break
-      msg = (await t.answer(request.id, { msg: out.msg! })).msg
+    let board = { msg: request.msg, done: false }
+    let mine = { msg: encodeBatch([]), done: false }
+    for (let i = 0; i < 32 && !(mine.done && board.done); i++) {
+      if (!mine.done) mine = await p2.step(board.msg)
+      else if (JSON.parse(mine.msg).length === 0) break // nothing left to send: the board can't finish
+      // Each batch is delivered once; a finished board has nothing more to say.
+      board = board.done ? { msg: encodeBatch([]), done: true } : await t.answer(request.id, { msg: mine.msg })
+      if (mine.done) mine = { ...mine, msg: encodeBatch([]) }
     }
+    if (!mine.done) throw new Error('signing did not finish')
     onEvent?.({ request, signed: true })
   } catch (e) {
     onEvent?.({ request, error: (e as Error).message })

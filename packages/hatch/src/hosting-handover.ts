@@ -7,7 +7,7 @@
  * hatchProof(secret, its public key, its address); the backend seals only to a key that proves the secret.
  *
  * 2-of-2 custody (@gremlins/hosting/mpc): the key never exists as one before this. The backend seals its shard (v2),
- * the maker's hatch page seals its own to the same egg, and the egg multiplies them (key = x1·x2 mod n).
+ * the maker's hatch page seals its own to the same egg, and the egg adds them up (key = x1 + x2 mod n).
  */
 import { SigningKey, computeAddress, keccak256, solidityPacked, toUtf8Bytes, toUtf8String } from 'ethers'
 import { open, seal, type Sealed } from './seal.js'
@@ -68,8 +68,8 @@ const scalar = (h: unknown) => {
   if (x === 0n || x >= N) throw new Error('malformed key shard')
   return x
 }
-/** Multiplicative 2-of-2 shares (Lindell 2017): the key is x1·x2 mod n. */
-export const combineShards = (x1: string, x2: string): string => `0x${((scalar(x1) * scalar(x2)) % N).toString(16).padStart(64, '0')}`
+/** Additive 2-of-2 shares (cb-mpc ECDSA-2PC): the key is x1 + x2 mod n. */
+export const combineShards = (x1: string, x2: string): string => `0x${((scalar(x1) + scalar(x2)) % N).toString(16).padStart(64, '0')}`
 
 export const sealHostingHandover = (eggPublicKey: string, h: HostingHandover | HostingShardHandover): Promise<Sealed> => seal(eggPublicKey, toUtf8Bytes(JSON.stringify(h)))
 export const sealBrowserShard = (eggPublicKey: string, s: BrowserShard): Promise<Sealed> => seal(eggPublicKey, toUtf8Bytes(JSON.stringify(s)))

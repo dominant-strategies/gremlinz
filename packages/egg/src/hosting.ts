@@ -2,7 +2,7 @@
  * Hatch custody, egg side: the gremlin takes over the hosting account the hatch backend made for it.
  *
  *   announced ─claim (hatchProof of the cloud-init secret)─► hand-over sealed to us ─open─► hosting.json (0600)
- *   (2-of-2 accounts: the backend's shard and the maker's shard, both sealed to us, multiplied into the key here)
+ *   (2-of-2 accounts: the backend's shard and the maker's shard, both sealed to us, added up into the key here)
  *   ─► sweep the account now, again once the backend's last token has expired (2 h 15 min after its last sign-in),
  *      then daily
  *

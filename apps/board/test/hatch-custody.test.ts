@@ -6,7 +6,7 @@ import { SigningKey, Wallet, computeAddress, getAddress, hexlify, randomBytes, v
 import { createSiweMessage } from 'viem/siwe'
 import { configHash, hatchProof, openHostingHandover, sealBrowserShard, signMessage } from '@gremlins/hatch'
 import { TopUpUnderReview, localSigner, type HostingSigner, type TopUpAuthorization, type TypedDataToSign } from '@gremlins/hosting'
-import { BASE_QUAI, BASE_USDC, COW_SETTLEMENT, COW_VAULT_RELAYER, browserKeygen, cosignOnce, digestOf, party2Sign, httpMpcTransport, mpcAuthOf, mpcCoordinator, shareScalar, type CosignEvent, type PolicyContext } from '@gremlins/hosting/mpc'
+import { BASE_QUAI, BASE_USDC, COW_SETTLEMENT, COW_VAULT_RELAYER, browserKeygen, cosignOnce, decodeBatch, digestOf, encodeBatch, party2Sign, httpMpcTransport, mpcAuthOf, mpcCoordinator, shareScalar, type CosignEvent, type PolicyContext } from '@gremlins/hosting/mpc'
 import { ORDER_TYPES } from '@gremlins/treasury'
 import { EggLaunchData, announcement as eggAnnouncement, generatePhrase, hostingStep, httpBoardClient, keysFromPhrase, type HostingFile } from '@gremlins/egg'
 import { HatchStore } from '../src/hatch-store.ts'
@@ -496,8 +496,9 @@ describe('hatch custody: 2-of-2 with the maker’s page', () => {
     const job = s.hatchStore.get(jobId)!
     expect(job).toMatchObject({ status: 'funding', hostingAddress: getAddress(page.address), custody: 'mpc' })
     // the board holds a share, not the key: its scalar alone is not the account
-    expect(new Wallet(shareScalar(job.key!)).address).not.toBe(job.hostingAddress)
-    expect(JSON.stringify(s.hatchStore.raw(jobId))).not.toContain(shareScalar(page.share).slice(2))
+    expect(new Wallet(await shareScalar(job.key!)).address).not.toBe(job.hostingAddress)
+    expect(JSON.stringify(s.hatchStore.raw(jobId))).not.toContain((await shareScalar(page.share)).slice(2))
+    expect(JSON.stringify(s.hatchStore.raw(jobId))).not.toContain(page.share)
 
     s.w.quai.set(job.hostingAddress, 120n * QUAI) // QUAI bridged in: the page co-signs the permit and the order
     const launching = await until(s as never, jobId, 'launching')
@@ -523,7 +524,7 @@ describe('hatch custody: 2-of-2 with the maker’s page', () => {
     expect(computeAddress(view.eggPublicKey)).toBe(view.eggAddress)
     const announced = (await s.b.json(`/api/eggs?launchId=${s.launchId}`)).body.egg
     expect(announced.address.toLowerCase()).toBe(view.eggAddress.toLowerCase())
-    const sealed = await sealBrowserShard(view.eggPublicKey, { v: 2, custody: 'mpc', launchId: s.launchId, hostingAddress: page.address, shard: shareScalar(page.share) })
+    const sealed = await sealBrowserShard(view.eggPublicKey, { v: 2, custody: 'mpc', launchId: s.launchId, hostingAddress: page.address, shard: await shareScalar(page.share) })
     const post = (body: unknown, secret = s.secret) => s.b.json(`/api/hatch/${jobId}/mpc/handoff`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hatch-auth': secret }, body: JSON.stringify(body) })
     expect((await post({ sealed }, hexlify(randomBytes(32)))).status).toBe(403)
     expect((await post({ sealed })).status).toBe(201)
@@ -622,33 +623,47 @@ describe('hatch custody: 2-of-2 with the maker’s page', () => {
     expect(s.w.topUps).toHaveLength(0)
   }, 60_000)
 
-  it('a page that sends a bad final round freezes the job for good (Lindell 2017 abort rule)', async () => {
+  it('a page that tampers with its messages gets nothing signed; nothing is paid, and the job carries on', async () => {
     const s = await setupMpc()
     const { jobId } = (await s.b.postJson('/api/hatch/fluence', s.body)).body
     const page = await makerPage(s, jobId)
     await page.stop()
-    // a hostile page probing the board's share: it tampers with its last message
+    // a hostile page probing the board's share: it flips a bit in everything it sends
     let on = true
     const hostile = (async () => {
       while (on) {
         const req = await page.t.poll().catch(() => null)
         if (!req) { await sleep(3); continue }
         const p2 = party2Sign(jobId, req.id, page.share, digestOf(req.payload))
-        const m3 = (await page.t.answer(req.id, { msg: (await p2.step(req.msg)).msg! })).msg
-        const m4 = JSON.parse((await p2.step(m3)).msg!)
-        m4.c3 = m4.c3.replace(/^./, (ch: string) => (ch === 'A' ? 'B' : 'A'))
-        await page.t.answer(req.id, { msg: JSON.stringify(m4) }).catch(() => {})
+        let board = { msg: req.msg, done: false }
+        for (let i = 0; i < 10 && !board.done; i++) {
+          const mine = await p2.step(board.msg).catch(() => null)
+          if (!mine) break
+          const msgs = decodeBatch(mine.msg)
+          for (const m of msgs) m[m.length - 1]! ^= 1
+          const r = await page.t.answer(req.id, { msg: encodeBatch(msgs) }).catch(() => null)
+          if (!r) break
+          board = r
+        }
+        p2.cancel()
       }
     })()
     while (!s.mpc.present(jobId)) await sleep(1)
     s.w.usdc.set(page.address, 10n * MICRO)
-    await until(s as never, jobId, 'failed', s.worker, s.hatchStore, 4)
+    for (let i = 0; i < 3; i++) {
+      s.b.clock.now += 61_000
+      await s.worker.tick()
+    }
     on = false
     await hostile
-    const job = s.hatchStore.get(jobId)!
-    expect(job).toMatchObject({ status: 'failed', mpcAbortedAt: expect.any(Number) })
-    expect(job.error).toMatch(/aborted for good.*frozen/)
     expect(s.w.topUps).toHaveLength(0)
-    expect((await s.b.json(`/api/hatch/${jobId}`)).body.job.mpcAborted).toBe(true)
+    expect(s.hatchStore.get(jobId)!).toMatchObject({ status: 'paying' })
+    expect(s.hatchStore.get(jobId)!.mpcAbortedAt).toBeUndefined() // cb-mpc proves each round: a failed session leaks nothing
+    // the honest page comes back: once the unsigned authorization has expired, the top-up goes through
+    const again = await makerPage(s, jobId, { share: page.share, address: page.address })
+    s.b.clock.now += 10 * 60_000
+    await until(s as never, jobId, 'topped-up')
+    expect(s.w.topUps).toHaveLength(1)
+    await again.stop()
   }, 60_000)
 })

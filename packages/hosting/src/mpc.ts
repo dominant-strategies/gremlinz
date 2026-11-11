@@ -1,23 +1,22 @@
 /**
  * 2-of-2 ECDSA for hatch hosting accounts: neither the board nor the maker can sign alone, and the account key only
- * exists once the egg multiplies the two shards sealed to it (key = x1·x2 mod n).
+ * exists once the egg adds up the two shares sealed to it (key = x1 + x2 mod n).
  *
- * Lindell 2017 two-party ECDSA (@silencelaboratories/ecdsa-tss, Cure53-audited, plain JS: same code in Node and the
- * browser). The board is party 1: it holds the Paillier key, starts every session and checks the final signature. The
- * maker's browser is party 2. Protocol state stays in memory on both sides; a lost session is simply started again.
+ * Coinbase's cb-mpc ECDSA-2PC (MIT; built to WebAssembly from a pinned commit by cbmpc/build.sh; cbmpc.ts drives it).
+ * The board is party 1 (holds the Paillier key, gets the signature), the maker's browser party 2. cb-mpc's public
+ * `sign` has party 2 prove its last message correct, so a failed signature leaks nothing and is simply that: a failed
+ * session. Only its global-abort variant (which we don't use) can report a bit leak; that would freeze the job
+ * (`MpcAbort`). Protocol state stays in memory on both sides; a lost session is started again.
  *
- * Lindell 2017 leaks party 1's share bit by bit if party 1 keeps signing after a final signature fails its check, so
- * any failure at that step aborts for good (`MpcAbort`): the caller must freeze the job.
+ *   keygen and sign: messages relayed through the board's HTTP routes as batches (JSON arrays of base64), each side
+ *   stepping its run until both are done. The board posts every signing request with its payload (never just a
+ *   digest); the browser checks it (mpc-policy.ts) and hashes it itself before taking part.
  *
- *   keygen:  board ─msg1─► browser ─msg2─► board ─msg3─► browser          (address = shared public key)
- *   sign:    board posts {payload, msg1}; browser checks the payload (mpc-policy.ts), then
- *            ─msg2─► board ─msg3─► browser ─msg4─► board ─msg5 + signature─► browser
- *
- * This module is the only place that knows the library; swapping it (e.g. for DKLs23) touches nothing else.
+ * This module is the only place that knows the protocol library.
  */
-import { P1KeyGen, P1Signature, P2KeyGen, P2Signature, type IP1KeyShare, type IP2KeyShare } from '@silencelaboratories/ecdsa-tss'
-import { hashMessage, hashTypedData, hexToBytes, recoverAddress, type Hex } from 'viem'
+import { hashMessage, hashTypedData, hexToBytes, recoverAddress, toHex, type Hex } from 'viem'
 import { publicKeyToAddress } from 'viem/accounts'
+import { CbmpcError, CbmpcRun, cbmpcPrivateShare, cbmpcPublicKey, type Parties } from './cbmpc.js'
 import type { HostingSigner, TypedDataToSign } from './signer.js'
 
 /** secp256k1 group order. */
@@ -27,7 +26,7 @@ export const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd
 export type WireTypedData = TypedDataToSign
 export type SignPayload = { type: 'message'; message: string } | { type: 'typed'; typedData: WireTypedData }
 
-/** What the board asks the browser to co-sign: the payload itself (never just a digest) and party 1's first message. */
+/** What the board asks the browser to co-sign: the payload itself (never just a digest) and the board's first messages. */
 export interface MpcSignRequest {
   id: string
   /** The board's label, for display only; the browser classifies the payload itself. */
@@ -38,7 +37,7 @@ export interface MpcSignRequest {
 
 export type MpcAnswer = { msg: string } | { refuse: string }
 
-/** The final signature check failed: party 1 must never sign with this share again. */
+/** cb-mpc reported a possible key-bit leak: the board share must never sign again. */
 export class MpcAbort extends Error {
   constructor(why: string) {
     super(`2-of-2 signing aborted for good: ${why}`)
@@ -58,8 +57,23 @@ export async function mpcAuthOf(secret: string): Promise<string> {
   return `0x${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('')}`
 }
 
-export const keygenSessionId =(jobId: string) => `gremlins-hatch-keygen:${jobId}`
-export const signSessionId = (jobId: string, reqId: string) => `gremlins-hatch-sign:${jobId}:${reqId}`
+/** cb-mpc derives party ids from names; these are unique per hatch job. */
+const parties = (jobId: string, self: 0 | 1): Parties => ({ self, p1: `gremlins-hatch-board:${jobId}`, p2: `gremlins-hatch-maker:${jobId}` })
+
+// ---------------------------------------------------------------- wire encoding
+
+const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b))
+const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
+/** A batch of protocol messages as one relay string. */
+export const encodeBatch = (msgs: Uint8Array[]) => JSON.stringify(msgs.map(b64))
+export function decodeBatch(s: string): Uint8Array[] {
+  const a = JSON.parse(s) as unknown
+  if (!Array.isArray(a) || a.length > 16 || !a.every((x) => typeof x === 'string')) throw new Error('malformed protocol messages')
+  return a.map(unb64)
+}
+
+/** A key share (cb-mpc key blob) as stored: base64. Secret. */
+const shareBytes = (share: string) => unb64(share)
 
 const jsonSafe = (v: unknown): unknown =>
   typeof v === 'bigint' ? v.toString() : Array.isArray(v) ? v.map(jsonSafe) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, jsonSafe(x)])) : v
@@ -91,42 +105,101 @@ export function digestOf(p: SignPayload): Hex {
   return hashTypedData({ domain, types, primaryType: td.primaryType, message: withBigInts(types, td.primaryType, td.message) as Record<string, unknown> } as never)
 }
 
-const sigHex = (rs: string, recid: number): Hex => `0x${rs}${(27 + recid).toString(16)}`
-const shareAddress = (publicKeyHex: string): Hex => publicKeyToAddress(`0x04${publicKeyHex.replace(/^0x/, '').replace(/^04(?=[0-9a-f]{128}$)/i, '')}`)
-
-/** The secret scalar of a serialized share (party 1's x1 or party 2's x2), for sealing to the egg. */
-export function shareScalar(share: string): Hex {
-  const s = JSON.parse(share) as Partial<IP1KeyShare & IP2KeyShare>
-  const x = s.x1 ?? s.x2
-  if (!x) throw new Error('not a key share')
-  return `0x${x.padStart(64, '0')}`
+/** r and s of a DER ECDSA signature (SEQUENCE { INTEGER r, INTEGER s }). */
+function derRS(der: Uint8Array): [bigint, bigint] {
+  let i = 0
+  const len = () => {
+    let n = der[i++]!
+    if (n & 0x80) {
+      const k = n & 0x7f
+      n = 0
+      for (let j = 0; j < k; j++) n = (n << 8) | der[i++]!
+    }
+    return n
+  }
+  if (der[i++] !== 0x30) throw new Error('not a DER signature')
+  len()
+  const int = () => {
+    if (der[i++] !== 0x02) throw new Error('not a DER signature')
+    const n = len()
+    const v = BigInt(toHex(der.slice(i, i + n)))
+    i += n
+    return v
+  }
+  return [int(), int()]
 }
-export const shareAddressOf = (share: string): Hex => shareAddress((JSON.parse(share) as { public_key: string }).public_key)
+
+const P = 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2fn
+const modPow = (b: bigint, e: bigint, m: bigint) => {
+  let r = 1n
+  for (b %= m; e > 0n; e >>= 1n, b = (b * b) % m) if (e & 1n) r = (r * b) % m
+  return r
+}
+/** SEC1 compressed secp256k1 point → uncompressed (y² = x³ + 7, and p ≡ 3 mod 4). */
+function decompress(c: Uint8Array): Hex {
+  if (c.length !== 33 || (c[0] !== 2 && c[0] !== 3)) throw new Error('not a compressed public key')
+  const x = BigInt(toHex(c.slice(1)))
+  let y = modPow((x * x * x + 7n) % P, (P + 1n) / 4n, P)
+  if ((y * y) % P !== (x * x * x + 7n) % P) throw new Error('not a point on secp256k1')
+  if (Number(y & 1n) !== (c[0] & 1)) y = P - y
+  return `0x04${x.toString(16).padStart(64, '0')}${y.toString(16).padStart(64, '0')}`
+}
+
+/** cb-mpc's DER signature → the 65-byte Ethereum form: low s (EIP-2; USDC's ecrecover insists), v found by recovery. */
+async function ethSignature(der: Uint8Array, digest: Hex, address: Hex): Promise<Hex> {
+  const [r, s0] = derRS(der)
+  const s = s0 > SECP256K1_N / 2n ? SECP256K1_N - s0 : s0
+  const rs = r.toString(16).padStart(64, '0') + s.toString(16).padStart(64, '0')
+  for (const v of [27, 28]) {
+    const sig: Hex = `0x${rs}${v.toString(16)}`
+    if ((await recoverAddress({ hash: digest, signature: sig })).toLowerCase() === address.toLowerCase()) return sig
+  }
+  throw new Error('signature does not recover to the hosting address')
+}
+
+/** The address of a share's joint public key. */
+export async function shareAddressOf(share: string): Promise<Hex> {
+  return publicKeyToAddress(decompress(await cbmpcPublicKey(shareBytes(share))))
+}
+
+/** This party's secret share x_i (mod n, 32-byte hex), for sealing to the egg. The key is x_1 + x_2 mod n. */
+export async function shareScalar(share: string): Promise<Hex> {
+  const x = BigInt(toHex(await cbmpcPrivateShare(shareBytes(share)))) % SECP256K1_N
+  return `0x${x.toString(16).padStart(64, '0')}`
+}
+
+/** Step one side of a run with a relay batch; returns the reply batch and, when done, the result. */
+async function relayStep<T>(run: CbmpcRun<T>, msg: string | null) {
+  const r = await run.step(msg === null ? [] : decodeBatch(msg))
+  return { msg: encodeBatch(r.out), done: r.done, result: r.done ? r.result : undefined }
+}
 
 // ---------------------------------------------------------------- party 2 (the maker's browser)
 
-/** Party 2's key generation: answer msg1, then check msg3's proofs. Returns the serialized share and the address. */
+/** Party 2's key generation: feed it the board's batches until done; the result is the serialized share. */
 export function party2Keygen(jobId: string) {
-  const p2 = new P2KeyGen(keygenSessionId(jobId))
+  const run = CbmpcRun.dkg(parties(jobId, 1))
   return {
-    first: async (msg1: string) => (await p2.processMessage(msg1)).msg_to_send!,
-    async finish(msg3: string): Promise<{ share: string; address: Hex }> {
-      const r = await p2.processMessage(msg3)
-      if (!r.p2_key_share) throw new Error('key generation did not finish')
-      return { share: JSON.stringify(r.p2_key_share), address: shareAddress(r.p2_key_share.public_key) }
+    async step(msg: string): Promise<{ msg: string; done: boolean; share?: string; address?: Hex }> {
+      const r = await relayStep(run, msg)
+      if (!r.done) return { msg: r.msg, done: false }
+      const share = b64(r.result!)
+      return { msg: r.msg, done: true, share, address: await shareAddressOf(share) }
     },
+    cancel: () => run.cancel(),
   }
 }
 
 /** Party 2's side of one signature over `digest` (computed by the caller from the payload it checked). */
 export function party2Sign(jobId: string, reqId: string, share: string, digest: Hex) {
-  const p2 = new P2Signature(signSessionId(jobId, reqId), hexToBytes(digest), JSON.parse(share) as IP2KeyShare)
+  void reqId // cb-mpc agrees a fresh session id inside the protocol
+  const run = CbmpcRun.sign(parties(jobId, 1), shareBytes(share), hexToBytes(digest))
   return {
-    /** msg1 → msg2, msg3 → msg4, msg5 → done (party 2 checks the final signature itself). */
-    step: async (msg: string): Promise<{ msg: string | null; done: boolean }> => {
-      const r = await p2.processMessage(msg)
-      return { msg: r.msg_to_send, done: !!r.signature }
+    step: async (msg: string): Promise<{ msg: string; done: boolean }> => {
+      const r = await relayStep(run, msg)
+      return { msg: r.msg, done: r.done }
     },
+    cancel: () => run.cancel(),
   }
 }
 
@@ -145,50 +218,55 @@ export function mpcCoordinator(o: { waitMs?: number; presenceMs?: number; now?: 
   const waitMs = o.waitMs ?? 120_000
   const presenceMs = o.presenceMs ?? 30_000
   const now = o.now ?? Date.now
-  const keygens = new Map<string, P1KeyGen>()
+  const keygens = new Map<string, CbmpcRun<Uint8Array>>()
   const seen = new Map<string, number>()
   const aborted = new Set<string>()
-  type Pending = { req: MpcSignRequest; p1: P1Signature; round: number; address: Hex; digest: Hex; resolve: (s: Hex) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+  type Pending = { req: MpcSignRequest; run: CbmpcRun<Uint8Array | null>; address: Hex; digest: Hex; resolve: (s: Hex) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
   const pending = new Map<string, Pending>()
 
   const settle = (jobId: string, p: Pending, e: Error | null, sig?: Hex) => {
     clearTimeout(p.timer)
     if (pending.get(jobId) === p) pending.delete(jobId)
-    if (e) p.reject(e)
-    else p.resolve(sig!)
+    if (e) {
+      p.run.cancel()
+      p.reject(e)
+    } else p.resolve(sig!)
   }
 
   const present = (jobId: string) => now() - (seen.get(jobId) ?? -Infinity) <= presenceMs
 
   async function sign(jobId: string, address: Hex, share: string, purpose: string, payload: SignPayload): Promise<Hex> {
-    if (aborted.has(jobId)) throw new MpcAbort('an earlier signature failed its check')
+    if (aborted.has(jobId)) throw new MpcAbort('cb-mpc reported a key-bit leak earlier')
     if (!present(jobId)) throw new MakerAway()
     if (pending.has(jobId)) throw new Error('another signature is in progress for this hatch')
     const digest = digestOf(payload)
     const id = crypto.randomUUID()
-    const p1 = new P1Signature(signSessionId(jobId, id), hexToBytes(digest), JSON.parse(share) as IP1KeyShare)
-    const msg = (await p1.processMessage(null)).msg_to_send
+    const run = CbmpcRun.sign(parties(jobId, 0), shareBytes(share), hexToBytes(digest))
+    const first = await relayStep(run, null)
     return new Promise<Hex>((resolve, reject) => {
-      const p: Pending = { req: { id, purpose, payload, msg }, p1, round: 0, address, digest, resolve, reject, timer: setTimeout(() => settle(jobId, p, new MakerAway("the maker's hatch page did not co-sign in time")), waitMs) }
+      const p: Pending = { req: { id, purpose, payload, msg: first.msg }, run, address, digest, resolve, reject, timer: setTimeout(() => settle(jobId, p, new MakerAway("the maker's hatch page did not co-sign in time")), waitMs) }
       pending.set(jobId, p)
     })
   }
 
   return {
-    /** Party 1's key generation: `null` starts (or restarts) it and returns msg1; msg2 returns msg3 and the share. */
-    async keygen(jobId: string, msg: string | null): Promise<{ msg: string; share?: string; address?: Hex }> {
+    /** Party 1's key generation: `null` starts (or restarts) it; then each browser batch until done (share + address). */
+    async keygen(jobId: string, msg: string | null): Promise<{ msg: string; done: boolean; share?: string; address?: Hex }> {
+      let run = keygens.get(jobId)
       if (msg === null) {
-        const p1 = new P1KeyGen(keygenSessionId(jobId))
-        await p1.init() // Paillier key generation: about a second
-        keygens.set(jobId, p1)
-        return { msg: (await p1.processMessage(null)).msg_to_send }
+        run?.cancel()
+        keygens.set(jobId, (run = CbmpcRun.dkg(parties(jobId, 0))))
+      } else if (!run) throw new Error('no key generation in progress; start again')
+      try {
+        const r = await relayStep(run, msg)
+        if (!r.done) return { msg: r.msg, done: false }
+        keygens.delete(jobId)
+        const share = b64(r.result!)
+        return { msg: r.msg, done: true, share, address: await shareAddressOf(share) }
+      } catch (e) {
+        keygens.delete(jobId)
+        throw e
       }
-      const p1 = keygens.get(jobId)
-      if (!p1) throw new Error('no key generation in progress; start again')
-      keygens.delete(jobId)
-      const r = await p1.processMessage(msg)
-      if (!r.p1_key_share) throw new Error('key generation did not finish')
-      return { msg: r.msg_to_send, share: JSON.stringify(r.p1_key_share), address: shareAddress(r.p1_key_share.public_key) }
     },
 
     /** The browser asks for work; this is also how we know its page is open. */
@@ -197,28 +275,23 @@ export function mpcCoordinator(o: { waitMs?: number; presenceMs?: number; now?: 
       return pending.get(jobId)?.req ?? null
     },
 
-    /** The browser's next message (or its refusal) for request `reqId`. */
+    /** The browser's next batch (or its refusal) for request `reqId`. `done`: the board has its signature. */
     async answer(jobId: string, reqId: string, a: MpcAnswer): Promise<{ msg: string; done: boolean }> {
       seen.set(jobId, now())
       const p = pending.get(jobId)
       if (!p || p.req.id !== reqId) throw new Error('no such signing request (expired or done)')
       if ('refuse' in a) {
         settle(jobId, p, new Error(`the maker's hatch page refused to sign ${p.req.purpose}: ${String(a.refuse).slice(0, 200)}`))
-        return { msg: '', done: true }
+        return { msg: encodeBatch([]), done: true }
       }
-      const round = ++p.round
       try {
-        const r = await p.p1.processMessage(a.msg)
-        if (round === 1) return { msg: r.msg_to_send, done: false }
-        // Round 2 decrypted the browser's share of s and checked the signature: success or abort, nothing between.
-        const sig = sigHex(r.signature!, r.recid!)
-        if ((await recoverAddress({ hash: p.digest, signature: sig })).toLowerCase() !== p.address.toLowerCase()) throw new Error('signature does not recover to the hosting address')
-        settle(jobId, p, null, sig)
-        return { msg: r.msg_to_send, done: true }
+        const r = await relayStep(p.run, a.msg)
+        if (r.done) settle(jobId, p, null, await ethSignature(r.result!, p.digest, p.address))
+        return { msg: r.msg, done: r.done }
       } catch (e) {
-        if (round >= 2) {
+        if (e instanceof CbmpcError && e.bitLeak) {
           aborted.add(jobId)
-          settle(jobId, p, new MpcAbort((e as Error).message))
+          settle(jobId, p, new MpcAbort(e.message))
         } else settle(jobId, p, e as Error)
         throw e
       }
@@ -226,20 +299,21 @@ export function mpcCoordinator(o: { waitMs?: number; presenceMs?: number; now?: 
 
     present,
 
-    /** A HostingSigner for a job whose board share is `share`. `aborted` restores a freeze recorded on the job. */
-    signer(jobId: string, share: string, opts: { aborted?: boolean } = {}): MpcSigner {
+    /** A HostingSigner for a job: the board's `share` of the account at `address`. `aborted` restores a recorded freeze. */
+    signer(jobId: string, share: string, address: string, opts: { aborted?: boolean } = {}): MpcSigner {
       if (opts.aborted) aborted.add(jobId)
-      const address = shareAddressOf(share)
+      const a = address as Hex
       return {
-        address,
+        address: a,
         ready: () => present(jobId) && !aborted.has(jobId),
-        signMessage: (message) => sign(jobId, address, share, 'a Fluence sign-in', { type: 'message', message }),
-        signTypedData: (td) => sign(jobId, address, share, td.primaryType, { type: 'typed', typedData: wireTypedData(td) }),
+        signMessage: (message) => sign(jobId, a, share, 'a Fluence sign-in', { type: 'message', message }),
+        signTypedData: (td) => sign(jobId, a, share, td.primaryType, { type: 'typed', typedData: wireTypedData(td) }),
       }
     },
 
     /** Drop everything held for a job (after hand-over). */
     forget(jobId: string) {
+      keygens.get(jobId)?.cancel()
       keygens.delete(jobId)
       seen.delete(jobId)
       const p = pending.get(jobId)

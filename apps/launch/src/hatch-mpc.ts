@@ -120,7 +120,7 @@ async function handOver(o: Parameters<typeof keepCosigning>[0], h: Held, panel: 
     const a = egg?.announcement
     if (!a || a.address.toLowerCase() !== job.eggAddress.toLowerCase() || a.maker.toLowerCase() !== o.maker.toLowerCase() || a.configHash.toLowerCase() !== o.configHash.toLowerCase())
       throw new Error('the egg claiming the account is not the one announced for this launch')
-    const sealed = await sealBrowserShard(job.eggPublicKey, { v: 2, custody: 'mpc', launchId: o.launchId, hostingAddress: h.address!, shard: shareScalar(h.share!) })
+    const sealed = await sealBrowserShard(job.eggPublicKey, { v: 2, custody: 'mpc', launchId: o.launchId, hostingAddress: h.address!, shard: await shareScalar(h.share!) })
     await o.board.handOverShard(o.jobId, h.secret, sealed)
     panel.note(`Your key shard is sealed to the egg ${job.eggAddress.slice(0, 8)}…; only it can open it.`)
   }

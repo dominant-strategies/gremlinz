@@ -5,8 +5,9 @@ import { createSiweMessage } from 'viem/siwe'
 import { COW, QUAI_SYNTH, QUAI_SYNTH_PERMIT_DOMAIN, USDC, ORDER_TYPES } from '@gremlins/treasury'
 import {
   BASE_QUAI, BASE_USDC, COW_SETTLEMENT, COW_VAULT_RELAYER, MakerAway, MpcAbort, SECP256K1_N, browserKeygen, checkSignRequest, cosignOnce, digestOf,
-  mpcCoordinator, shareAddressOf, shareScalar, wireTypedData, type CosignEvent, type MpcTransport, type PolicyContext,
+  decodeBatch, encodeBatch, mpcCoordinator, party2Sign, shareAddressOf, shareScalar, wireTypedData, type CosignEvent, type MpcTransport, type PolicyContext,
 } from '../src/mpc-index.js'
+import { CbmpcRun } from '../src/cbmpc.js'
 import { fluencePayTo } from '../src/fluence.js'
 import type { TypedDataToSign } from '../src/signer.js'
 
@@ -19,7 +20,7 @@ function inProcess(c: ReturnType<typeof mpcCoordinator>, jobId: string, board: {
     async keygen(msg) {
       const r = await c.keygen(jobId, msg)
       if (r.share) board.share = r.share
-      return { msg: r.msg, hostingAddress: r.address }
+      return { msg: r.msg, done: r.done, hostingAddress: r.address }
     },
     confirmKeygen: async () => {},
     poll: async () => c.poll(jobId),
@@ -33,7 +34,7 @@ async function keyed(jobId = 'job-1', o: Parameters<typeof mpcCoordinator>[0] = 
   const t = inProcess(c, jobId, board)
   const browser = await browserKeygen(t, jobId)
   const ctx: PolicyContext = { hostingAddress: browser.address, maxTopUpMicro: 10_000_000n, now: () => NOW, fluencePayTo: async () => [FLUENCE_PAYEE], cowQuote: async (sell) => (sell * 100_000n) / 10n ** 18n }
-  return { c, t, jobId, board: board.share!, browser, ctx, signer: c.signer(jobId, board.share!) }
+  return { c, t, jobId, board: board.share!, browser, ctx, signer: c.signer(jobId, board.share!, browser.address) }
 }
 
 /** Keep the browser co-signing until `p` settles. */
@@ -75,30 +76,31 @@ const order = (receiver: string, buyAmount = 11_880_000n): TypedDataToSign => ({
 })
 
 describe('2-of-2 hatch key', () => {
-  it('key generation gives both sides the same address, and the shards multiply into its key', async () => {
+  it('key generation gives both sides the same address, and the shards add up to its key', async () => {
     const k = await keyed()
-    expect(shareAddressOf(k.board)).toBe(getAddress(k.browser.address))
-    expect(k.signer.address).toBe(getAddress(k.browser.address))
-    const x = (BigInt(shareScalar(k.board)) * BigInt(shareScalar(k.browser.share))) % SECP256K1_N
-    expect(privateKeyToAccount(`0x${x.toString(16).padStart(64, '0')}` as Hex).address).toBe(k.signer.address)
+    expect(await shareAddressOf(k.board)).toBe(getAddress(k.browser.address))
+    expect(getAddress(k.signer.address)).toBe(getAddress(k.browser.address))
+    const x = (BigInt(await shareScalar(k.board)) + BigInt(await shareScalar(k.browser.share))) % SECP256K1_N
+    expect(privateKeyToAccount(`0x${x.toString(16).padStart(64, '0')}` as Hex).address).toBe(getAddress(k.signer.address))
     // neither shard alone is the key
-    for (const s of [k.board, k.browser.share]) expect(privateKeyToAccount(shareScalar(s)).address).not.toBe(k.signer.address)
-  }, 30_000)
+    for (const s of [k.board, k.browser.share]) expect(privateKeyToAccount(await shareScalar(s)).address).not.toBe(getAddress(k.signer.address))
+  }, 60_000)
 
   it('signs EIP-191 and EIP-712 that verify against the shared address', async () => {
     const k = await keyed()
     const message = siwe(k.signer.address)
     const events: CosignEvent[] = []
     const sig = await withBrowser(k, () => k.signer.signMessage(message), events)
-    expect(await recoverMessageAddress({ message, signature: sig })).toBe(k.signer.address)
+    expect(await recoverMessageAddress({ message, signature: sig })).toBe(getAddress(k.signer.address))
+    expect(BigInt(`0x${sig.slice(66, 130)}`) <= SECP256K1_N / 2n).toBe(true) // low s
     expect(events[0]).toMatchObject({ verdict: { ok: true, kind: 'siwe' } })
     expect(events.at(-1)).toMatchObject({ signed: true })
 
     for (const td of [x402(k.signer.address), permit(k.signer.address), order(k.signer.address)]) {
       const s = await withBrowser(k, () => k.signer.signTypedData(td))
-      expect(await recoverTypedDataAddress({ ...(td as never), signature: s })).toBe(k.signer.address)
+      expect(await recoverTypedDataAddress({ ...(td as never), signature: s })).toBe(getAddress(k.signer.address))
     }
-  }, 30_000)
+  }, 60_000)
 
   it('the board alone cannot sign: no page, it fails fast; a silent page times out', async () => {
     const k = await keyed('job-away', { waitMs: 50 })
@@ -107,7 +109,7 @@ describe('2-of-2 hatch key', () => {
     k.c.poll(k.jobId)
     expect(k.signer.ready()).toBe(true)
     await expect(k.signer.signMessage(siwe(k.signer.address))).rejects.toThrow(/did not co-sign in time/)
-  }, 30_000)
+  }, 60_000)
 
   it('the browser refuses anything but the hatch’s own signatures, and the board learns why', async () => {
     const k = await keyed('job-refuse')
@@ -131,40 +133,55 @@ describe('2-of-2 hatch key', () => {
     }
     // Fluence's payee unknown (Fluence unreachable): refuse rather than guess
     await expect(withBrowser(k, () => k.signer.signTypedData(x402(k.signer.address)), [], { ...k.ctx, fluencePayTo: async () => { throw new Error('offline') } })).rejects.toThrow(/could not confirm Fluence/)
-  }, 30_000)
+  }, 60_000)
 
   it('the browser hashes the payload itself: a board showing one payload and signing another gets no signature', async () => {
     const k = await keyed('job-lie')
-    const { P1Signature } = await import('@silencelaboratories/ecdsa-tss')
-    const { party2Sign } = await import('../src/mpc.js')
     const shown = { type: 'typed' as const, typedData: wireTypedData(x402(k.signer.address)) }
     const hidden = digestOf({ type: 'message', message: 'anything else' })
     expect(await checkSignRequest(shown, k.ctx)).toMatchObject({ ok: true })
-    const p1 = new P1Signature('gremlins-hatch-sign:job-lie:r1', hexToBytes(hidden), JSON.parse(k.board))
+    const names = { p1: 'gremlins-hatch-board:job-lie', p2: 'gremlins-hatch-maker:job-lie' }
+    const p1 = CbmpcRun.sign({ self: 0, ...names }, Uint8Array.from(atob(k.board), (c) => c.charCodeAt(0)), hexToBytes(hidden))
     const p2 = party2Sign(k.jobId, 'r1', k.browser.share, digestOf(shown))
-    const m2 = (await p2.step((await p1.processMessage(null)).msg_to_send)).msg!
-    const m4 = (await p2.step((await p1.processMessage(m2)).msg_to_send)).msg!
-    await expect(p1.processMessage(m4)).rejects.toThrow(/Invalid signature/)
-  }, 30_000)
+    const run = async () => {
+      let a = await p1.step([])
+      for (let i = 0; i < 10; i++) {
+        const b = await p2.step(encodeBatch(a.out))
+        if (a.done) return a
+        a = await p1.step(decodeBatch(b.msg))
+        if (a.done) return a
+      }
+    }
+    await expect(run()).rejects.toThrow()
+  }, 60_000)
 
-  it('a bad final message from the browser freezes the board share for good (Lindell 2017 abort rule)', async () => {
-    const k = await keyed('job-abort')
+  it('a tampered message fails that signature only (cb-mpc proves the last round; nothing to freeze)', async () => {
+    const k = await keyed('job-tamper')
     k.c.poll(k.jobId)
     const sig = k.signer.signMessage(siwe(k.signer.address))
+    void sig.catch(() => {})
     let req = k.c.poll(k.jobId)
     while (!req) { await new Promise((r) => setTimeout(r, 2)); req = k.c.poll(k.jobId) }
-    const { party2Sign } = await import('../src/mpc.js')
     const p2 = party2Sign(k.jobId, req.id, k.browser.share, digestOf(req.payload))
-    const m3 = (await k.c.answer(k.jobId, req.id, { msg: (await p2.step(req.msg)).msg! })).msg
-    const m4 = JSON.parse((await p2.step(m3)).msg!)
-    m4.c3 = m4.c3.replace(/^./, (ch: string) => (ch === 'A' ? 'B' : 'A')) // tampered ciphertext
-    await expect(k.c.answer(k.jobId, req.id, { msg: JSON.stringify(m4) })).rejects.toThrow()
-    await expect(sig).rejects.toBeInstanceOf(MpcAbort)
-    expect(k.signer.ready()).toBe(false)
-    await expect(withBrowser(k, () => k.signer.signMessage(siwe(k.signer.address)))).rejects.toBeInstanceOf(MpcAbort)
-    // a restarted board keeps the freeze when told (the job records it)
-    expect(mpcCoordinator().signer(k.jobId, k.board, { aborted: true }).ready()).toBe(false)
-  }, 30_000)
+    let board = { msg: req.msg, done: false }
+    let failed: unknown
+    for (let i = 0; i < 10 && !failed; i++) {
+      const mine = await p2.step(board.msg)
+      const msgs = decodeBatch(mine.msg)
+      for (const m of msgs) m[m.length - 1]! ^= 1 // flip a bit in everything the page sends
+      board = await k.c.answer(k.jobId, req.id, { msg: encodeBatch(msgs) }).catch((e) => { failed = e; return board })
+    }
+    p2.cancel()
+    expect(failed).toBeTruthy()
+    await expect(sig).rejects.toThrow()
+    // not frozen: the next signature with an honest page goes through
+    expect(k.signer.ready()).toBe(true)
+    const again = await withBrowser(k, () => k.signer.signMessage(siwe(k.signer.address)))
+    expect(await recoverMessageAddress({ message: siwe(k.signer.address), signature: again })).toBe(getAddress(k.signer.address))
+    // a freeze recorded on the job (cb-mpc bit-leak report) still holds across restarts
+    expect(mpcCoordinator().signer(k.jobId, k.board, k.browser.address, { aborted: true }).ready()).toBe(false)
+    void MpcAbort
+  }, 60_000)
 
   it('pins the same addresses as @gremlins/treasury', () => {
     expect([BASE_USDC, BASE_QUAI, COW_SETTLEMENT, COW_VAULT_RELAYER]).toEqual([USDC[8453], QUAI_SYNTH[8453], COW.settlement, COW.vaultRelayer])

@@ -716,7 +716,7 @@ export async function createBoard(deps: BoardDeps) {
     try {
       const r = await m.mpc.keygen(m.job.id, b.msg)
       if (r.share) m.store.update(m.job.id, (j) => { j.hostingAddress = getAddress(r.address!) }, r.share)
-      return c.json({ msg: r.msg, ...(r.address ? { hostingAddress: getAddress(r.address) } : {}) })
+      return c.json({ msg: r.msg, done: r.done, ...(r.address ? { hostingAddress: getAddress(r.address) } : {}) })
     } catch (e) {
       return err(c, 409, `key generation failed: ${(e as Error).message}`)
     }

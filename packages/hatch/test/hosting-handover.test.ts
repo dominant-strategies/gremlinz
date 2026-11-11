@@ -26,7 +26,7 @@ describe('hosting hand-over', () => {
     await expect(openHostingHandover(egg.signingKey, junk)).rejects.toThrow(/malformed/)
   })
 
-  it('2-of-2: the egg multiplies the two sealed shards into the account key, and needs both', async () => {
+  it('2-of-2: the egg adds up the two sealed shards into the account key, and needs both', async () => {
     const egg = Wallet.createRandom()
     const x1 = hexlify(randomBytes(32)), x2 = hexlify(randomBytes(32))
     const key = new Wallet(combineShards(x1, x2))
