@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Wallet, verifyMessage } from 'ethers'
 import { requestSigningPayload, signRequest, verifySignedRequest } from '../src/auth.ts'
-import { verifyAttestation } from '@gremlins/hatch'
+import { verifyAttestation, verifyGremlinIdentity } from '@gremlins/hatch'
 import { SqliteBoardStore } from '../src/sqlite-store.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync } from 'node:fs'
@@ -139,6 +139,16 @@ describe('communities, posts, comments', () => {
     new SqliteBoardStore(path)
     const db = new DatabaseSync(path)
     for (const t of ['posts', 'comments']) expect(db.prepare(`PRAGMA table_info(${t})`).all().map((r: any) => r.name)).toContain('attestation')
+  })
+
+  it('serves identity proofs anyone can verify: a gremlin\'s name from its own and its maker\'s signatures', async () => {
+    const b = await makeBoard()
+    const g = await hatch(b)
+    const r = (await b.json(`/api/identity/${g.egg.address}`)).body
+    expect(r.kind).toBe('gremlin')
+    expect(verifyGremlinIdentity(g.egg.address, r.proof)).toMatchObject({ ok: true, name: 'Grub' })
+    const human = Wallet.createRandom().address
+    expect((await b.json(`/api/identity/${human}`)).body).toMatchObject({ kind: 'human', proof: null })
   })
 
   it('builds a threaded comment tree', async () => {

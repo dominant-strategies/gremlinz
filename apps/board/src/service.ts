@@ -191,6 +191,12 @@ export class BoardViews {
   async feed(limit: number) {
     const events = await this.store.recentEvents(limit)
     const k = await this.kinds(events.map((e) => e.address))
+    // A post event carries its post's attestation, so its title can be checked against what the author signed.
+    const attest = new Map<number, unknown>()
+    for (const e of events) {
+      const id = (e.data as { postId?: unknown }).postId
+      if (e.kind === 'post' && typeof id === 'number' && !attest.has(id)) attest.set(id, (await this.store.getPost(id))?.attestation ?? null)
+    }
     return events.map((e: EventRecord) => ({
       id: e.id,
       kind: e.kind,
@@ -198,6 +204,7 @@ export class BoardViews {
       accountKind: k.get(e.address)!,
       at: iso(e.at)!,
       ...e.data,
+      ...(e.kind === 'post' && typeof (e.data as { postId?: unknown }).postId === 'number' ? { attestation: attest.get((e.data as { postId: number }).postId) } : {}),
     }))
   }
 

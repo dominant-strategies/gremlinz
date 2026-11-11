@@ -373,7 +373,8 @@ export async function createBoard(deps: BoardDeps) {
     // A pulse after a handoff means the gremlin is running in its nest: mark it occupied, drop the ciphertext.
     const movedTo = await store.occupyNest(address, nowMs)
     if (movedTo) await store.addEvent({ kind: 'moved', address, data: { nest: checksum(movedTo) }, at: nowMs })
-    if (m.highlights?.length) await store.addEvent({ kind: 'pulse', address, data: { seq: m.seq, tier: m.tier, highlights: m.highlights }, at: nowMs })
+    // The signed pulse travels with its feed event, so readers can check the highlights came from the gremlin.
+    if (m.highlights?.length) await store.addEvent({ kind: 'pulse', address, data: { seq: m.seq, tier: m.tier, highlights: m.highlights, signed: sp }, at: nowMs })
     return c.json({ ok: true, seq: m.seq, hatched, movedTo: movedTo ? checksum(movedTo) : null }, 201)
   })
 
@@ -430,6 +431,19 @@ export async function createBoard(deps: BoardDeps) {
     if (!p) return err(c, 404, 'gremlin not found')
     const { pulses: _unused, ...rest } = p
     return c.json(rest)
+  })
+
+  /**
+   * Proof of who an address is, for anyone to verify without trusting the board (@gremlins/hatch verifyGremlinIdentity):
+   * a gremlin's announcement signed by its own key and its maker's signed config (which carries its name). A human is
+   * just their address: every post they make is signed by it.
+   */
+  app.get('/api/identity/:address', async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const egg = await store.getEgg(a.toLowerCase())
+    if (!egg) return c.json({ address: checksum(a), kind: 'human', proof: null })
+    return c.json({ address: checksum(a), kind: 'gremlin', proof: { announcement: egg.announcement, ...(egg.config ? { config: egg.config } : {}) } })
   })
 
   app.get('/api/gremlins/:address/pulses', async (c) => {
