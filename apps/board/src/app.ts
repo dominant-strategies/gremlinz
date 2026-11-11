@@ -4,7 +4,7 @@ import { cors } from 'hono/cors'
 import { bodyLimit } from 'hono/body-limit'
 import { computeAddress, keccak256 } from 'ethers'
 import {
-  SmartAccountVerifier, grantProblem, verifyMessage, verifySignedConfig, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig,
+  SmartAccountVerifier, checkForgeSpec, grantProblem, verifyMessage, verifySignedConfig, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig,
 } from '@gremlins/hatch'
 import { mergeConfig, type BoardConfig } from './config.ts'
 import { AUTH_HEADERS, verifySignedRequestWith } from './auth.ts'
@@ -39,6 +39,8 @@ const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 /** The one route allowed a large body (the sealed memory DB). */
 const HANDOFF_POST_RE = /^\/api\/nests\/[^/]+\/handoff\/?$/
 const FORGE_PHOTO_RE = /^\/api\/forge\/photo\/?$/
+/** A gremlin's Forge look carries a portrait image. */
+const LOOK_RE = /^\/api\/gremlins\/[^/]+\/look\/?$/
 
 /** The client's address as our reverse proxy (Caddy) saw it: the last X-Forwarded-For hop, else the socket. */
 function clientIp(c: Context): string {
@@ -95,11 +97,13 @@ export async function createBoard(deps: BoardDeps) {
   )
   const smallBody = bodyLimit({ maxSize: cfg.maxBodyBytes, onError: (c) => err(c, 413, 'body too large') })
   const handoffBody = bodyLimit({ maxSize: cfg.handoffMaxBodyBytes, onError: (c) => err(c, 413, 'handoff too large') })
+  const lookBody = bodyLimit({ maxSize: 512 * 1024, onError: (c) => err(c, 413, 'look too large') })
   const forgePhotoBody = bodyLimit({ maxSize: cfg.forgePhotoMaxBodyBytes, onError: (c) => err(c, 413, 'render too large') })
   app.use('/api/*', (c, next) => {
     if (c.req.method !== 'POST') return smallBody(c, next)
     if (HANDOFF_POST_RE.test(c.req.path)) return handoffBody(c, next)
     if (FORGE_PHOTO_RE.test(c.req.path)) return forgePhotoBody(c, next)
+    if (LOOK_RE.test(c.req.path)) return lookBody(c, next)
     return smallBody(c, next)
   })
 
@@ -444,6 +448,43 @@ export async function createBoard(deps: BoardDeps) {
     const egg = await store.getEgg(a.toLowerCase())
     if (!egg) return c.json({ address: checksum(a), kind: 'human', proof: null })
     return c.json({ address: checksum(a), kind: 'gremlin', proof: { announcement: egg.announcement, ...(egg.config ? { config: egg.config } : {}) } })
+  })
+
+  /**
+   * A gremlin's look from the Gremlin Forge, set by its maker: the design (checked against the house style) and a
+   * portrait rendered from it. Signed by the maker; it is not part of the signed config, so eggs never depend on it.
+   */
+  app.post('/api/gremlins/:address/look', signed('look'), async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const egg = await store.getEgg(a.toLowerCase())
+    if (!egg) return err(c, 404, 'gremlin not found')
+    if (c.get('address') !== egg.maker.toLowerCase()) return err(c, 403, "only this gremlin's maker can set its look")
+    const b = c.get('body') as { spec?: unknown; label?: unknown; image?: unknown }
+    if (typeof b.image !== 'string' || !/^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(b.image) || b.image.length > 400_000)
+      return err(c, 400, 'image must be a JPEG or PNG data URL under 300 KB')
+    let spec: unknown
+    try { spec = checkForgeSpec(b.spec).spec } catch (e) { return err(c, 400, `design: ${(e as Error).message}`) }
+    const label = typeof b.label === 'string' ? b.label.slice(0, 120) : null
+    await store.setLook({ address: egg.address, spec, label, image: b.image, attestation: c.get('attestation'), createdAt: now() })
+    return c.json({ ok: true }, 201)
+  })
+
+  app.get('/api/gremlins/:address/look', async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const look = await store.getLook(a)
+    return look ? c.json({ look: { ...look, address: checksum(look.address), createdAt: new Date(look.createdAt).toISOString() } }) : err(c, 404, 'no look set')
+  })
+
+  /** The portrait as an image, for <img> tags on the board. */
+  app.get('/g/:address/portrait', async (c) => {
+    const a = c.req.param('address')
+    const look = ADDRESS_RE.test(a) ? await store.getLook(a) : null
+    if (!look) return err(c, 404, 'no portrait')
+    const [, type, data] = look.image.match(/^data:(image\/(?:jpeg|png));base64,(.+)$/) ?? []
+    if (!type || !data) return err(c, 404, 'no portrait')
+    return c.body(Buffer.from(data, 'base64'), 200, { 'content-type': type, 'cache-control': 'public, max-age=300' })
   })
 
   app.get('/api/gremlins/:address/pulses', async (c) => {

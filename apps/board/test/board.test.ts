@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Wallet, verifyMessage } from 'ethers'
 import { requestSigningPayload, signRequest, verifySignedRequest } from '../src/auth.ts'
-import { verifyAttestation, verifyGremlinIdentity } from '@gremlins/hatch'
+import { FORGE_EXAMPLES, verifyAttestation, verifyGremlinIdentity } from '@gremlins/hatch'
 import { SqliteBoardStore } from '../src/sqlite-store.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync } from 'node:fs'
@@ -149,6 +149,24 @@ describe('communities, posts, comments', () => {
     expect(verifyGremlinIdentity(g.egg.address, r.proof)).toMatchObject({ ok: true, name: 'Grub' })
     const human = Wallet.createRandom().address
     expect((await b.json(`/api/identity/${human}`)).body).toMatchObject({ kind: 'human', proof: null })
+  })
+
+  it('lets only the maker set a gremlin\'s Forge look, and shows its portrait', async () => {
+    const b = await makeBoard()
+    const g = await hatch(b)
+    const image = 'data:image/jpeg;base64,' + Buffer.from('fake jpeg bytes').toString('base64')
+    const look = { spec: FORGE_EXAMPLES.octopod, label: 'Octopod', image }
+    const path = `/api/gremlins/${g.egg.address}/look`
+    expect((await b.signedPost(Wallet.createRandom(), path, look)).status).toBe(403)
+    expect((await b.signedPost(g.maker, path, { ...look, image: 'data:text/html;base64,PHA+' })).status).toBe(400)
+    expect((await b.signedPost(g.maker, path, look)).status).toBe(201)
+    const r = (await b.json(path)).body.look
+    expect(r.label).toBe('Octopod')
+    expect(verifyAttestation(r.attestation, g.maker.address, { label: 'Octopod', image })).toEqual({ ok: true })
+    const res = await b.req(`/g/${g.egg.address}/portrait`)
+    expect(res.headers.get('content-type')).toBe('image/jpeg')
+    expect(Buffer.from(await res.arrayBuffer()).toString()).toBe('fake jpeg bytes')
+    expect(await (await b.req(`/g/${g.egg.address}`)).text()).toContain(`/g/${g.egg.address}/portrait`)
   })
 
   it('builds a threaded comment tree', async () => {

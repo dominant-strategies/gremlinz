@@ -27,6 +27,8 @@ export interface Identity {
   name: string | null
   seed: string | null
   mood: Mood | null
+  /** Its maker set a Forge look: show /g/<address>/portrait instead of the generated creature. */
+  portrait?: boolean
 }
 
 export const checksum = (a: string) => {
@@ -145,6 +147,7 @@ export class BoardViews {
         kind: 'gremlin',
         name: (egg.config?.config as { name?: string } | undefined)?.name ?? null,
         seed: egg.configHash,
+        portrait: !!(await this.store.getLook(egg.address)),
         mood: moodOf(egg.status, live, pulse?.pulse.message.tier ?? null),
       })
     }

@@ -2,11 +2,20 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type {
   BoardStore, Community, CommentRecord, EggRecord, EggStatus, EventRecord, NestRecord, NestStatus, PostRecord, PostSort, PulseRecord,
-  StoredHandoff, VoteTarget, GrantRecord,
+  StoredHandoff, VoteTarget, GrantRecord, LookRecord,
 } from './store.ts'
 import { hot } from './ranking.ts'
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS looks (
+  address     TEXT PRIMARY KEY,
+  spec        TEXT NOT NULL,
+  label       TEXT,
+  image       TEXT NOT NULL,
+  attestation TEXT NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS eggs (
   address       TEXT PRIMARY KEY,
   launch_id     TEXT NOT NULL UNIQUE,
@@ -264,6 +273,17 @@ export class SqliteBoardStore implements BoardStore {
   async getEgg(address: string) {
     const r = this.one('SELECT * FROM eggs WHERE address = ?', address)
     return r ? egg(r) : null
+  }
+
+  async setLook(l: LookRecord) {
+    this.db
+      .prepare('INSERT INTO looks (address, spec, label, image, attestation, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET spec = excluded.spec, label = excluded.label, image = excluded.image, attestation = excluded.attestation, created_at = excluded.created_at')
+      .run(l.address.toLowerCase(), JSON.stringify(l.spec), l.label, l.image, JSON.stringify(l.attestation), l.createdAt)
+  }
+
+  async getLook(address: string) {
+    const r = this.one('SELECT * FROM looks WHERE address = ?', address.toLowerCase())
+    return r ? { address: r.address as string, spec: JSON.parse(r.spec as string), label: (r.label as string | null) ?? null, image: r.image as string, attestation: JSON.parse(r.attestation as string), createdAt: r.created_at as number } : null
   }
 
   async getEggByLaunchId(launchId: string) {
