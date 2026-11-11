@@ -173,37 +173,50 @@ Advanced makers can configure the harness and pick skills; anyone can write skil
   account, and hands the account to the egg that proves the secret; the egg keeps it as `hosting.json` and sweeps it
   (below). The account key is 2-of-2 ECDSA, one shard in the maker's browser and one on the board, and the full
   key exists only inside the egg. `BOARD_HATCH_CUSTODY=local` keeps the old single-key path (dev and tests only).
-  - **Library: `@silencelaboratories/ecdsa-tss` 1.1.3, pinned exact.** Lindell 2017 two-party ECDSA on secp256k1
-    (Paillier, with the PDL-with-slack and Paillier-key-correctness proofs in key generation), plain JS on
-    `@noble/secp256k1` and `paillier-bigint`, so the same code runs in Node and the browser (~280 KB unpacked, no WASM).
-    Audited by Cure53 (2022, `cure53.de/audit-report_silencelabs-ecdsa-lib.pdf`). Every protocol state serialises to
-    JSON, which suits a relay over HTTP. Rejected: Silence Laboratories' DKLs23 (`@silencelaboratories/dkls-wasm-ll-*`,
-    Trail of Bits-audited, the better protocol) and Vultisig's build of it (`@vultisig/lib-dkls`) are under the
-    *Silence Laboratories Non-Commercial Use License*; `cb-mpc` on npm is a one-person WASM build of Coinbase's
-    (MIT, Cure53-audited) library, 6.6 MB, variable-time arithmetic in WASM; Torus' and Safeheron's packages carry no
-    licence. **Licence risk, decide before launch:** 1.1.3 was published to npm as ISC (January 2024); a month later
-    the GitHub repo added the same non-commercial licence, whose text claims to cover past versions. Get Silence
-    Laboratories' written confirmation or a commercial licence (which also opens DKLs23), or switch libraries; the
-    protocol code is behind `packages/hosting/src/mpc.ts` and swapping it touches nothing else. Unmaintained since
-    January 2024; BigInt arithmetic is not constant-time (the board's timing is observable only through HTTP).
-  - **Roles.** The board is party 1 (holds the Paillier key, starts every session, decrypts the final share and checks
-    the signature); the browser is party 2 (cheap: no Paillier key generation). Shares are multiplicative:
-    key = x1·x2 mod n. Lindell 2017 has a selective-abort leak: if party 1 keeps signing after a final signature fails
-    its check, a malicious party 2 learns its share bit by bit. So one bad final signature freezes the job for good
-    (`mpcAbortedAt`, status `failed`); an honest browser never causes it, and the maker loses the funds (small by design).
+  - **Library: Coinbase's cb-mpc (MIT), ECDSA-2PC on secp256k1, which we build to WebAssembly ourselves.** Pinned:
+    cb-mpc commit `0b71670` (v0.2.2 + #137), OpenSSL 3.6.4 (sha256-checked), Emscripten 6.0.13 (image by digest);
+    `packages/hosting/cbmpc/build.sh` needs only Docker, and `build.sh --check` rebuilds from scratch and compares
+    with the committed `cbmpc/wasm/` (byte-identical so far). The outputs are committed because most machines that
+    test or build this repo have no Emscripten, and CI can run `--check` instead of trusting them. One module serves
+    Node (the board) and the browser (Vite bundles the 4.9 MB `.wasm` as an asset, 2.2 MB gzipped, loaded only by
+    the Fluence step); `packages/hosting/src/cbmpc.ts` gives each protocol run its own instance whose transport
+    `receive` suspends (Asyncify) until the relay delivers the peer's next messages. Proven in headless Chromium
+    (`cbmpc/browser-check.mjs`: keygen ~2.4 s, sign ~0.2 s with both parties in one tab); Safari and Firefox not
+    run yet.
+    - *Port:* cb-mpc only supports 64-bit macOS/Linux and says WebAssembly is unsupported. We keep its code paths:
+      OpenSSL is built for wasm32 with 64-bit bignum limbs (`SIXTY_FOUR_BIT`, `__int128` products), so cb-mpc's
+      constant-time modular arithmetic and 256-bit code run unchanged (the third-party `cb-mpc` npm build instead
+      switches WASM to variable-time arithmetic). Two small patches: header guards for Emscripten, and its add/sub
+      with carry no longer uses `__builtin_addcl` where `long` is 32 bits (that bug broke the zero-knowledge proofs).
+      Only the C API's 2-party ECDSA (plus core, crypto, ZK and protocol code) is compiled.
+    - *Audit and constant time:* cb-mpc has a Cure53 audit (report in its repo, `docs/cure53-audit.pdf`) and
+      constant-time tests (`make dudect`, natively). Neither covers our wasm32 build or patches; WebAssembly engines
+      make no constant-time promises (the algorithms are constant-time, the JIT is not audited for it). Running the
+      upstream unit tests under the WASM build is still to do.
+    - *Rejected:* `@silencelaboratories/ecdsa-tss` (Lindell 2017; its repo now claims a non-commercial licence over
+      all versions), Silence Laboratories' DKLs23 and Vultisig's build of it (same non-commercial licence), the
+      `cb-mpc` npm package (one person's build, variable-time WASM arithmetic), Torus' and Safeheron's packages (no
+      licence).
+  - **Roles and shares.** The board is party 1 (holds the Paillier key, starts every session, gets the signature);
+    the browser is party 2. Shares are additive: key = x1 + x2 mod n (cb-mpc's `detach_private_scalar` gives each
+    party its x_i). cb-mpc's public `sign` has party 2 prove its last message in zero knowledge, so a failed signature
+    leaks nothing and is just a failed session (retried later). Its global-abort variant, which can report a key-bit
+    leak (`E_ECDSA_2P_BIT_LEAK`) and must then stop all signing with the key, is not used; if cb-mpc ever reports
+    that error the job freezes for good (`mpcAbortedAt`, status `failed`).
   - **Key generation at job creation.** The browser makes a random per-job secret and keeps it with its shard in
     localStorage (`gremlins.hatch-mpc.<launchId>`); the board gets only its SHA-256 (`mpcAuth`), and every MPC
     endpoint wants the secret in `x-hatch-auth`. `POST /api/hatch/fluence {…, mpcAuth}` makes a `keygen` job;
-    `POST /api/hatch/:id/mpc/keygen` relays the two round trips (board state in memory only; a reload or restart
-    just starts over); the browser checks the proofs, derives the address from the shared public key, stores its
+    `POST /api/hatch/:id/mpc/keygen` relays the rounds as batches of messages until both sides are done (board state
+    in memory only; a reload or restart just starts over); the browser checks the proofs, derives the address from the shared public key, stores its
     shard, then `…/keygen/confirm {hostingAddress}` moves the job to `funding`. Only then does the page show the
     funding address. The board keeps its shard where the single key was (AES-GCM at rest, `key_enc`).
   - **Signing.** Every signature the job needs goes through an `MpcSigner` (a `HostingSigner`): Fluence SIWE sign-ins,
     the x402 top-up (EIP-3009 `TransferWithAuthorization`), and for QUAI bridged in, the CoW permit (EIP-2612) and
     order (GPv2). The board posts a request with the *payload* (SIWE text or typed data), never just a digest; the
     browser polls `GET /api/hatch/:id/mpc/sign`, shows it in the progress window, checks it against
-    `checkSignRequest` (`packages/hosting/src/mpc-policy.ts`), hashes it itself, and only then runs the three round
-    trips (`POST …/mpc/sign/:reqId`), or refuses with a reason. Accepted, and nothing else:
+    `checkSignRequest` (`packages/hosting/src/mpc-policy.ts`), hashes it itself, and only then runs the signing rounds
+    (`POST …/mpc/sign/:reqId`), or refuses with a reason. The board turns cb-mpc's DER signature into the 65-byte
+    form with low s (USDC's EIP-3009 recovery rejects high s). Accepted, and nothing else:
     - SIWE: exactly the message `fluence.login()` builds (domain and URI api.fluence.dev, chain 8453, the hosting
       address, issued within 10 minutes).
     - x402: USDC on Base's domain, `TransferWithAuthorization` from the hosting address, to an address Fluence's own
@@ -218,7 +231,7 @@ Advanced makers can configure the harness and pick skills; anyone can write skil
   - **Hand-over.** After the egg claims (hatch proof, as before) and its announcement matches the job, the board seals
     its shard x1 to the egg (`HostingHandover` v2, `custody: 'mpc'`) and deletes it. The page, still open (or reopened
     from the same browser), sees the claim and seals its shard x2 to the same egg key (`POST …/mpc/handoff`; the board
-    stores it but can't open it), then deletes its copy once the job is `done`. The egg fetches both, multiplies the
+    stores it but can't open it), then deletes its copy once the job is `done`. The egg fetches both, adds up the
     shares, checks the result is the hosting address, and writes the ordinary `hosting.json`. Once the VM runs the
     page co-signs nothing more (the board needs no signature after launch), so the board can't open Fluence sessions
     behind the `lastSessionAt` it hands the egg. The page can check: the
