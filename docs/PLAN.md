@@ -167,15 +167,73 @@ Advanced makers can configure the harness and pick skills; anyone can write skil
 
 ## Required before launch
 
-- **Multiparty hatch key (2-of-2).** Nobody may keep control of a gremlin's hosting account. Interim (built): the
-  board's hatch service (`apps/board/src/hatch.ts`) generates the account key (on Fluence the paying wallet *is* the
-  account: x402 + SIWE), the maker funds its address, the board launches the VM with a cloud-init it renders itself
-  (including a random hatch secret), seals the key to the egg that proves the secret, and deletes its copy; the egg keeps
-  it as `hosting.json` and sweeps the account (below). Until then the key sits encrypted in the board's hatch store, so
-  the board operator could still take it: its signer is behind `HostingSigner` (`packages/hosting/src/signer.ts`). Before
-  launch that signer becomes 2-of-2 multiparty ECDSA (browser shard + backend shard, e.g. DKLs23): the key is never
-  reconstructed until both shards are sealed to the egg, so neither the maker nor we can take control alone. The CoW
-  swap of bridged QUAI also signs with the key (permit + order typed data) and needs the same treatment.
+- **Multiparty hatch key (2-of-2).** Nobody may keep control of a gremlin's hosting account (on Fluence the paying
+  wallet *is* the account: x402 + SIWE). The board's hatch service (`apps/board/src/hatch.ts`) renders the egg's
+  cloud-init itself (our image, our dev keys, a random hatch secret), launches the VM once the maker has funded the
+  account, and hands the account to the egg that proves the secret; the egg keeps it as `hosting.json` and sweeps it
+  (below). The account key is 2-of-2 ECDSA, one shard in the maker's browser and one on the board, and the full
+  key exists only inside the egg. `BOARD_HATCH_CUSTODY=local` keeps the old single-key path (dev and tests only).
+  - **Library: `@silencelaboratories/ecdsa-tss` 1.1.3, pinned exact.** Lindell 2017 two-party ECDSA on secp256k1
+    (Paillier, with the PDL-with-slack and Paillier-key-correctness proofs in key generation), plain JS on
+    `@noble/secp256k1` and `paillier-bigint`, so the same code runs in Node and the browser (~280 KB unpacked, no WASM).
+    Audited by Cure53 (2022, `cure53.de/audit-report_silencelabs-ecdsa-lib.pdf`). Every protocol state serialises to
+    JSON, which suits a relay over HTTP. Rejected: Silence Laboratories' DKLs23 (`@silencelaboratories/dkls-wasm-ll-*`,
+    Trail of Bits-audited, the better protocol) and Vultisig's build of it (`@vultisig/lib-dkls`) are under the
+    *Silence Laboratories Non-Commercial Use License*; `cb-mpc` on npm is a one-person WASM build of Coinbase's
+    (MIT, Cure53-audited) library, 6.6 MB, variable-time arithmetic in WASM; Torus' and Safeheron's packages carry no
+    licence. **Licence risk, decide before launch:** 1.1.3 was published to npm as ISC (January 2024); a month later
+    the GitHub repo added the same non-commercial licence, whose text claims to cover past versions. Get Silence
+    Laboratories' written confirmation or a commercial licence (which also opens DKLs23), or switch libraries; the
+    protocol code is behind `packages/hosting/src/mpc.ts` and swapping it touches nothing else. Unmaintained since
+    January 2024; BigInt arithmetic is not constant-time (the board's timing is observable only through HTTP).
+  - **Roles.** The board is party 1 (holds the Paillier key, starts every session, decrypts the final share and checks
+    the signature); the browser is party 2 (cheap: no Paillier key generation). Shares are multiplicative:
+    key = x1·x2 mod n. Lindell 2017 has a selective-abort leak: if party 1 keeps signing after a final signature fails
+    its check, a malicious party 2 learns its share bit by bit. So one bad final signature freezes the job for good
+    (`mpcAbortedAt`, status `failed`); an honest browser never causes it, and the maker loses the funds (small by design).
+  - **Key generation at job creation.** The browser makes a random per-job secret and keeps it with its shard in
+    localStorage (`gremlins.hatch-mpc.<launchId>`); the board gets only its SHA-256 (`mpcAuth`), and every MPC
+    endpoint wants the secret in `x-hatch-auth`. `POST /api/hatch/fluence {…, mpcAuth}` makes a `keygen` job;
+    `POST /api/hatch/:id/mpc/keygen` relays the two round trips (board state in memory only; a reload or restart
+    just starts over); the browser checks the proofs, derives the address from the shared public key, stores its
+    shard, then `…/keygen/confirm {hostingAddress}` moves the job to `funding`. Only then does the page show the
+    funding address. The board keeps its shard where the single key was (AES-GCM at rest, `key_enc`).
+  - **Signing.** Every signature the job needs goes through an `MpcSigner` (a `HostingSigner`): Fluence SIWE sign-ins,
+    the x402 top-up (EIP-3009 `TransferWithAuthorization`), and for QUAI bridged in, the CoW permit (EIP-2612) and
+    order (GPv2). The board posts a request with the *payload* (SIWE text or typed data), never just a digest; the
+    browser polls `GET /api/hatch/:id/mpc/sign`, shows it in the progress window, checks it against
+    `checkSignRequest` (`packages/hosting/src/mpc-policy.ts`), hashes it itself, and only then runs the three round
+    trips (`POST …/mpc/sign/:reqId`), or refuses with a reason. Accepted, and nothing else:
+    - SIWE: exactly the message `fluence.login()` builds (domain and URI api.fluence.dev, chain 8453, the hosting
+      address, issued within 10 minutes).
+    - x402: USDC on Base's domain, `TransferWithAuthorization` from the hosting address, to an address Fluence's own
+      402 answer names (the browser asks Fluence itself), at most the job's top-up (capped at $50), valid ≤ 1 hour.
+    - CoW permit: QUAI-on-Base's domain, owner the hosting address, spender CoW's vault relayer, deadline ≤ 2 hours.
+    - CoW order: GPv2 on Base, sell QUAI for USDC to the hosting address, fill-or-kill, ERC-20 balances, valid ≤ 1 hour,
+      and at least 95% of what the browser's own CoW quote says (no dumping the QUAI to a sandwich).
+    The board waits up to two minutes for the page, and fails fast (job error "keep the hatch page open", retried
+    every minute) when the page hasn't polled for 30 seconds. Before starting a top-up it checks the page is there, so
+    an authorization is journalled only when it can be signed; the existing journalling then covers a crash
+    mid-session (no double top-up: an unsigned authorization simply expires).
+  - **Hand-over.** After the egg claims (hatch proof, as before) and its announcement matches the job, the board seals
+    its shard x1 to the egg (`HostingHandover` v2, `custody: 'mpc'`) and deletes it. The page, still open (or reopened
+    from the same browser), sees the claim and seals its shard x2 to the same egg key (`POST …/mpc/handoff`; the board
+    stores it but can't open it), then deletes its copy once the job is `done`. The egg fetches both, multiplies the
+    shares, checks the result is the hosting address, and writes the ordinary `hosting.json`. The page can check: the
+    claimed public key is the egg's announced address for this launchId, maker and config hash (its own). It cannot
+    check that this key is the VM that was launched: only the hatch secret proves that, and the board both renders
+    the cloud-init and checks the proof. **Residual trust:** a malicious board operator could fake a claim with its
+    own key and collect both shards. 2-of-2 removes the standing key from the board (a database or backup leak, an
+    operator acting alone after the fact, the maker) but not a board that lies at hand-over time; only attestation of
+    the VM would.
+  - **Who drives the Fluence session: the backend.** Whoever sends the SIWE request holds the 2-hour token and decides
+    the VM's cloud-init at creation; key splitting cannot stop a malicious launcher planting something then. The
+    backend drives so that makers can't inject anything into cloud-init; 2-of-2 protects the account afterwards; the
+    egg's sweep after the 2-hour window revokes anything minted (below).
+  - **Failure.** Page closed mid-flow: the job waits (error says so) and resumes when the page is reopened in the same
+    browser (shard and secret are in its localStorage). Shard lost (cleared storage, another device): the funds at the
+    hosting address are stuck for good, and no one, including us, can recover them. The page says so before funding
+    and the amount stays at the top-up minimum.
   Fluence sessions (checked 2026-11-09 against its API spec and x402 guide, plus a live sign-in):
   - Sign-in returns a refresh token, but "the public API has no endpoint that accepts it": not a back door.
   - The access token lasts 2 hours (measured) and cannot be revoked. Whoever sends the sign-in request holds it, even
