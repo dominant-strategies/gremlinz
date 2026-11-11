@@ -2,6 +2,7 @@
  * Hatch custody, egg side: the gremlin takes over the hosting account the hatch backend made for it.
  *
  *   announced ─claim (hatchProof of the cloud-init secret)─► hand-over sealed to us ─open─► hosting.json (0600)
+ *   (2-of-2 accounts: the backend's shard and the maker's shard, both sealed to us, multiplied into the key here)
  *   ─► sweep the account now, again once the backend's last token has expired (2 h 15 min after its last sign-in),
  *      then daily
  *
@@ -9,7 +10,7 @@
  */
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { SigningKey } from 'ethers'
-import { hatchProof, openHostingHandover, type HatchClaim, type HostingHandover, type Sealed } from '@gremlins/hatch'
+import { HandoverIncomplete, hatchProof, openHostingHandover, type HatchClaim, type HostingHandover, type Sealed } from '@gremlins/hatch'
 import { nextCleanupAt, type FluenceCleanupReport } from '@gremlins/hosting'
 import type { EggKeys } from './keys.js'
 import type { LaunchData } from './launch.js'
@@ -24,8 +25,8 @@ export interface HostingFile extends HostingHandover {
 
 export interface HatchBoardClient {
   claimHatch(claim: HatchClaim): Promise<void>
-  /** undefined until the backend has sealed the hand-over. */
-  fetchHatchHandoff(eggAddress: string): Promise<Sealed | undefined>
+  /** undefined until the backend has sealed the hand-over; 2-of-2 accounts also need the maker's sealed shard. */
+  fetchHatchHandoff(eggAddress: string): Promise<{ handoff: Sealed; browserHandoff?: Sealed } | undefined>
 }
 
 export interface HostingDeps {
@@ -64,7 +65,14 @@ export async function hostingStep(deps: HostingDeps, mem: { claimed?: boolean })
     }
     const sealed = await deps.board.fetchHatchHandoff(evm.address)
     if (!sealed) return 'waiting'
-    const h = await openHostingHandover(new SigningKey(evm.privateKey), sealed)
+    let h: HostingHandover
+    try {
+      // 2-of-2: the two shards meet here for the first time; the key is assembled only inside the egg.
+      h = await openHostingHandover(new SigningKey(evm.privateKey), sealed.handoff, sealed.browserHandoff)
+    } catch (e) {
+      if (e instanceof HandoverIncomplete) return 'waiting'
+      throw e
+    }
     const now = deps.now().toISOString()
     file = { ...h, receivedAt: now, nextCleanupAt: now, cleanups: [] }
     deps.save(file)

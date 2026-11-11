@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { Wallet, hexlify, randomBytes } from 'ethers'
-import { hatchProof, sealHostingHandover, type HatchClaim, type HostingHandover, type Sealed } from '@gremlins/hatch'
+import { combineShards, hatchProof, sealBrowserShard, sealHostingHandover, type BrowserShard, type HatchClaim, type HostingHandover, type HostingShardHandover, type Sealed } from '@gremlins/hatch'
 import type { FluenceCleanupReport } from '@gremlins/hosting'
 import { generatePhrase, keysFromPhrase } from '../src/keys.js'
 import { hostingFileStore, hostingStep, type HostingDeps, type HostingFile } from '../src/hosting.js'
@@ -18,6 +18,7 @@ function scenario(o: { custody?: boolean; cleanupFails?: boolean } = {}) {
   const lastSessionAt = new Date(t - 5 * 60_000).toISOString()
   const claims: HatchClaim[] = []
   let sealed: Sealed | undefined
+  let browserSealed: Sealed | undefined
   let file: HostingFile | undefined
   const sweeps: { at: number; vmId: string; key: string }[] = []
   const handover: HostingHandover = { v: 1, provider: 'fluence', hostingKey: account.privateKey, hostingAddress: account.address, vmId: 'vm-own', launchedAt: new Date(t - 60_000).toISOString(), lastSessionAt }
@@ -26,7 +27,7 @@ function scenario(o: { custody?: boolean; cleanupFails?: boolean } = {}) {
     keys,
     board: {
       claimHatch: async (c) => { claims.push(c) },
-      fetchHatchHandoff: async (a) => (a === keys.evm.address ? sealed : undefined),
+      fetchHatchHandoff: async (a) => (a === keys.evm.address && sealed ? { handoff: sealed, ...(browserSealed ? { browserHandoff: browserSealed } : {}) } : undefined),
     },
     now: () => new Date(t),
     load: () => file,
@@ -40,13 +41,30 @@ function scenario(o: { custody?: boolean; cleanupFails?: boolean } = {}) {
   return {
     keys, secret, account, claims, sweeps, deps, handover, lastSessionAt,
     file: () => file,
-    seal: async (to = keys.evm.signingKey.publicKey, h = handover) => { sealed = await sealHostingHandover(to, h) },
+    seal: async (to = keys.evm.signingKey.publicKey, h: HostingHandover | HostingShardHandover = handover) => { sealed = await sealHostingHandover(to, h) },
+    sealBrowser: async (s: BrowserShard, to = keys.evm.signingKey.publicKey) => { browserSealed = await sealBrowserShard(to, s) },
     advance: (ms: number) => { t += ms },
     now: () => t,
   }
 }
 
 describe('egg hosting hand-over', () => {
+  it('2-of-2: waits for both sealed shards and assembles the account key only here', async () => {
+    const s = scenario()
+    const mem = {}
+    const x1 = hexlify(randomBytes(32)), x2 = hexlify(randomBytes(32))
+    const account = new Wallet(combineShards(x1, x2))
+    const { hostingKey: _k, ...rest } = s.handover
+    await s.seal(undefined, { ...rest, hostingAddress: account.address, v: 2, custody: 'mpc', shard: x1 })
+    expect(await hostingStep(s.deps, mem)).toBe('waiting') // the backend's half alone
+    expect(s.file()).toBeUndefined()
+    await s.sealBrowser({ v: 2, custody: 'mpc', launchId: 'L1', hostingAddress: account.address, shard: x2 })
+    expect(await hostingStep(s.deps, mem)).toBe('received')
+    expect(s.file()).toMatchObject({ v: 1, hostingKey: account.privateKey, hostingAddress: account.address, vmId: 'vm-own' })
+    expect(await hostingStep(s.deps, mem)).toBe('swept')
+    expect(s.sweeps[0]!.key).toBe(account.privateKey)
+  })
+
   it('claims with its hatch proof, waits, then stores its own hosting account', async () => {
     const s = scenario()
     const mem = {}
