@@ -20,7 +20,10 @@ export const view = {
 
 /** Its goals and motive for the tour's title cards, when they come from outside the design (its signed config, the hatch). */
 let storyOverride = null
-export function setTourStory(story, spec) { storyOverride = story; if (spec) view.beats = forgeTour(spec, tourStory(spec)) }
+/** What the stage's own tour features: the last cut chosen for a video, so the stage plays the same film. */
+let tourCut = {}
+export function setTourCut(cut, spec) { tourCut = cut || {}; if (spec) view.beats = forgeTour(spec, tourStory(spec), tourCut) }
+export function setTourStory(story, spec) { storyOverride = story; if (spec) view.beats = forgeTour(spec, tourStory(spec), tourCut) }
 export function tourStory(spec) {
   const own = spec?.story
   if (!storyOverride) return own ?? null
@@ -30,7 +33,7 @@ export function tourStory(spec) {
 /** After a rebuild: back to rest, keeping the display toggles; isolate survives if its assembly still exists. */
 export function resetView(spec) {
   const keep = (spec.assemblies || []).some((a) => a.id === view.isolate) ? view.isolate : null
-  Object.assign(view, { mode: 'idle', input: 0, inputTo: 0, isolate: keep, beat: -1, beats: forgeTour(spec, tourStory(spec)) })
+  Object.assign(view, { mode: 'idle', input: 0, inputTo: 0, isolate: keep, beat: -1, beats: forgeTour(spec, tourStory(spec), tourCut) })
   // one assembly: nothing to explode, label or tour, and the console is hidden, so nothing may be left switched on
   if ((spec.assemblies || []).length < 2) Object.assign(view, { explode: 0, explodeTo: 0, labels: false, tour: false })
 }

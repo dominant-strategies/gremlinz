@@ -689,12 +689,15 @@ export interface ForgeBeat {
   take: number
   focus?: string
   look: ForgeLook
-  /** A title card over this beat: its life goals, or its motive. */
-  card?: 'goals' | 'motive'
+  /** A title card over this beat: its life goals, its motive, or the closing call to action. */
+  card?: 'goals' | 'motive' | 'closer'
   /** The card's words: the goals, one a line, or the motive. */
   lines?: string[]
   /** A spotlight: its focus shown alone at rest. */
   spot?: boolean
+  /** What the film calls the mode or assembly on screen, and the optional sentence under it. */
+  title?: string
+  caption?: string
 }
 const HERO_SHOT: ForgeShot = { az: 0, el: 0.17, dist: 1, frame: 0 }
 /** Each mode gets its own camera and treatment, so the tour never shows the same thing twice in a row. */
@@ -718,7 +721,19 @@ const PLAIN: ForgeLook = { isolate: false, xray: false, labels: 'none' }
  * shot each, which goals its card lists, and whether it has the motive card and the exploded view. Unset: the default
  * cut (every mode up to five, no spotlights, both cards, exploded when there is more than one assembly).
  */
-export interface ForgeCut { modes?: string[]; spotlight?: string[]; goals?: string[]; motive?: boolean; exploded?: boolean }
+export interface ForgeCut {
+  modes?: string[]; spotlight?: string[]; goals?: string[]; motive?: boolean; exploded?: boolean
+  /** The film's own wording, keyed "mode:<id>" or "asm:<id>": a title in place of its name, and a sentence about it. */
+  text?: Record<string, { title?: string; caption?: string }>
+  /** An end card: a headline, and a link shown as text and as a QR code (its gremlinz page). */
+  closer?: { headline: string; url: string }
+}
+export const FORGE_CUT_LIMITS = { title: 32, caption: 140 } as const
+const cutText = (cut: ForgeCut, key: string, name: string) => {
+  const t = cut.text?.[key], clean = (v: unknown, n: number) => String(v ?? '').replace(/[\u0000-\u001f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n)
+  const caption = clean(t?.caption, FORGE_CUT_LIMITS.caption)
+  return { title: clean(t?.title, FORGE_CUT_LIMITS.title) || name, ...(caption ? { caption } : {}) }
+}
 
 export function forgeTour(spec: ForgeSpec, story: ForgeStory | null = spec.story ?? null, cut: ForgeCut = {}): ForgeBeat[] {
   const beats: ForgeBeat[] = []
@@ -736,16 +751,20 @@ export function forgeTour(spec: ForgeSpec, story: ForgeStory | null = spec.story
   for (const id of cut.spotlight ?? []) {
     const a = asms.find((x) => x.id === id); if (!a) continue
     const n = beats.filter((b) => b.label.startsWith('Spotlight')).length
-    push({ label: `Spotlight: ${a.name}`, mode: 'idle', input: [0, 0], explode: [0, 0], dur: 2.8, shot: { az: n % 2 ? -0.9 : 0.9, el: 0.22, dist: 0.88, frame: 0.7 }, drift: n % 2 ? 0.09 : -0.09, focus: a.id, look: { isolate: true, xray: false, labels: 'focus' }, spot: true })
+    const words = cutText(cut, `asm:${a.id}`, a.name)
+    // named on screen by its title (and sentence), so no leader label that could disagree with it
+    push({ label: `Spotlight: ${a.name}`, mode: 'idle', input: [0, 0], explode: [0, 0], dur: words.caption ? 3.4 : 2.8, shot: { az: n % 2 ? -0.9 : 0.9, el: 0.22, dist: 0.88, frame: 0.7 }, drift: n % 2 ? 0.09 : -0.09, focus: a.id, look: { isolate: true, xray: false, labels: 'none' }, spot: true, ...words })
   }
   const modes = (spec.modes ?? []).filter((x) => x.id !== 'idle' && (!cut.modes || cut.modes.includes(x.id))).slice(0, MODE_TREATMENTS.length)
   modes.forEach((m, i) => {
     const t = MODE_TREATMENTS[i]!, focus = m.focus
     const look = focus ? t.look : { ...t.look, isolate: false, labels: t.look.labels === 'focus' ? 'none' as const : t.look.labels }
     const shot = focus ? t.shot : { ...t.shot, frame: 0 }
-    const base = { label: m.name, mode: m.id, explode: [0, 0] as [number, number], shot, look, ...(focus ? { focus } : {}) }
+    const words = cutText(cut, `mode:${m.id}`, m.name)
+    const base = { label: m.name, mode: m.id, explode: [0, 0] as [number, number], shot, look, ...(focus ? { focus } : {}), ...words }
     push({ ...base, input: [0, 1], dur: 1.3, drift: 0.04 })
-    push({ ...base, input: [1, 1], dur: 2.3, drift: 0.07 }, true)
+    // a sentence needs reading time
+    push({ ...base, input: [1, 1], dur: words.caption ? 3.2 : 2.3, drift: 0.07 }, true)
     push({ ...base, input: [1, 0], dur: 0.7, drift: 0.07, look: PLAIN }, true)
   })
   if ((spec.assemblies ?? []).length > 1 && cut.exploded !== false) {
@@ -757,6 +776,9 @@ export function forgeTour(spec: ForgeSpec, story: ForgeStory | null = spec.story
   // why, close and low with the gremlin on the other side, before the last look at it
   if (card?.motive) push({ label: 'Motive', mode: 'idle', input: [0, 0], explode: [0, 0], dur: Math.min(5.5, 2.6 + card.motive.length / 45), shot: { az: -0.6, el: 0.1, dist: 1.12, frame: 0, side: -0.2 }, drift: 0.05, look: PLAIN, card: 'motive', lines: [card.motive] })
   push({ label: 'Hero', mode: 'idle', input: [0, 0], explode: [0, 0], dur: 2.4, shot: { ...HERO_SHOT, az: 0.08 }, drift: 0.05, look: PLAIN })
+  // the call to action: the gremlin steps aside for a headline, a QR code and its link, and the film ends on it
+  const url = String(cut.closer?.url ?? '').trim().slice(0, 200), headline = String(cut.closer?.headline ?? '').replace(/[\u0000-\u001f<>]/g, ' ').trim().slice(0, 60)
+  if (cut.closer && /^https?:\/\/\S+$/.test(url)) push({ label: 'Closer', mode: 'idle', input: [0, 0], explode: [0, 0], dur: 4.5, shot: { ...HERO_SHOT, az: 0.35, dist: 1.15, side: 0.22 }, drift: 0.04, look: PLAIN, card: 'closer', lines: [headline, url] })
   return beats
 }
 
@@ -769,16 +791,17 @@ function beatAt(beats: ForgeBeat[], t: number) {
 }
 
 /** The pose and the look at time `t` into the tour (loops). Pure, so a recording can seek to any frame. */
-export function forgeTourAt(beats: ForgeBeat[], t: number): Required<Omit<ForgePoseInput, 'idle'>> & { beat: number; isolate: string | null; xray: boolean; labels: ForgeLook['labels']; card: ForgeBeat['card'] | null; cardIn: number; lines: string[] } {
+export function forgeTourAt(beats: ForgeBeat[], t: number): Required<Omit<ForgePoseInput, 'idle'>> & { beat: number; isolate: string | null; xray: boolean; labels: ForgeLook['labels']; card: ForgeBeat['card'] | null; cardIn: number; lines: string[]; title: string | null; caption: string | null; spot: boolean } {
   const { i, tt } = beatAt(beats, t), b = beats[i]
-  if (!b) return { mode: 'idle', input: 0, explode: 0, t, beat: 0, isolate: null, xray: false, labels: 'none', card: null, cardIn: 0, lines: [] }
+  if (!b) return { mode: 'idle', input: 0, explode: 0, t, beat: 0, isolate: null, xray: false, labels: 'none', card: null, cardIn: 0, lines: [], title: null, caption: null, spot: false }
   const k = Math.min(1, Math.max(0, (tt - b.at) / b.dur))
   const input = b.input[0] + (b.input[1] - b.input[0]) * k
   const isolate = b.look.isolate && b.focus && (b.spot || input > 0.25) ? b.focus : null
   // a card fades in over its first 0.6 s and out over its last 0.45 s
   const into = tt - b.at, left = b.at + b.dur - tt
-  const cardIn = b.card ? Math.max(0, Math.min(1, (into - 0.25) / 0.6, left / 0.45)) : 0
-  return { mode: b.mode, input, explode: b.explode[0] + (b.explode[1] - b.explode[0]) * k, t, beat: i, isolate, xray: b.look.xray && input > 0.25, labels: b.look.labels, card: b.card ?? null, cardIn, lines: b.lines ?? [] }
+  // the closer ends the film, so it stays up rather than fading out
+  const cardIn = b.card ? Math.max(0, Math.min(1, (into - 0.25) / 0.6, b.card === 'closer' ? 1 : left / 0.45)) : 0
+  return { mode: b.mode, input, explode: b.explode[0] + (b.explode[1] - b.explode[0]) * k, t, beat: i, isolate, xray: b.look.xray && input > 0.25, labels: b.look.labels, card: b.card ?? null, cardIn, lines: b.lines ?? [], title: b.title ?? null, caption: b.caption ?? null, spot: !!b.spot }
 }
 
 /**

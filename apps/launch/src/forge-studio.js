@@ -13,11 +13,11 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
-import { FORGE_CRITIQUE_MAX_STILLS, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints, forgeShotAt, forgeTour, forgeTourAt } from '@gremlins/hatch'
-import { encodeVideo, paintOverlay, videoSupport } from './forge-record.js'
+import { FORGE_CRITIQUE_MAX_STILLS, FORGE_CUT_LIMITS, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints, forgeShotAt, forgeTour, forgeTourAt } from '@gremlins/hatch'
+import { drawQr, encodeVideo, paintOverlay, videoSupport } from './forge-record.js'
 import { fitName, hideCursor, liveHud, modelCode, mountHud, renderHud, tickHud } from './forge-hud.js'
 import { modeFor, quai, watchGremlin } from './forge-live.js'
-import { applySkins, applyPose, drawLabels, layoutLabels, forgetIsolate, mountLabels, resetView, setTourStory, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, tourStory, view } from './forge-motion.js'
+import { applySkins, applyPose, drawLabels, layoutLabels, forgetIsolate, mountLabels, resetView, setTourCut, setTourStory, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, tourStory, view } from './forge-motion.js'
 import { addDecals, artReady, wearFor, wearFrame, wearMaterial } from './forge-surfaces.js'
 import { creatureSvg } from '@gremlins/hatch/creature'
 import { account, hasSessionKey, mountAuth, onAccountChange, sessionPostJson, signIn, signOut, walletErrorMessage } from './auth.ts'
@@ -209,7 +209,7 @@ function initStudio() {
         robot.rotation.y += (turn - robot.rotation.y) * Math.min(1, dt * 2.5)
         controls.target.copy(placeShot(forgeShotAt(view.beats, view.tourT), rig).target)
       } else { centreCamera(); focusCamera(dt) }
-      showTourCard()
+      showTourCard(); showTourCaption()
       syncConsole()
       tickHud(now)
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')
@@ -267,12 +267,34 @@ function showTourCard() {
     cardShown = key
     const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
     el.className = `tourcard ${b.card} ${(b.shot.side ?? 0) > 0 ? 'left' : 'right'}`
+    if (b.card === 'closer') {
+      const [headline, url] = b.lines || []
+      el.innerHTML = `<small>Scan to meet it</small><blockquote>${esc(headline || '')}</blockquote><canvas width="240" height="240" aria-label="QR code for ${esc(url)}"></canvas><a class="link">${esc(String(url).replace(/^https?:\/\//, ''))}</a>`
+      drawQr(el.querySelector('canvas').getContext('2d'), url, 0, 0, 240)
+      el.hidden = false
+      el.style.opacity = String(view.tourCardIn)
+      return
+    }
     el.innerHTML = b.card === 'goals'
       ? `<small>Life goals</small><ol>${(b.lines || []).map((g) => `<li>${esc(g)}</li>`).join('')}</ol>`
       : `<small>Why it exists</small><blockquote>${esc(b.lines?.[0] || '')}</blockquote>`
     el.hidden = false
   }
   el.style.opacity = String(view.tourCardIn)
+}
+/** During the tour, the beat's title and sentence (from the last cut) as a lower third on the stage. */
+let capShown = ''
+function showTourCaption() {
+  const el = $('tourCaption'); if (!el) return
+  const b = view.tour ? view.beats[view.beat] : null
+  const on = b && b.title && !b.card && (b.spot || view.input > 0.05)
+  const key = on ? `${view.beat}|${b.title}|${b.caption || ''}` : ''
+  if (key === capShown) return
+  capShown = key
+  if (!on) { el.hidden = true; return }
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+  el.innerHTML = `<small>${b.spot ? 'Spotlight' : 'Operating mode'}</small><b>${esc(b.title)}</b>${b.caption ? `<span>${esc(b.caption)}</span>` : ''}`
+  el.hidden = false
 }
 function placeShot(sh, rig0) {
   const heroAz = Math.atan2(HERO_DIR.x, HERO_DIR.z), k = sh.k, L = (a, b) => a + (b - a) * k
@@ -1116,9 +1138,10 @@ async function recordTour(cut = {}) {
         aoCamera.copy(camera, false); aoCamera.layers.set(0)
         composer.render()
         ctx.drawImage(renderer.domElement, 0, 0, REC.w, REC.h)
-        const word = s.input > 0.05 && m ? m.name : s.explode > 0.05 ? 'Exploded' : ''
+        const word = s.spot || (s.input > 0.05 && m) ? s.title || m?.name || '' : s.explode > 0.05 ? 'Exploded' : ''
+        const said = word && (s.spot || (s.input > 0.05 && m)) ? s.caption : null
         const card = s.card && s.cardIn > 0 ? { kind: s.card, lines: s.lines, alpha: s.cardIn, left: (b.shot.side ?? 0) > 0, name: sp.name } : null
-        paintOverlay(ctx, { w: REC.w, h: REC.h, code, kicker, name: sp.name, tagline: sp.tagline, mode: s.card ? '' : word, labels: s.card ? [] : layoutLabels(rig0, camera, REC.w, REC.h, 78), card })
+        paintOverlay(ctx, { w: REC.w, h: REC.h, code, kicker, name: sp.name, tagline: sp.tagline, mode: s.card ? '' : word, caption: s.card ? null : said, modeKicker: s.spot ? 'SPOTLIGHT' : 'OPERATING MODE', labels: s.card ? [] : layoutLabels(rig0, camera, REC.w, REC.h, 78), card })
       },
     })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${slug}-tour.mp4`
@@ -1139,7 +1162,7 @@ async function recordTour(cut = {}) {
  * Before a film is cut: what it features. Its goals card (goal by goal) and motive card, assemblies to spotlight, the
  * modes it plays, the exploded view. Shows the running length as you choose; remembered per design for this visit.
  */
-const cuts = new Map()
+const cuts = new Map((() => { try { return Object.entries(JSON.parse(localStorage.getItem('gremlins.forge.cuts') || '{}')) } catch { return [] } })())
 function openCut() {
   const sp = spec(); if (!sp || !glOK || ctl) return
   const dlg = $('cutDlg'), form = $('cutForm'), esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
@@ -1149,14 +1172,28 @@ function openCut() {
   const opts = (id) => form.querySelector(`#${id} .cut-opts`)
   opts('cutGoals').className = 'cut-opts goals'
   opts('cutGoals').innerHTML = story?.goals?.length ? story.goals.map((g) => box('goal', g, g, !was.goals || was.goals.includes(g))).join('') : '<p class="none">No goals yet. Describe them and Claude adds them to the design.</p>'
-  opts('cutSpots').innerHTML = asms.filter((a) => !a.house || asms.length > 1).map((a) => box('spot', a.id, a.name, (was.spotlight || []).includes(a.id))).join('')
+  // each assembly and mode: on or off, what the film calls it, and an optional sentence about it
+  const words = (key, name) => { const t = was.text?.[key] || {}; return `<input class="ct" data-key="${key}" data-f="title" value="${esc(t.title || name)}" maxlength="${FORGE_CUT_LIMITS.title}" aria-label="Title for ${esc(name)}"><input class="cc" data-key="${key}" data-f="caption" value="${esc(t.caption || '')}" maxlength="${FORGE_CUT_LIMITS.caption}" placeholder="Optional: a sentence about it" aria-label="Sentence for ${esc(name)}">` }
+  const row = (name, value, label, on, key) => `<div class="cut-row"><label title="${esc(label)}"><input type="checkbox" name="${name}" value="${esc(value)}" ${on ? 'checked' : ''}></label>${words(key, label)}</div>`
+  opts('cutSpots').className = 'cut-opts rows'; opts('cutModes').className = 'cut-opts rows'
+  opts('cutSpots').innerHTML = asms.map((a) => row('spot', a.id, a.name, (was.spotlight || []).includes(a.id), `asm:${a.id}`)).join('')
   $('cutSpots').hidden = asms.length < 2
-  opts('cutModes').innerHTML = modes.length ? modes.map((m, i) => box('mode', m.id, m.name, was.modes ? was.modes.includes(m.id) : i < 5)).join('') : '<p class="none">This design has no modes.</p>'
+  opts('cutModes').innerHTML = modes.length ? modes.map((m, i) => row('mode', m.id, m.name, was.modes ? was.modes.includes(m.id) : i < 5, `mode:${m.id}`)).join('') : '<p class="none">This design has no modes.</p>'
   opts('cutMore').innerHTML = [story?.motive ? box('motive', '1', `Why it exists: “${story.motive.length > 70 ? story.motive.slice(0, 68) + '…' : story.motive}”`, was.motive !== false) : '',
     asms.length > 1 ? box('exploded', '1', 'Exploded view', was.exploded !== false) : ''].join('') || '<p class="none">Nothing else to add.</p>'
+  // the closer: off unless chosen; its page when it's a live gremlin, else where to hatch one
+  const defUrl = LIVE ? `${location.origin}/g/${LIVE}` : `${location.origin}/hatch/`
+  const defHead = LIVE ? `Watch ${sp.name} live on gremlinz` : 'Hatch your own gremlin'
+  opts('cutCloser').className = 'cut-opts closer'
+  opts('cutCloser').innerHTML = `<label><input type="checkbox" name="closer" ${was.closer ? 'checked' : ''}> End on a call to action with a QR code</label>
+    <input class="ct" name="closerHead" maxlength="60" value="${esc(was.closer?.headline ?? defHead)}" aria-label="Closer headline">
+    <input class="cc" name="closerUrl" type="url" maxlength="200" value="${esc(was.closer?.url ?? defUrl)}" aria-label="Closer link">`
   const read = () => {
     const fd = new FormData(form)
-    return { goals: fd.getAll('goal').map(String), spotlight: fd.getAll('spot').map(String), modes: fd.getAll('mode').map(String), motive: fd.has('motive'), exploded: fd.has('exploded') }
+    const text = {}
+    for (const i of form.querySelectorAll('input[data-key]')) if (i.value.trim()) (text[i.dataset.key] ??= {})[i.dataset.f] = i.value.trim()
+    const closer = fd.has('closer') ? { headline: String(fd.get('closerHead') || '').trim(), url: String(fd.get('closerUrl') || '').trim() } : undefined
+    return { goals: fd.getAll('goal').map(String), spotlight: fd.getAll('spot').map(String), modes: fd.getAll('mode').map(String), motive: fd.has('motive'), exploded: fd.has('exploded'), text, ...(closer ? { closer } : {}) }
   }
   const sync = () => {
     const cut = read()
@@ -1166,9 +1203,17 @@ function openCut() {
     $('cutLen').textContent = `${Math.round(last ? last.at + last.dur : 0)} s · ${new Set(beats.map((b) => b.take)).size} shots`
   }
   form.onchange = sync
+  form.oninput = sync
   sync()
   $('cutCancel').onclick = () => dlg.close()
-  form.onsubmit = (e) => { e.preventDefault(); const cut = read(); cuts.set(sp.name, cut); dlg.close(); recordTour(cut) }
+  form.onsubmit = (e) => {
+    e.preventDefault()
+    const cut = read()
+    cuts.set(sp.name, cut)
+    try { localStorage.setItem('gremlins.forge.cuts', JSON.stringify(Object.fromEntries(cuts))) } catch { /* private mode: kept for this visit */ }
+    setTourCut(cut, sp) // the stage's tour plays the same film from now on
+    dlg.close(); recordTour(cut)
+  }
   dlg.showModal()
 }
 

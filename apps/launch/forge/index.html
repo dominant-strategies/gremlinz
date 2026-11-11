@@ -251,7 +251,10 @@
     /* centre */
     .hud-centre { grid-area: centre; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
     .hud .stage { width: 100%; height: var(--stage-h); max-height: none; aspect-ratio: auto; min-width: 0; border-radius: 6px; border: 1px solid var(--hline); }
-    .hud .stagebar { gap: 8px; }
+    /* the viewer's controls sit centred under the view, however many are showing */
+    .hud .stagebar { gap: 8px; justify-content: center; }
+    .stagebar #copyStatus:empty { display: none; }
+    .forge-build-title { grid-column: 1 / -1; margin: 0 0 -10px; }
     .hud .hint { margin: 0; align-self: center; }
     .hud .hint:empty { display: none; }
     .stage .blueprint { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; fill: none; stroke: rgba(36,33,29,.13); stroke-width: .12; stroke-dasharray: .6 .6; }
@@ -282,6 +285,11 @@
     .forge .refchip img { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; border: 1.5px solid var(--line); }
     .forge .refchip[hidden] + #refHint { display: inline; }
     .forge .refchip:not([hidden]) + #refHint { display: none; }
+    /* the tour's lower third: what the film calls the mode or assembly on screen, and its sentence */
+    .stage .tourcap { position: absolute; left: 22px; bottom: 22px; z-index: 4; max-width: min(60%, 560px); pointer-events: none; display: grid; gap: 4px; }
+    .stage .tourcap small { font: 600 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--signal, #e8571e); }
+    .stage .tourcap b { font: 800 clamp(26px, 3vw, 42px)/1 var(--display); color: var(--signal, #e8571e); text-transform: uppercase; }
+    .stage .tourcap span { font: 14px/1.35 var(--mono); color: #24211d; background: rgba(251,250,247,.8); padding: 4px 6px; justify-self: start; }
     /* the tour's title cards: its goals, then its motive, on the side the camera leaves free */
     .stage .tourcard { position: absolute; top: 50%; transform: translateY(-50%); width: min(44%, 520px); z-index: 4; pointer-events: none; padding: 26px 28px; background: linear-gradient(90deg, rgba(251,250,247,.92), rgba(251,250,247,.78)); border-left: 4px solid var(--signal, #e8571e); }
     .stage .tourcard.left { left: 4%; }
@@ -290,6 +298,8 @@
     .stage .tourcard ol { margin: 0; padding: 0; list-style: none; counter-reset: g; display: grid; gap: 12px; }
     .stage .tourcard li { counter-increment: g; display: grid; grid-template-columns: 34px 1fr; font: 800 clamp(18px, 2.1vw, 28px)/1.15 var(--display); color: #24211d; }
     .stage .tourcard li::before { content: counter(g, decimal-leading-zero); font: 600 13px/2 var(--mono); color: var(--signal, #e8571e); }
+    .stage .tourcard.closer canvas { display: block; width: 150px; height: 150px; margin: 14px 0 8px; }
+    .stage .tourcard.closer .link { font: 600 13px var(--mono); color: var(--signal, #e8571e); }
     .stage .tourcard blockquote { margin: 0; font: 800 clamp(20px, 2.4vw, 32px)/1.18 var(--display); color: #24211d; }
     /* live mode: the console on a gremlin's public page (and embedded in it) */
     .hud .vitals { display: none; }
@@ -309,9 +319,10 @@
     .attach-dlg li button { width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid #dcd5c8; border-radius: 6px; background: #fff; font: inherit; cursor: pointer; }
     .attach-dlg li button:hover { border-color: #24211d; }
     .attach-dlg li small { font-family: var(--mono); color: #66625b; }
-    .cut-dlg { max-width: 560px; }
+    .cut-dlg { max-width: 680px; }
+    .cut-dlg form { max-height: calc(100vh - 80px); overflow: auto; }
     .cut-dlg form { display: grid; gap: 12px; }
-    .cut-dlg fieldset { border: 0; border-top: 1px solid #dcd5c8; margin: 0; padding: 10px 0 0; }
+    .cut-dlg fieldset { border: 0; border-top: 1px solid #dcd5c8; border-radius: 0; margin: 0; padding: 10px 0 0; min-width: 0; }
     .cut-dlg fieldset[hidden] { display: none; }
     .cut-dlg legend { font: 600 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; padding: 0 0 8px; }
     .cut-dlg legend span { font-weight: 400; letter-spacing: .04em; text-transform: none; color: #66625b; margin-left: 6px; }
@@ -320,6 +331,17 @@
     .cut-opts label:has(input:checked) { border-color: #24211d; background: #f3efe7; }
     .cut-opts label:has(input:disabled) { opacity: .45; cursor: default; }
     .cut-opts.goals label { width: 100%; }
+    .cut-opts.rows { display: grid; gap: 6px; }
+    .cut-row { display: grid; grid-template-columns: auto minmax(0, 0.8fr) minmax(0, 1.6fr); gap: 6px; align-items: center; }
+    .cut-row label { padding: 6px 8px; }
+    .cut-row input.ct, .cut-row input.cc { font: inherit; font-size: 13.5px; padding: 7px 9px; border: 1px solid #dcd5c8; border-radius: 6px; background: #fff; min-width: 0; }
+    .cut-row input.ct { font-weight: 700; }
+    .cut-row:has(input[type=checkbox]:not(:checked)) input.ct, .cut-row:has(input[type=checkbox]:not(:checked)) input.cc { opacity: .55; }
+    .cut-opts.closer { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 6px; }
+    .cut-opts.closer label { grid-column: 1 / -1; justify-self: start; }
+    .cut-opts.closer input.ct, .cut-opts.closer input.cc { font: inherit; font-size: 13.5px; padding: 7px 9px; border: 1px solid #dcd5c8; border-radius: 6px; background: #fff; min-width: 0; }
+    .cut-opts.closer input.ct { font-weight: 700; }
+    .cut-opts.closer:has(input[name=closer]:not(:checked)) input { opacity: .55; }
     .cut-opts .none { font-size: 13px; color: #66625b; margin: 0; }
     .cut-foot { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
     .cut-foot .mono { margin-right: auto; font-size: 12.5px; color: #66625b; }
@@ -350,6 +372,7 @@
       <fieldset id="cutSpots"><legend>Spotlight assemblies <span>each shown alone, close up</span></legend><div class="cut-opts"></div></fieldset>
       <fieldset id="cutModes"><legend>Modes <span>up to 5</span></legend><div class="cut-opts"></div></fieldset>
       <fieldset id="cutMore"><legend>Also</legend><div class="cut-opts"></div></fieldset>
+      <fieldset id="cutCloser"><legend>Closer <span>optional, the film ends on it</span></legend><div class="cut-opts"></div></fieldset>
       <div class="cut-foot"><span class="mono" id="cutLen">0 s</span><button class="btn btn-small" type="button" id="cutCancel">Cancel</button><button class="btn btn-small btn-ink" type="submit" id="cutGo">Cut the video</button></div>
     </form>
   </dialog>
@@ -410,6 +433,7 @@
             <button type="button" id="photoTab" aria-pressed="false" disabled>Photo</button>
           </div>
           <div class="tourcard" id="tourCard" hidden aria-live="polite"></div>
+          <div class="tourcap" id="tourCaption" hidden aria-live="polite"></div>
           <svg class="blueprint" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><circle cx="50" cy="52" r="34"/><circle cx="50" cy="52" r="22"/><path d="M50 10 V94 M8 52 H92"/></svg>
           <div class="busycard" id="busyCard" role="status" aria-live="polite" hidden>
           <span class="spinner" aria-hidden="true"></span>
@@ -465,10 +489,9 @@
     </section>
 
     <div class="wrap forge-build">
+      <!-- the heading spans both columns, so the describe box and the menus start level -->
+      <h1 class="forge-build-title">Describe it. We’ll build it.</h1>
       <div class="forge-col">
-        <div>
-          <h1>Describe it. We’ll build it.</h1>
-        </div>
 
         <p class="small muted offline" id="offline" hidden>Claude is off on this server, so requests won’t send. Everything else works.</p>
 

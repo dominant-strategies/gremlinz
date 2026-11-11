@@ -4,6 +4,7 @@
  * packed into an MP4 in the browser. Nothing is uploaded.
  */
 import { ArrayBufferTarget, Muxer } from 'mp4-muxer'
+import QRCode from 'qrcode'
 
 const CODECS = ['avc1.640028', 'avc1.4d0028', 'avc1.42e028'] // High, Main, Baseline at level 4: 1080p
 
@@ -95,14 +96,22 @@ export function paintOverlay(ctx, o) {
     ctx.fillStyle = l.active ? signal : muted; ctx.font = `${17 * k}px ${mono}`; ctx.fillText(l.status, tx, by + 50 * k)
     ctx.textAlign = 'left'
   }
-  if (o.card) paintCard(ctx, o.card, w, h, k, { mono, display, signal, ink })
+  if (o.card?.kind === 'closer') paintCloser(ctx, o.card, w, h, k, { mono, display, signal, ink, muted })
+  else if (o.card) paintCard(ctx, o.card, w, h, k, { mono, display, signal, ink })
   // the operating mode, big, bottom left
   if (o.mode) {
+    // the title, big, with the optional sentence under it (wrapped to two lines at most) and the kicker above
+    ctx.font = `${21 * k}px ${mono}`
+    const cap = o.caption ? wrap(ctx, o.caption, Math.min(w * 0.5, 900 * k)).slice(0, 2) : []
+    const capH = cap.length * 30 * k + (cap.length ? 14 * k : 0)
     ctx.fillStyle = signal
-    ctx.font = `${17 * k}px ${mono}`; ctx.fillText('OPERATING MODE', pad, h - pad - 76 * k)
-    ctx.font = `800 ${76 * k}px ${display}`; ctx.fillText(o.mode.toUpperCase(), pad, h - pad - 4 * k)
+    ctx.font = `${17 * k}px ${mono}`; ctx.fillText(o.modeKicker || 'OPERATING MODE', pad, h - pad - 76 * k - capH)
+    ctx.font = `800 ${76 * k}px ${display}`; ctx.fillText(o.mode.toUpperCase(), pad, h - pad - 4 * k - capH)
+    ctx.fillStyle = ink; ctx.font = `${21 * k}px ${mono}`
+    cap.forEach((line, i) => ctx.fillText(line, pad, h - pad - capH + 14 * k + 22 * k + i * 30 * k))
   }
-  // credit
+  // credit (not on the closer, which carries its own link)
+  if (o.card?.kind === 'closer') { ctx.restore(); return }
   ctx.textAlign = 'right'; ctx.fillStyle = muted; ctx.font = `${16 * k}px ${mono}`
   ctx.fillText('GREMLINZ.AI · GREMLIN FORGE', w - pad, h - pad)
   ctx.restore()
@@ -146,5 +155,40 @@ function paintCard(ctx, card, w, h, k, f) {
     for (const line of lines) { ctx.fillText(line, x + padX + (motive ? 0 : 64 * k), ty); ty += lh }
     ty += 22 * k
   })
+  ctx.restore()
+}
+
+/** Draws `text` as a QR code, `size` pixels square with its quiet zone, dark modules in `ink` on white. */
+export function drawQr(ctx, text, x, y, size, ink = '#24211d') {
+  const { modules } = QRCode.create(text, { errorCorrectionLevel: 'M' })
+  const n = modules.size, quiet = 2, cell = size / (n + quiet * 2)
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(x, y, size, size)
+  ctx.fillStyle = ink
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (modules.get(r, c)) ctx.fillRect(Math.floor(x + (c + quiet) * cell), Math.floor(y + (r + quiet) * cell), Math.ceil(cell), Math.ceil(cell))
+}
+
+/** The call to action the film ends on: the headline, a QR code big enough to scan off a phone screen, and the link. */
+function paintCloser(ctx, card, w, h, k, f) {
+  const [headline, url] = card.lines
+  ctx.save()
+  ctx.globalAlpha = Math.max(0, Math.min(1, card.alpha))
+  const bw = Math.min(w * 0.44, 840 * k), x = w * 0.06, padX = 44 * k, inner = bw - padX * 2
+  ctx.font = `800 ${62 * k}px ${f.display}`
+  const lines = headline ? wrap(ctx, headline, inner).slice(0, 3) : []
+  const qr = Math.min(300 * k, inner * 0.62)
+  const bh = 70 * k + lines.length * 70 * k + 24 * k + qr + 84 * k, y = (h - bh) / 2
+  ctx.fillStyle = 'rgba(251,250,247,.94)'; ctx.fillRect(x, y, bw, bh)
+  ctx.fillStyle = f.signal; ctx.fillRect(x, y, 6 * k, bh)
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'
+  let ty = y + 52 * k
+  ctx.font = `600 ${20 * k}px ${f.mono}`; ctx.fillText('SCAN TO MEET IT', x + padX, ty)
+  ty += 18 * k
+  ctx.fillStyle = f.ink; ctx.font = `800 ${62 * k}px ${f.display}`
+  for (const line of lines) { ty += 64 * k; ctx.fillText(line, x + padX, ty) }
+  ty += 30 * k
+  drawQr(ctx, url, x + padX, ty, qr, f.ink)
+  ctx.fillStyle = f.signal; ctx.font = `600 ${24 * k}px ${f.mono}`
+  const shown = url.replace(/^https?:\/\//, '').replace(/\/$/, '')
+  ctx.fillText(shown.length > 48 ? shown.slice(0, 46) + '…' : shown, x + padX, ty + qr + 46 * k)
   ctx.restore()
 }

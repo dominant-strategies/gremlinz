@@ -217,15 +217,40 @@ describe('cutting the film', () => {
     expect(beats.find((b) => b.card === 'goals')!.lines).toEqual([s.story!.goals[1]])
     expect(beats.some((b) => b.card === 'motive' || b.label === 'Exploded')).toBe(false)
   })
-  it('spotlights an assembly alone, at rest, with its label', () => {
+  it('spotlights an assembly alone, at rest, named by its title', () => {
     const s = sp(), a = s.assemblies!.find((x) => x.id !== 'body')!
     const beats = forgeTour(s, s.story, { spotlight: [a.id] })
     const b = beats.find((x) => x.label === `Spotlight: ${a.name}`)!
-    expect(b).toMatchObject({ focus: a.id, spot: true, look: { isolate: true, labels: 'focus' } })
+    expect(b).toMatchObject({ focus: a.id, spot: true, title: a.name, look: { isolate: true, labels: 'none' } })
     expect(forgeTourAt(beats, b.at + 1).isolate).toBe(a.id)
   })
   it('no goals and no motive: no cards', () => {
     const s = sp()
     expect(forgeTour(s, s.story, { goals: [], motive: false }).some((b) => b.card)).toBe(false)
+  })
+})
+
+describe('the film in your own words', () => {
+  const sp = () => checkForgeSpec(structuredClone(FORGE_EXAMPLES.octopod)).spec
+  it('retitles modes and spotlights and adds a sentence, with time to read it', () => {
+    const s = sp(), m = s.modes!.find((x) => x.id !== 'idle')!, a = s.assemblies!.find((x) => x.id !== 'body')!
+    const plain = forgeTour(s, s.story, { modes: [m.id], spotlight: [a.id] })
+    const told = forgeTour(s, s.story, { modes: [m.id], spotlight: [a.id], text: { [`mode:${m.id}`]: { title: 'The Grab', caption: 'All eight at once.' }, [`asm:${a.id}`]: { caption: 'Riveted by hand. <b>' } } })
+    const hold = told.find((b) => b.mode === m.id && b.input[0] === 1 && b.input[1] === 1)!
+    expect(hold).toMatchObject({ title: 'The Grab', caption: 'All eight at once.' })
+    expect(forgeTourAt(told, hold.at + 1)).toMatchObject({ title: 'The Grab', caption: 'All eight at once.' })
+    const spot = told.find((b) => b.spot)!
+    expect(spot).toMatchObject({ title: a.name, caption: 'Riveted by hand.  b'.replace(/\s+/g, ' ') })
+    const len = (bs: typeof told) => bs[bs.length - 1]!.at + bs[bs.length - 1]!.dur
+    expect(len(told)).toBeGreaterThan(len(plain))
+  })
+  it('ends on a closer with its link when asked, and holds it to the last frame', () => {
+    const s = sp()
+    const beats = forgeTour(s, s.story, { closer: { headline: 'Meet it', url: 'https://gremlinz.ai/g/0x' + '1'.repeat(40) } })
+    const last = beats[beats.length - 1]!
+    expect(last).toMatchObject({ card: 'closer', lines: ['Meet it', 'https://gremlinz.ai/g/0x' + '1'.repeat(40)] })
+    expect(forgeTourAt(beats, last.at + last.dur - 0.01).cardIn).toBe(1)
+    expect(forgeTour(s, s.story, { closer: { headline: 'x', url: 'javascript:alert(1)' } }).some((b) => b.card === 'closer')).toBe(false)
+    expect(forgeTour(s).some((b) => b.card === 'closer')).toBe(false)
   })
 })
