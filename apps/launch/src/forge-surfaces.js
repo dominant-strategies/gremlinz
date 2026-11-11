@@ -203,7 +203,8 @@ export function addDecals(spec, inner, root, uploads, worldScale) {
   const decals = spec.decals || []
   if (!decals.length) return { missed: 0, missingPictures: 0 }
   const targets = []
-  inner.traverse((n) => { if (n.isMesh && !n.userData.glow) targets.push(n) })
+  // DecalGeometry projects a single mesh's own geometry, so instanced detail (chains, rivets) can't carry decals.
+  inner.traverse((n) => { if (n.isMesh && !n.isInstancedMesh && !n.userData.glow) targets.push(n) })
   const ray = new T.Raycaster(), helper = new T.Object3D()
   let missed = 0, missingPictures = 0
   for (const d of decals) {

@@ -216,6 +216,59 @@ function partMats(spec, p, M) {
     return m
   }
 }
+/** The widest radius a lathe profile reaches at height `y`, or null when `y` is off the part. */
+function latheRadiusAt(pts, y) {
+  let r = null
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i]
+    if ((y - a.y) * (y - b.y) > 0 || a.y === b.y) continue
+    const x = a.x + (b.x - a.x) * ((y - a.y) / (b.y - a.y))
+    if (r == null || x > r) r = x
+  }
+  return r
+}
+/** Rivet rows (one instanced draw each) and dark panel seams round a lathe or cylinder. */
+function addDetail(g, p, M, radiusAt) {
+  for (const y of p.seams || []) {
+    const r = radiusAt(y); if (!r || r < 0.03) continue
+    const seam = mesh(new T.TorusGeometry(r + 0.002, Math.max(0.004, r * 0.012), 6, 96), M.rubber); seam.rotation.x = Math.PI / 2; seam.position.y = y; g.add(seam)
+  }
+  for (const row of p.rivets || []) {
+    const r = radiusAt(row.y); if (!r || r < 0.03) continue
+    const rr = Math.min(0.03, Math.max(0.011, r * 0.028))
+    const studs = new T.InstancedMesh(new T.SphereGeometry(rr, 10, 6), M[row.mat || 'steel'], row.count), m = new T.Matrix4()
+    for (let i = 0; i < row.count; i++) { const a = (i / row.count) * Math.PI * 2; studs.setMatrixAt(i, m.makeTranslation(Math.sin(a) * r, row.y, Math.cos(a) * r)) }
+    studs.castShadow = studs.receiveShadow = true; studs.computeBoundingSphere(); g.add(studs)
+  }
+}
+/** A machined drum: flat faces with a chamfered rim, unit radius and height, axis y. */
+const LINK_PROFILES = {
+  drum: [[0, -0.5], [0.82, -0.5], [1, -0.36], [1, 0.36], [0.82, 0.5], [0, 0.5]],
+  disc: [[0, -0.5], [0.9, -0.5], [1, -0.25], [1, 0.25], [0.9, 0.5], [0, 0.5]],
+}
+const LINK_FILL = { drum: 0.78, disc: 0.42, ball: 0.9, block: 0.7 }
+/** A chain: `count` links threaded on a dark spine along the curve, each link one instance of a single draw. */
+function buildChain(g, p, M) {
+  const curve = new T.CatmullRomCurve3(p.points.map((a) => new T.Vector3(a[0], a[1], a[2])))
+  const [r0, r1] = Array.isArray(p.radius) ? p.radius : [p.radius, p.radius]
+  const len = curve.getLength(), n = p.count, segLen = len / n
+  g.add(mesh(taperedTube(curve, r0 * 0.5, r1 * 0.5, Math.max(12, Math.min(120, Math.round(len * 40)))), M.steel))
+  const geo = p.link === 'ball' ? new T.SphereGeometry(1, 20, 14)
+    : p.link === 'block' ? new RoundedBoxGeometry(1.6, 1, 1.6, 2, 0.2)
+      : new T.LatheGeometry(LINK_PROFILES[p.link || 'drum'].map(([x, y]) => new T.Vector2(x, y)), 32)
+  const links = new T.InstancedMesh(geo, M[p.mat], n)
+  const pt = new T.Vector3(), tg = new T.Vector3(), up = new T.Vector3(0, 1, 0), q = new T.Quaternion(), sc = new T.Vector3(), m = new T.Matrix4()
+  for (let i = 0; i < n; i++) {
+    const u = (i + 0.5) / n, r = r0 + (r1 - r0) * u
+    curve.getPointAt(u, pt); curve.getTangentAt(u, tg); q.setFromUnitVectors(up, tg)
+    const h = p.link === 'ball' ? Math.min(r, segLen * 0.5) : segLen * LINK_FILL[p.link || 'drum']
+    if (p.link === 'ball') sc.set(h, h, h); else sc.set(r, h, r)
+    links.setMatrixAt(i, m.compose(pt, q, sc))
+  }
+  links.castShadow = links.receiveShadow = true; links.computeBoundingSphere()
+  if (M[p.mat].userData.wear) links.userData.wear = M[p.mat].userData.wear
+  g.add(links)
+}
 function buildOne(p, M0, spec) {
   const g = new T.Group(), mat = partMats(spec, p, M0)
   const M = new Proxy(M0, { get: (o, k) => (typeof k === 'string' && k in o && k !== 'glow' && !k.startsWith('__') ? mat(k) : o[k]) })
@@ -223,6 +276,7 @@ function buildOne(p, M0, spec) {
     let pts = p.profile.map(([r, y]) => new T.Vector2(r, y))
     if (pts.length >= 3) pts = new T.SplineCurve(pts).getPoints(Math.min(120, pts.length * 12)).map((v) => new T.Vector2(Math.max(0, v.x), v.y))
     g.add(mesh(new T.LatheGeometry(pts, 96), M[p.mat]))
+    addDetail(g, p, M, (y) => latheRadiusAt(pts, y))
   } else if (p.kind === 'tube') {
     const curve = new T.CatmullRomCurve3(p.points.map((a) => new T.Vector3(a[0], a[1], a[2])))
     const segs = Math.max(12, Math.min(120, Math.round(curve.getLength() * 40)))
@@ -239,6 +293,9 @@ function buildOne(p, M0, spec) {
       }
     }
     return g // tubes are authored in world coordinates
+  } else if (p.kind === 'chain') {
+    buildChain(g, p, M)
+    return g // chains are authored in world coordinates too
   } else if (p.kind === 'extrude') {
     const s = new T.Shape(); p.shape.forEach(([x, y], i) => (i ? s.lineTo(x, y) : s.moveTo(x, y))); s.closePath()
     const geo = new T.ExtrudeGeometry(s, { depth: p.depth, bevelEnabled: p.bevel, bevelThickness: Math.min(0.02, p.depth * 0.3), bevelSize: Math.min(0.015, p.depth * 0.25), bevelSegments: 3, curveSegments: 12 })
@@ -265,6 +322,7 @@ function buildOne(p, M0, spec) {
     if (p.kind === 'torus') geo = new T.TorusGeometry(s[0], s[1], 16, 64, (p.arc || 360) * D)
     if (p.kind === 'capsule') geo = new T.CapsuleGeometry(s[0], s[1], 12, 32)
     g.add(mesh(geo, M[p.mat]))
+    if (p.kind === 'cylinder') addDetail(g, p, M, (y) => (Math.abs(y) <= s[2] / 2 + 1e-6 ? s[1] + (s[0] - s[1]) * (y / s[2] + 0.5) : null))
   }
   g.position.set(p.pos[0], p.pos[1], p.pos[2])
   g.rotation.set(p.rot[0] * D, p.rot[1] * D, p.rot[2] * D)
@@ -374,6 +432,12 @@ const selMat = new T.MeshBasicMaterial({ color: '#ff9d2e', transparent: true, op
 const outlineMat = new T.MeshBasicMaterial({ color: '#ff8a00', side: T.BackSide, toneMapped: false })
 outlineMat.onBeforeCompile = (sh) => { sh.vertexShader = sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed += normalize(normal) * 0.016;') }
 let overlays = []
+/** A copy of a mesh's shape in another material; instanced meshes share their instance transforms. */
+function overlayOf(n, mat) {
+  if (!n.isInstancedMesh) return new T.Mesh(n.geometry, mat)
+  const o = new T.InstancedMesh(n.geometry, mat, n.count); o.instanceMatrix = n.instanceMatrix; o.frustumCulled = false
+  return o
+}
 /** Tints every mesh of the selected parts (all mirror and array copies) with an additive glow. */
 function applySelection() {
   for (const o of overlays) o.parent?.remove(o)
@@ -382,7 +446,7 @@ function applySelection() {
   const hits = []
   inner.traverse((n) => { if (n.isMesh && !n.userData.overlay && selected.has(n.userData.part)) hits.push(n) })
   for (const n of hits) {
-    const tint = new T.Mesh(n.geometry, selMat), line = new T.Mesh(n.geometry, outlineMat)
+    const tint = overlayOf(n, selMat), line = overlayOf(n, outlineMat)
     tint.userData.overlay = line.userData.overlay = true; tint.renderOrder = 3
     n.add(tint, line); overlays.push(tint, line)
   }
@@ -407,27 +471,29 @@ function setSelection(list) {
   applySelection(); renderInspector()
 }
 
-const KIND_LABEL = { lathe: 'Body', tube: 'Tube', extrude: 'Plate', visor: 'Visor', eye: 'Eye', sphere: 'Sphere', box: 'Box', cylinder: 'Cylinder', cone: 'Cone', torus: 'Ring', capsule: 'Capsule' }
+const KIND_LABEL = { lathe: 'Body', tube: 'Tube', chain: 'Chain', extrude: 'Plate', visor: 'Visor', eye: 'Eye', sphere: 'Sphere', box: 'Box', cylinder: 'Cylinder', cone: 'Cone', torus: 'Ring', capsule: 'Capsule' }
 function partLabel(p) {
   const copies = (p.mirror ? 2 : 1) * (p.array ? p.array.count : 1)
   const what = p.kind === 'eye' ? `Eye (${p.eye})` : p.kind === 'visor' ? 'Visor' : `${KIND_LABEL[p.kind]} · ${p.mat}`
   return what + (copies > 1 ? ` ×${copies}` : '')
 }
 const r3 = (x) => Math.round(x * 1000) / 1000
-const anchor = (p) => (p.kind === 'tube' ? p.points.reduce((a, q) => [a[0] + q[0] / p.points.length, a[1] + q[1] / p.points.length, a[2] + q[2] / p.points.length], [0, 0, 0]) : p.pos)
+/** Tubes and chains are authored as world-space points rather than a position and rotation. */
+const pathed = (p) => p.kind === 'tube' || p.kind === 'chain'
+const anchor = (p) => (pathed(p) ? p.points.reduce((a, q) => [a[0] + q[0] / p.points.length, a[1] + q[1] / p.points.length, a[2] + q[2] / p.points.length], [0, 0, 0]) : p.pos)
 function selectionCentre(parts) {
   const list = [...selected].map((i) => anchor(parts[i]))
   return list.reduce((a, v) => [a[0] + v[0] / list.length, a[1] + v[1] / list.length, a[2] + v[2] / list.length], [0, 0, 0])
 }
 function movePart(p, d) {
-  if (p.kind === 'tube') p.points = p.points.map((q) => [r3(q[0] + d[0]), r3(q[1] + d[1]), r3(q[2] + d[2])])
+  if (pathed(p)) p.points = p.points.map((q) => [r3(q[0] + d[0]), r3(q[1] + d[1]), r3(q[2] + d[2])])
   else p.pos = [r3(p.pos[0] + d[0]), r3(p.pos[1] + d[1]), r3(p.pos[2] + d[2])]
 }
 /** Turns a part about the vertical axis through `c`, as a true world-space turn (its own rotation composed, not added). */
 function turnPart(p, deg, c) {
   const a = deg * D, cos = Math.cos(a), sin = Math.sin(a)
   const spin = (q) => [r3(c[0] + (q[0] - c[0]) * cos + (q[2] - c[2]) * sin), q[1], r3(c[2] - (q[0] - c[0]) * sin + (q[2] - c[2]) * cos)]
-  if (p.kind === 'tube') { p.points = p.points.map(spin); return }
+  if (pathed(p)) { p.points = p.points.map(spin); return }
   p.pos = spin(p.pos)
   const q = new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 1, 0), a).multiply(new T.Quaternion().setFromEuler(new T.Euler(p.rot[0] * D, p.rot[1] * D, p.rot[2] * D)))
   const e = new T.Euler().setFromQuaternion(q)
@@ -436,7 +502,7 @@ function turnPart(p, deg, c) {
 /** Scales a part about `c`: its place moves with the scale and so does its own size. */
 function scalePart(p, k, c) {
   const sc = (q) => [r3(c[0] + (q[0] - c[0]) * k), r3(c[1] + (q[1] - c[1]) * k), r3(c[2] + (q[2] - c[2]) * k)]
-  if (p.kind === 'tube') {
+  if (pathed(p)) {
     p.points = p.points.map(sc)
     p.radius = Array.isArray(p.radius) ? p.radius.map((r) => r3(r * k)) : r3(p.radius * k)
     return
@@ -529,12 +595,12 @@ function renderInspector() {
       })
       ex.append(l, w)
     }
-    if (p.kind !== 'tube') {
+    if (!pathed(p)) {
       row('Position', p.pos, (q, k, n) => { q.pos[k] = n })
       row('Rotation°', p.rot, (q, k, n) => { q.rot[k] = n }, { step: '5' })
       row('Stretch', p.scale || [1, 1, 1], (q, k, n) => { q.scale = q.scale || [1, 1, 1]; q.scale[k] = n }, { step: '0.05' })
     }
-    if (p.kind === 'tube') row('Radius', Array.isArray(p.radius) ? p.radius : [p.radius], (q, k, n) => { if (Array.isArray(q.radius)) q.radius[k] = n; else q.radius = n }, { names: ['start', 'end'], step: '0.005' })
+    if (pathed(p)) row('Radius', Array.isArray(p.radius) ? p.radius : [p.radius], (q, k, n) => { if (Array.isArray(q.radius)) q.radius[k] = n; else q.radius = n }, { names: ['start', 'end'], step: '0.005' })
     const names = { sphere: ['radius'], box: ['width', 'height', 'depth'], cylinder: ['top', 'bottom', 'height'], cone: ['radius', 'height'], torus: ['ring', 'tube'], capsule: ['radius', 'length'], eye: ['size'] }[p.kind]
     if (names) row('Size', p.size, (q, k, n) => { q.size[k] = n }, { names, step: '0.01' })
     if (p.kind === 'visor') row('Size', [p.w, p.h], (q, k, n) => { q[k ? 'h' : 'w'] = n }, { names: ['width', 'height'] })

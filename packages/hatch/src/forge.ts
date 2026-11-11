@@ -4,13 +4,13 @@
  * Shared by the board (which calls the models) and the site (which renders the result in 3D).
  */
 
-export const FORGE_STYLE = 'atomic-appliances-3d/3'
+export const FORGE_STYLE = 'atomic-appliances-3d/4'
 
 export const FORGE_MATERIALS = ['enamel', 'accent', 'chrome', 'brass', 'copper', 'glass', 'glow', 'rubber', 'steel', 'ivory'] as const
 export type ForgeMaterial = (typeof FORGE_MATERIALS)[number]
 const PRIMS = ['sphere', 'box', 'cylinder', 'cone', 'torus', 'capsule'] as const
 const EYES = ['dot', 'pill', 'bar', 'slit', 'ring', 'smile'] as const
-const KINDS = ['lathe', 'tube', 'extrude', 'visor', 'eye', ...PRIMS] as const
+const KINDS = ['lathe', 'tube', 'chain', 'extrude', 'visor', 'eye', ...PRIMS] as const
 type Kind = (typeof KINDS)[number]
 
 export type Vec3 = [number, number, number]
@@ -40,6 +40,33 @@ export interface ForgeDecal {
   mirror?: 'x'
 }
 export interface ForgeArray { type: 'radial' | 'linear'; count: number; step?: Vec3 }
+
+/** The repeated segment a chain is built from. */
+export const FORGE_LINKS = ['drum', 'disc', 'ball', 'block'] as const
+/** A row of studs round a lathe or cylinder at height `y` (part-local), `count` of them. */
+export interface ForgeRivetRow { y: number; count: number; mat?: ForgeMaterial }
+
+/**
+ * How an assembly moves. Rotations are in degrees about `axis` through `pivot`; slide is in model units along `axis`;
+ * pulse is a fractional scale. `curl` bends the assembly's tubes and chains progressively along their length.
+ */
+export const FORGE_MOVES = ['swing', 'open', 'curl', 'spin', 'slide', 'pulse'] as const
+export interface ForgeJoint { move: (typeof FORGE_MOVES)[number]; pivot: Vec3; axis: Vec3; range: number }
+/** A named group of parts that can be isolated, exploded and moved as one: the buttons on the console. */
+export interface ForgeAssembly {
+  id: string
+  name: string
+  role: string
+  /** Offset at full explode, in model units. */
+  explode: Vec3
+  joint?: ForgeJoint
+  /** Status label at rest and when driven past half, e.g. ["SEALED", "OPEN"]. */
+  states: [string, string]
+  /** Made by the checker (not the model): the implicit "Body". */
+  house?: true
+}
+/** One operating mode: a single 0..1 input that drives several assemblies at once. */
+export interface ForgeMode { id: string; name: string; drive: Record<string, number>; focus?: string }
 export interface ForgePart {
   kind: Kind
   mat?: ForgeMaterial
@@ -48,8 +75,16 @@ export interface ForgePart {
   scale?: Vec3
   mirror?: 'x'
   array?: ForgeArray
+  /** Assembly id; parts without one belong to "body". */
+  asm?: string
   /** lathe */
   profile?: [number, number][]
+  /** lathe and cylinder: rows of studs, and dark panel seams at these part-local heights */
+  rivets?: ForgeRivetRow[]
+  seams?: number[]
+  /** chain: segment shape and count (also uses points and radius) */
+  link?: (typeof FORGE_LINKS)[number]
+  count?: number
   /** tube */
   points?: Vec3[]
   radius?: number | [number, number]
@@ -79,6 +114,10 @@ export interface ForgeSpec {
   wear?: ForgeWear[]
   art?: Record<string, string>
   decals?: ForgeDecal[]
+  /** Always present after the check; at least the implicit "body". */
+  assemblies?: ForgeAssembly[]
+  /** Always present after the check; at least "idle". */
+  modes?: ForgeMode[]
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -95,10 +134,13 @@ Every part has "kind", optional "pos":[x,y,z] (default origin), "rot":[xDeg,yDeg
 Kinds:
 - "lathe": a surface of revolution around the vertical axis, for bodies, heads, domes, bells, cans, funnels. "profile":[[radius,y],...] from bottom to top, smoothly interpolated; start and end at radius 0 to close it. "mat" required.
 - "tube": a smooth tube through "points":[[x,y,z],...] in world coordinates (ignores pos/rot), for arms, legs, tentacles, hoses, pipes, antennae, cables. "radius": a number, or [startRadius,endRadius] to taper. "rings": n adds n segment collars (gives tentacles and flex-hoses their segmented look). "mat" required.
+- "chain": a limb made of many short machined segments threaded along "points":[[x,y,z],...] in world coordinates (ignores pos/rot), like an armoured tentacle, a cable run or a segmented tail. "count": 3-48 segments, "link": drum|disc|ball|block, "radius": a number or [start,end] to taper. Prefer chains over tubes for limbs that should look engineered. "mat" required.
 - "extrude": a flat outline "shape":[[x,y],...] extruded along z by "depth", with rounded edges, for fins, blades, wings, ears, crests, plates, claws, signs. "mat" required.
 - "sphere" size [r]; "box" size [w,h,d] (edges auto-rounded); "cylinder" size [rTop,rBottom,height] (axis y); "cone" size [r,height] (axis y, tip at +y); "torus" size [ringRadius,tubeRadius] (ring in the x/y plane; rotate [90,0,0] to lie flat), optional "arc" degrees; "capsule" size [r,straightLength] (axis y). "mat" required.
 - "visor": the house glass visor with chrome bezel, "w" and "h" (a rounded slot; make w=h for a round porthole). Faces +z.
 - "eye": a glowing light, "shape": dot|pill|bar|slit|ring|smile, "size". Place eyes just in front of a visor (visor z + about 0.075), or anywhere a lamp or indicator should glow.
+
+Detail on "lathe" and "cylinder" parts: "rivets":[{"y":h,"count":n,"mat":"steel"}] puts a row of studs round the surface at part-local height h, and "seams":[h,...] cuts dark panel lines there. A shell with two or three seams and rivet rows at its trim bands reads as machined, not moulded.
 
 Materials ("mat"): enamel (main body colour), accent (second enamel colour, sparingly), chrome, brass, copper, glass, glow, rubber, steel (dark gunmetal), ivory (dial faces, handles).
 Palette: "palette":{"enamel":"#hex","accent":"#hex","glow":"#hex"}. Enamels are 1950s appliance colours: creams, pastels, mustard, rosso red, gunmetal, matte black.
@@ -109,7 +151,7 @@ HOUSE STYLE (what makes every gremlin part of one product line):
 - Scary designs keep the same materials and go further: more limbs, extruded blades and claws, jaws of chrome cones, clustered or slit eyes, dark enamel, red glow, smokestacks and exposed brass.
 - Friendly designs: pill eyes and a smile, pastel enamel, few limbs.
 - Mostly symmetric (use mirror). Parts should touch or overlap so nothing floats.
-- Be inventive with the overall form; the description should drive the body plan. Use 15 to 70 parts.
+- Be inventive with the overall form; the description should drive the body plan. Use 15 to 70 parts; a chain, a rivet row or an array counts once.
 
 SURFACES (optional; use them when the description asks for age, damage, dirt, markings, logos, tattoos or pictures, or when they clearly suit the character):
 - "wear":[{"kind":k,"amount":0-1,"pattern":p,"scale":0.3-4,"on":["enamel",...]}] at the top level weathers the whole robot, or only the materials listed in "on". A part can carry its own "wear" list (without "on") to weather just that part.
@@ -120,7 +162,12 @@ SURFACES (optional; use them when the description asks for age, damage, dirt, ma
   Finishes: paint (a glossy painted graphic), ink (a tattoo inked into the enamel under the clear coat), sticker (a printed label), etched (engraved into metal; use it on chrome, brass or steel), glow (a neon sign or backlit emblem). Up to 12 decals.
 - Pictures the person uploaded appear as {"image":"upload:<id>"} in place of "art". Keep them unless asked to remove them; you may move, resize or re-finish them.
 
-Reply with only JSON: {"name":"1-3 words","tagline":"wry, at most 12 words","menace":0-10,"palette":{...},"parts":[...],"wear":[...],"art":{...},"decals":[...]} (the last three only when used)`
+ASSEMBLIES AND MODES (the gremlin is shown on a console where each assembly is a button that isolates, explodes and moves it):
+- "assemblies":[{"id":"arms","name":"Arm chains","role":"8 drum-link arms, 22 links each","states":["READY","CURLING"],"explode":[dx,dy,dz],"joint":{"move":m,"pivot":[x,y,z],"axis":[x,y,z],"range":r}}]. 3 to 8 of them, each a real subsystem (head, optics, shell, arms, legs, jaw, engine, tail). Every part names its assembly with "asm":"id"; parts without one join "body". "explode" is where the assembly flies to in an exploded view (about 0.4 to 0.9 away from the body, outward). "states" are short console status words at rest and when driven.
+- Joint moves: swing (rotates by up to "range" degrees about "axis" through "pivot": a jaw, a lid, an arm), open (like swing, and mirrored copies open the opposite way: shell halves, clamshells, beaks), curl (bends the assembly's tubes and chains progressively along their length by up to "range" degrees in total: tentacles, tails, trunks), spin (rotation: rotors, turrets, wheels), slide ("range" in model units along "axis": pistons, drawers, antennas), pulse ("range" 0-0.5 fractional swell: hearts, lamps, bellows). Put "pivot" where the hinge really is, so nothing passes through anything when it moves.
+- "modes":[{"id":"jaw-open","name":"Jaw open","drive":{"jaw":1,"head":0.3},"focus":"jaw"}] are 2 to 5 operating modes. Each drives one or more assemblies from -1 to 1 by a single input, so a mode moves the whole mechanism together. "focus" names the assembly the camera should study. The renderer adds idle motion on its own.
+
+Reply with only JSON: {"name":"1-3 words","tagline":"wry, at most 12 words","menace":0-10,"palette":{...},"assemblies":[...],"modes":[...],"parts":[...],"wear":[...],"art":{...},"decals":[...]} (the last three only when used)`
 
 /** Built-in designs, in the wire format the model writes. Used as starting points and as few-shot examples. */
 export const FORGE_EXAMPLES: Record<'toaster' | 'octopod' | 'foreman', unknown> = {
@@ -150,25 +197,36 @@ export const FORGE_EXAMPLES: Record<'toaster' | 'octopod' | 'foreman', unknown> 
     decals: [{ art: 'starburst', at: [0.37, 1.0, 0.37], dir: [0.7, 0, 0.7], size: 0.26, finish: 'paint', mirror: 'x' }] },
   octopod: { name: 'Octopod', tagline: 'Eight arms, all of them busy.', menace: 10,
     palette: { enamel: '#2b2b2e', accent: '#c9302c', glow: '#ff3b30' },
+    assemblies: [
+      { id: 'mantle', name: 'Mantle shell', role: 'Riveted enamel dome over the pump core', states: ['SEALED', 'PUMPING'], explode: [0, 0.7, -0.2], joint: { move: 'pulse', pivot: [0, 1.2, 0], axis: [0, 1, 0], range: 0.06 } },
+      { id: 'optics', name: 'Optic array', role: '5 red lenses behind one glass visor', states: ['TRACKING', 'LOCKED'], explode: [0, 0.1, 0.7], joint: { move: 'swing', pivot: [0, 1.45, 0.6], axis: [0, 1, 0], range: 20 } },
+      { id: 'jaw', name: 'Jaw', role: 'Chrome cone teeth on a steel grille', states: ['SEALED', 'BITING'], explode: [0, -0.3, 0.7], joint: { move: 'slide', pivot: [0, 1.0, 0.8], axis: [0, -1, 0.2], range: 0.14 } },
+      { id: 'arms', name: 'Arm chains', role: '6 drum-link arms, 22 links each', states: ['READY', 'STRIKING'], explode: [0, -0.2, 0], joint: { move: 'curl', pivot: [0, 0.6, 0], axis: [-0.36, 0, 0.93], range: 140 } },
+      { id: 'stacks', name: 'Exhaust stacks', role: 'Twin brass stacks on chrome hoses', states: ['IDLE', 'VENTING'], explode: [0, 0.6, -0.6], joint: { move: 'slide', pivot: [0, 2.0, -0.3], axis: [0, 1, 0], range: 0.18 } },
+    ],
+    modes: [
+      { id: 'strike', name: 'Strike', drive: { arms: 1, jaw: 1, optics: 0.6 }, focus: 'jaw' },
+      { id: 'vent', name: 'Vent', drive: { stacks: 1, mantle: 1 }, focus: 'stacks' },
+    ],
     parts: [
-      { kind: 'lathe', mat: 'enamel', profile: [[0, 0.55], [0.5, 0.57], [0.7, 0.7], [0.78, 0.95], [0.78, 1.2], [0.74, 1.5], [0.62, 1.82], [0.42, 2.05], [0, 2.16]] },
-      { kind: 'torus', mat: 'chrome', size: [0.742, 0.03], pos: [0, 0.78, 0], rot: [90, 0, 0] },
-      { kind: 'sphere', mat: 'brass', size: [0.02], pos: [0, 0.83, 0.75], array: { type: 'radial', count: 28 } },
-      { kind: 'visor', w: 0.8, h: 0.44, pos: [0, 1.45, 0.72] },
-      { kind: 'eye', shape: 'dot', size: 0.045, pos: [0.09, 1.45, 0.8], mirror: 'x' },
-      { kind: 'eye', shape: 'dot', size: 0.025, pos: [0.18, 1.51, 0.79], mirror: 'x' },
-      { kind: 'eye', shape: 'dot', size: 0.022, pos: [0.05, 1.545, 0.795], mirror: 'x' },
-      { kind: 'eye', shape: 'dot', size: 0.02, pos: [0, 1.36, 0.79] },
-      { kind: 'box', mat: 'chrome', size: [0.62, 0.07, 0.14], pos: [0, 1.11, 0.8] },
-      { kind: 'cone', mat: 'chrome', size: [0.034, 0.11], pos: [-0.27, 1.03, 0.84], rot: [180, 0, 0], array: { type: 'linear', count: 7, step: [0.09, 0, 0] } },
-      { kind: 'cylinder', mat: 'steel', size: [0.2, 0.2, 0.05], pos: [0, 0.96, 0.785], rot: [90, 0, 0] },
-      { kind: 'torus', mat: 'chrome', size: [0.2, 0.02], pos: [0, 0.96, 0.81] },
-      { kind: 'cylinder', mat: 'brass', size: [0.1, 0.1, 0.03], pos: [-0.06, 0.98, 0.815], rot: [90, 0, 0] },
-      { kind: 'cylinder', mat: 'brass', size: [0.065, 0.065, 0.03], pos: [0.09, 0.92, 0.82], rot: [90, 0, 0] },
-      { kind: 'tube', mat: 'chrome', points: [[0.28, 0.6, 0.1], [0.62, 0.3, 0.25], [0.98, 0.07, 0.38], [1.25, 0.1, 0.47], [1.34, 0.3, 0.5], [1.22, 0.42, 0.46], [1.12, 0.34, 0.42]], radius: [0.09, 0.014], rings: 11, array: { type: 'radial', count: 6 } },
-      { kind: 'tube', mat: 'chrome', points: [[0.25, 0.95, -0.3], [0.6, 1.3, -0.6], [0.72, 1.9, -0.7], [0.6, 2.35, -0.55], [0.45, 2.3, -0.42], [0.44, 2.12, -0.4]], radius: [0.085, 0.014], rings: 10, mirror: 'x' },
-      { kind: 'cylinder', mat: 'brass', size: [0.07, 0.07, 0.9], pos: [0.42, 2.05, -0.3] },
-      { kind: 'cylinder', mat: 'brass', size: [0.11, 0.09, 0.08], pos: [0.42, 2.54, -0.3] },
+      { kind: 'lathe', mat: 'enamel', asm: 'mantle', profile: [[0, 0.55], [0.5, 0.57], [0.7, 0.7], [0.78, 0.95], [0.78, 1.2], [0.74, 1.5], [0.62, 1.82], [0.42, 2.05], [0, 2.16]], seams: [1.2, 1.62], rivets: [{ y: 1.25, count: 36, mat: 'brass' }, { y: 1.85, count: 24, mat: 'steel' }] },
+      { kind: 'torus', mat: 'chrome', asm: 'mantle', size: [0.742, 0.03], pos: [0, 0.78, 0], rot: [90, 0, 0] },
+      { kind: 'sphere', mat: 'brass', asm: 'mantle', size: [0.02], pos: [0, 0.83, 0.75], array: { type: 'radial', count: 28 } },
+      { kind: 'visor', asm: 'optics', w: 0.8, h: 0.44, pos: [0, 1.45, 0.72] },
+      { kind: 'eye', asm: 'optics', shape: 'dot', size: 0.045, pos: [0.09, 1.45, 0.8], mirror: 'x' },
+      { kind: 'eye', asm: 'optics', shape: 'dot', size: 0.025, pos: [0.18, 1.51, 0.79], mirror: 'x' },
+      { kind: 'eye', asm: 'optics', shape: 'dot', size: 0.022, pos: [0.05, 1.545, 0.795], mirror: 'x' },
+      { kind: 'eye', asm: 'optics', shape: 'dot', size: 0.02, pos: [0, 1.36, 0.79] },
+      { kind: 'box', mat: 'chrome', asm: 'jaw', size: [0.62, 0.07, 0.14], pos: [0, 1.11, 0.8] },
+      { kind: 'cone', mat: 'chrome', asm: 'jaw', size: [0.034, 0.11], pos: [-0.27, 1.03, 0.84], rot: [180, 0, 0], array: { type: 'linear', count: 7, step: [0.09, 0, 0] } },
+      { kind: 'cylinder', mat: 'steel', asm: 'jaw', size: [0.2, 0.2, 0.05], pos: [0, 0.96, 0.785], rot: [90, 0, 0] },
+      { kind: 'torus', mat: 'chrome', asm: 'jaw', size: [0.2, 0.02], pos: [0, 0.96, 0.81] },
+      { kind: 'cylinder', mat: 'brass', asm: 'jaw', size: [0.1, 0.1, 0.03], pos: [-0.06, 0.98, 0.815], rot: [90, 0, 0] },
+      { kind: 'cylinder', mat: 'brass', asm: 'jaw', size: [0.065, 0.065, 0.03], pos: [0.09, 0.92, 0.82], rot: [90, 0, 0] },
+      { kind: 'chain', mat: 'chrome', asm: 'arms', link: 'drum', count: 22, points: [[0.28, 0.6, 0.1], [0.62, 0.3, 0.25], [0.98, 0.07, 0.38], [1.25, 0.1, 0.47], [1.34, 0.3, 0.5], [1.22, 0.42, 0.46], [1.12, 0.34, 0.42]], radius: [0.09, 0.022], array: { type: 'radial', count: 6 } },
+      { kind: 'chain', mat: 'chrome', asm: 'stacks', link: 'disc', count: 16, points: [[0.25, 0.95, -0.3], [0.6, 1.3, -0.6], [0.72, 1.9, -0.7], [0.6, 2.35, -0.55], [0.45, 2.3, -0.42], [0.44, 2.12, -0.4]], radius: [0.085, 0.03], mirror: 'x' },
+      { kind: 'cylinder', mat: 'brass', asm: 'stacks', size: [0.07, 0.07, 0.9], pos: [0.42, 2.05, -0.3], mirror: 'x', rivets: [{ y: 0.3, count: 10, mat: 'steel' }] },
+      { kind: 'cylinder', mat: 'brass', asm: 'stacks', size: [0.11, 0.09, 0.08], pos: [0.42, 2.54, -0.3], mirror: 'x' },
     ],
     wear: [{ kind: 'chipped', amount: 0.25, pattern: 'spots', on: ['enamel'] }, { kind: 'oil', amount: 0.3, pattern: 'streaks' }],
     art: { kraken: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><g fill="none" stroke="#e9dcc0" stroke-width="5" stroke-linecap="round"><path d="M50 52 C30 60 20 80 8 78"/><path d="M50 52 C70 60 80 80 92 78"/><path d="M50 56 C40 74 36 90 24 94"/><path d="M50 56 C60 74 64 90 76 94"/></g><path d="M50 8 C72 8 80 26 74 44 C70 54 30 54 26 44 C20 26 28 8 50 8Z" fill="#e9dcc0"/><circle cx="40" cy="32" r="6" fill="#c9302c"/><circle cx="60" cy="32" r="6" fill="#c9302c"/></svg>' },
@@ -396,6 +454,192 @@ function checkSurfaces(r: Record<string, unknown>, notes: string[]): Pick<ForgeS
 /** Most meshes a design may expand to (after mirror and array). */
 export const FORGE_MAX_MESHES = 600
 
+// ------------------------------------------------------------------------------------------------ assemblies + modes
+
+const CHAIN_MAX_LINKS = 48
+const ASM_ID = /^[a-z][a-z0-9-]{0,23}$/
+const MAX_ASSEMBLIES = 10
+const MAX_MODES = 8
+/** Joint range limits per move: degrees for rotations, model units for slide, fraction for pulse. */
+const MOVE_RANGE: Record<ForgeJoint['move'], [number, number, number]> = {
+  swing: [-180, 180, 30], open: [-180, 180, 60], curl: [-540, 540, 180], spin: [-720, 720, 360], slide: [-2, 2, 0.4], pulse: [0, 0.5, 0.08],
+}
+const label = (v: unknown, max: number, d: string) => String(v ?? '').replace(/[\u0000-\u001f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) || d
+
+/** Average of a part's anchor points, for default explode directions. */
+function partCentre(p: ForgePart): Vec3 {
+  const pts = p.points?.length ? p.points : [p.pos]
+  const c = pts.reduce<Vec3>((a, q) => [a[0] + q[0] / pts.length, a[1] + q[1] / pts.length, a[2] + q[2] / pts.length], [0, 0, 0])
+  if (p.kind === 'lathe' && p.profile?.length) c[1] += p.profile.reduce((a, q) => a + q[1], 0) / p.profile.length
+  return c
+}
+const r3 = (x: number) => Math.round(x * 1000) / 1000 + 0 // + 0 turns -0 into 0
+
+function checkAssemblies(raw: unknown, parts: ForgePart[], notes: string[]): ForgeAssembly[] {
+  const out: ForgeAssembly[] = []
+  let dropped = 0
+  for (const item of (Array.isArray(raw) ? raw : []).slice(0, 20)) {
+    const a = (item ?? {}) as Record<string, unknown>
+    const id = String(a.id ?? '').toLowerCase()
+    if (!ASM_ID.test(id) || out.some((x) => x.id === id) || out.length >= MAX_ASSEMBLIES) { dropped++; continue }
+    const st = Array.isArray(a.states) ? a.states : []
+    const q: ForgeAssembly = {
+      id, name: label(a.name, 24, id), role: label(a.role, 60, ''), explode: vec3(a.explode, -3, 3, 0),
+      states: [label(st[0], 12, 'READY').toUpperCase(), label(st[1], 12, 'ACTIVE').toUpperCase()],
+    }
+    if (a.explode == null) q.explode = [Number.NaN, 0, 0] // filled in below from where the parts sit
+    if (id === 'body' && a.house === true) q.house = true // a checked spec checks again unchanged
+    if (a.joint && typeof a.joint === 'object') {
+      const j = a.joint as Record<string, unknown>
+      const move = String(j.move ?? '').toLowerCase() as ForgeJoint['move']
+      if ((FORGE_MOVES as readonly string[]).includes(move)) {
+        const [lo, hi, d] = MOVE_RANGE[move]
+        q.joint = { move, pivot: vec3(j.pivot, -4, 6, 0), axis: unit(j.axis, [1, 0, 0]), range: num(j.range, lo, hi, d) }
+      }
+    }
+    out.push(q)
+  }
+  if (dropped) notes.push(`${dropped} assembl${dropped > 1 ? 'ies' : 'y'} with a missing or repeated id removed.`)
+  // Parts naming an unknown assembly, or none, go into the body.
+  let orphans = 0
+  for (const p of parts) if (!p.asm || !out.some((a) => a.id === p.asm)) { if (p.asm) orphans++; p.asm = 'body' }
+  if (orphans) notes.push(`${orphans} part${orphans > 1 ? 's' : ''} naming an unknown assembly moved into the body.`)
+  if (!out.some((a) => a.id === 'body')) out.unshift({ id: 'body', name: 'Body', role: 'Main shell', explode: [0, 0, 0], states: ['SEALED', 'OPEN'], house: true })
+  // Assemblies with no parts do nothing on the console.
+  const used = out.filter((a) => parts.some((p) => p.asm === a.id))
+  // Default explode: away from the body's centre, through the assembly's own centre.
+  const all = parts.map(partCentre), cy = all.reduce((s, c) => s + c[1], 0) / Math.max(1, all.length)
+  for (const a of used) {
+    if (!Number.isNaN(a.explode[0])) continue
+    const cs = parts.filter((p) => p.asm === a.id).map(partCentre)
+    const c: Vec3 = [cs.reduce((s, v) => s + v[0], 0) / cs.length, cs.reduce((s, v) => s + v[1], 0) / cs.length - cy, cs.reduce((s, v) => s + v[2], 0) / cs.length]
+    const l = Math.hypot(c[0], c[1], c[2])
+    a.explode = l > 0.05 ? [r3((c[0] / l) * 0.6), r3((c[1] / l) * 0.6), r3((c[2] / l) * 0.6)] : [0, 0.6, 0]
+  }
+  return used.length ? used : out.filter((a) => a.id === 'body')
+}
+
+function checkModes(raw: unknown, assemblies: ForgeAssembly[], notes: string[]): ForgeMode[] {
+  const ids = new Set(assemblies.map((a) => a.id))
+  const out: ForgeMode[] = []
+  let dropped = 0
+  for (const item of (Array.isArray(raw) ? raw : []).slice(0, 16)) {
+    const m = (item ?? {}) as Record<string, unknown>
+    const id = String(m.id ?? '').toLowerCase()
+    if (id === 'idle') continue // always first, added below
+    const drive: Record<string, number> = {}
+    if (m.drive && typeof m.drive === 'object' && !Array.isArray(m.drive)) {
+      for (const [k, v] of Object.entries(m.drive as Record<string, unknown>)) if (ids.has(k) && Number.isFinite(Number(v))) drive[k] = num(v, -1, 1, 0)
+    }
+    if (!ASM_ID.test(id) || out.some((x) => x.id === id) || out.length >= MAX_MODES - 1 || !Object.keys(drive).length) { dropped++; continue }
+    const q: ForgeMode = { id, name: label(m.name, 24, id), drive }
+    if (typeof m.focus === 'string' && ids.has(m.focus)) q.focus = m.focus
+    out.push(q)
+  }
+  if (dropped) notes.push(`${dropped} operating mode${dropped > 1 ? 's' : ''} that drove nothing removed.`)
+  return [{ id: 'idle', name: 'Idle', drive: {} }, ...out]
+}
+
+/** What the console is showing: one mode with its 0..1 input, the explode amount, and the clock for idle motion. */
+export interface ForgePoseInput { mode?: string; input?: number; explode?: number; t?: number; idle?: boolean }
+export interface ForgeAssemblyPose {
+  /** The joint's value: degrees for rotations, units for slide, a scale factor offset for pulse. */
+  value: number
+  /** How hard the mode drives this assembly, -1..1 after easing (0 when it isn't part of the mode). */
+  drive: number
+  offset: Vec3
+  status: string
+  active: boolean
+}
+/** Ease for state-to-state moves (teardown's cubic-bezier(0.65, 0, 0.35, 1), close enough as a smoothstep blend). */
+export const forgeEase = (u: number) => { const x = Math.min(1, Math.max(0, u)); return x * x * x * (x * (x * 6 - 15) + 10) }
+
+/**
+ * The single source of truth for motion: every assembly's joint value, explode offset and status as a pure function
+ * of the mode, its input, the explode toggle and time. The 3D model, the console and the labels all read this.
+ */
+export function forgePose(spec: ForgeSpec, s: ForgePoseInput = {}): Record<string, ForgeAssemblyPose> {
+  const mode = spec.modes?.find((m) => m.id === s.mode)
+  const u = forgeEase(s.input ?? 0), e = forgeEase(s.explode ?? 0), t = s.t ?? 0
+  const out: Record<string, ForgeAssemblyPose> = {}
+  for (const [i, a] of (spec.assemblies ?? []).entries()) {
+    const drive = (mode?.drive[a.id] ?? 0) * u
+    let value = 0
+    if (a.joint) {
+      const { move, range } = a.joint
+      value = drive * range
+      if (s.idle !== false) {
+        const ph = i * 1.7, k = 1 - Math.abs(drive) // idle motion fades out as a mode takes over
+        if (move === 'spin') value += (t * range * 0.08) % 360
+        else if (move === 'pulse') value += range * 0.5 * (1 + Math.sin(t * 2.4 + ph)) * k
+        else if (move === 'curl') value += range * 0.12 * Math.sin(t * 0.9 + ph) * k
+        else if (move !== 'slide') value += range * 0.04 * Math.sin(t * 0.7 + ph) * k
+      }
+      value = move === 'slide' || move === 'pulse' ? Math.round(value * 1e4) / 1e4 : Math.round(value * 100) / 100
+    }
+    out[a.id] = {
+      value, drive,
+      offset: [r3(a.explode[0] * e), r3(a.explode[1] * e), r3(a.explode[2] * e)],
+      status: Math.abs(drive) > 0.5 ? a.states[1] : a.states[0],
+      active: Math.abs(drive) > 0.01 || mode?.focus === a.id,
+    }
+  }
+  return out
+}
+
+/** Bends a polyline by `deg` in total about `axis`, a little more at each joint, so a limb coils toward its tip. */
+export function curlPoints(points: Vec3[], axis: Vec3, deg: number): Vec3[] {
+  if (points.length < 2 || !deg) return points.map((p) => [...p] as Vec3)
+  const l = Math.hypot(axis[0], axis[1], axis[2]) || 1, k: Vec3 = [axis[0] / l, axis[1] / l, axis[2] / l]
+  const step = (deg * Math.PI) / 180 / (points.length - 1)
+  const out: Vec3[] = [[...points[0]!] as Vec3]
+  let angle = 0
+  for (let i = 1; i < points.length; i++) {
+    angle += step
+    const a = points[i - 1]!, b = points[i]!
+    const v: Vec3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+    // Rodrigues: rotate the segment by the accumulated angle, then hang it off the previous bent point
+    const c = Math.cos(angle), sn = Math.sin(angle), d = k[0] * v[0] + k[1] * v[1] + k[2] * v[2]
+    const x: Vec3 = [k[1] * v[2] - k[2] * v[1], k[2] * v[0] - k[0] * v[2], k[0] * v[1] - k[1] * v[0]]
+    const r: Vec3 = [v[0] * c + x[0] * sn + k[0] * d * (1 - c), v[1] * c + x[1] * sn + k[1] * d * (1 - c), v[2] * c + x[2] * sn + k[2] * d * (1 - c)]
+    const prev = out[i - 1]!
+    out.push([prev[0] + r[0], prev[1] + r[1], prev[2] + r[2]])
+  }
+  return out
+}
+
+/** The self-running tour: each mode in turn rises, holds and falls, with an exploded look at the end. Times in seconds. */
+export interface ForgeBeat { at: number; mode: string; input: [number, number]; explode: [number, number]; dur: number; label: string }
+export function forgeTour(spec: ForgeSpec): ForgeBeat[] {
+  const beats: ForgeBeat[] = []
+  let at = 0
+  const push = (b: Omit<ForgeBeat, 'at'>) => { beats.push({ at: Math.round(at * 100) / 100, ...b }); at += b.dur }
+  push({ mode: 'idle', input: [0, 0], explode: [0, 0], dur: 2.5, label: 'Hero' })
+  for (const m of (spec.modes ?? []).filter((x) => x.id !== 'idle')) {
+    push({ mode: m.id, input: [0, 1], explode: [0, 0], dur: 1.2, label: m.name })
+    push({ mode: m.id, input: [1, 1], explode: [0, 0], dur: 1.6, label: m.name })
+    push({ mode: m.id, input: [1, 0], explode: [0, 0], dur: 0.8, label: m.name })
+  }
+  if ((spec.assemblies ?? []).length > 1) {
+    push({ mode: 'idle', input: [0, 0], explode: [0, 1], dur: 1.2, label: 'Exploded' })
+    push({ mode: 'idle', input: [0, 0], explode: [1, 1], dur: 2, label: 'Exploded' })
+    push({ mode: 'idle', input: [0, 0], explode: [1, 0], dur: 0.8, label: 'Exploded' })
+  }
+  return beats
+}
+/** The pose input at time `t` into the tour (loops). Pure, so a recording can seek to any frame. */
+export function forgeTourAt(beats: ForgeBeat[], t: number): Required<Omit<ForgePoseInput, 'idle'>> & { beat: number } {
+  const last = beats[beats.length - 1]
+  const total = last ? last.at + last.dur : 0
+  const tt = total ? ((t % total) + total) % total : 0
+  let i = beats.findIndex((b) => tt < b.at + b.dur)
+  if (i < 0) i = Math.max(0, beats.length - 1)
+  const b = beats[i]
+  if (!b) return { mode: 'idle', input: 0, explode: 0, t, beat: 0 }
+  const k = Math.min(1, Math.max(0, (tt - b.at) / b.dur))
+  return { mode: b.mode, input: b.input[0] + (b.input[1] - b.input[0]) * k, explode: b.explode[0] + (b.explode[1] - b.explode[0]) * k, t, beat: i }
+}
+
 /**
  * Validates a design against the language, clamps every number, pulls colours into the house range and drops what it
  * can't use. Returns the cleaned spec plus a plain-English note per fix. Throws when nothing usable is left.
@@ -438,6 +682,16 @@ export function checkForgeSpec(raw: unknown): { spec: ForgeSpec; notes: string[]
         ? [num(p.radius[0], 0.015, 0.5, 0.05), num(p.radius[1], 0.008, 0.5, 0.03)]
         : num(p.radius, 0.015, 0.5, 0.04)
       if (p.rings) q.rings = Math.round(num(p.rings, 0, 40, 0))
+    } else if (kind === 'chain') {
+      const pts = (Array.isArray(p.points) ? p.points : []).slice(0, 16).map((pt) => vec3(pt, -4, 6, 0))
+      if (pts.length < 2) { dropped++; continue }
+      q.points = pts
+      q.radius = Array.isArray(p.radius)
+        ? [num(p.radius[0], 0.015, 0.5, 0.07), num(p.radius[1], 0.01, 0.5, 0.03)]
+        : num(p.radius, 0.015, 0.5, 0.05)
+      q.count = Math.round(num(p.count, 3, CHAIN_MAX_LINKS, 12))
+      const link = String(p.link ?? '').toLowerCase()
+      q.link = (FORGE_LINKS as readonly string[]).includes(link) ? (link as ForgePart['link']) : 'drum'
     } else if (kind === 'extrude') {
       const pts = pairs(p.shape, 48, -3, 3, -3, 3)
       if (pts.length < 3) { dropped++; continue }
@@ -462,6 +716,19 @@ export function checkForgeSpec(raw: unknown): { spec: ForgeSpec; notes: string[]
       const { wear } = checkWear(p.wear, 3, false, parts.length + 1)
       if (wear.length) q.wear = wear
     }
+    if (kind === 'lathe' || kind === 'cylinder') {
+      const rows = (Array.isArray(p.rivets) ? p.rivets : []).slice(0, 6).flatMap((row) => {
+        const w = (row ?? {}) as Record<string, unknown>
+        const m = String(w.mat ?? '').toLowerCase()
+        const out: ForgeRivetRow = { y: num(w.y, -1, 5, 0), count: Math.round(num(w.count, 4, 64, 16)) }
+        if ((FORGE_MATERIALS as readonly string[]).includes(m) && m !== 'glow') out.mat = m as ForgeMaterial
+        return Number.isFinite(Number(w.y)) ? [out] : []
+      })
+      if (rows.length) q.rivets = rows
+      const seams = (Array.isArray(p.seams) ? p.seams : []).slice(0, 8).filter((y) => Number.isFinite(Number(y))).map((y) => num(y, -1, 5, 0))
+      if (seams.length) q.seams = seams
+    }
+    if (typeof p.asm === 'string' && ASM_ID.test(p.asm)) q.asm = p.asm
     if (p.mirror === 'x') q.mirror = 'x'
     if (p.array && typeof p.array === 'object') {
       const a = p.array as Record<string, unknown>
@@ -477,6 +744,8 @@ export function checkForgeSpec(raw: unknown): { spec: ForgeSpec; notes: string[]
   if (!parts.length) throw new Error('Nothing buildable was left after the style check.')
   if (dropped) notes.push(`${dropped} part${dropped > 1 ? 's' : ''} outside the design language removed.`)
   if (remat) notes.push(`${remat} unknown material${remat > 1 ? 's' : ''} switched to chrome.`)
+  const assemblies = checkAssemblies(r.assemblies, parts, notes)
+  const modes = checkModes(r.modes, assemblies, notes)
   return {
     spec: {
       name: String(r.name ?? 'Unnamed gremlin').slice(0, 40),
@@ -485,6 +754,8 @@ export function checkForgeSpec(raw: unknown): { spec: ForgeSpec; notes: string[]
       palette: { enamel: en.hex, accent: ac.hex, glow: gl.hex },
       parts,
       ...checkSurfaces(r, notes),
+      assemblies,
+      modes,
     },
     notes,
   }
@@ -492,8 +763,13 @@ export function checkForgeSpec(raw: unknown): { spec: ForgeSpec; notes: string[]
 
 /** A checked spec back in the wire format the model writes (eyes use `shape` and a scalar `size`; house parts dropped). */
 export function forgeSpecToWire(spec: ForgeSpec): unknown {
+  const assemblies = spec.assemblies?.filter((a) => !a.house).map(({ house: _h, ...a }) => a)
+  const modes = spec.modes?.filter((m) => m.id !== 'idle')
+  const { assemblies: _a, modes: _m, ...rest } = spec
   return {
-    ...spec,
+    ...rest,
+    ...(assemblies?.length ? { assemblies } : {}),
+    ...(modes?.length ? { modes } : {}),
     parts: spec.parts.filter((p) => !p.house).map(({ house: _h, eye, ...p }) =>
       p.kind === 'eye' ? { ...p, shape: eye, size: p.size?.[0] } : p),
   }
