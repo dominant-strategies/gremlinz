@@ -299,6 +299,16 @@
         </div>
         <div class="modelabel" id="modeLabel" aria-live="polite"><small>Operating mode</small><b></b></div>
       </div>
+      <div class="row stagebar" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center">
+        <button class="btn btn-spark btn-small" id="photoBtn" type="button" hidden>Make it a photo</button>
+        <a class="btn btn-small" id="photoDl" hidden>Download photo</a>
+        <button class="btn btn-small" id="undoBtn" type="button" disabled aria-keyshortcuts="Control+Z Meta+Z">Undo</button>
+        <button class="btn btn-small" id="redoBtn" type="button" disabled aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y">Redo</button>
+        <button class="btn btn-small" id="spinBtn" type="button" aria-pressed="false">Turntable</button>
+        <button class="btn btn-small" id="viewBtn" type="button">Reset view</button>
+        <button class="btn btn-small" id="copyBtn" type="button">Copy hatch config</button>
+        <span class="small muted" id="copyStatus"></span>
+      </div>
       <div class="console" id="console" hidden>
         <div class="crow"><span class="k">Assemblies</span><div class="cchips" id="asmChips"></div></div>
         <div class="crow" id="modeRow"><span class="k">Modes</span><div class="cchips" id="modeChips"></div></div>
@@ -319,16 +329,6 @@
           <div class="menace" id="menace"></div>
           <div class="meter" id="meter"></div>
         </div>
-      </div>
-      <div class="row" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center">
-        <button class="btn btn-spark btn-small" id="photoBtn" type="button" hidden>Make it a photo</button>
-        <a class="btn btn-small" id="photoDl" hidden>Download photo</a>
-        <button class="btn btn-small" id="undoBtn" type="button" disabled aria-keyshortcuts="Control+Z Meta+Z">Undo</button>
-        <button class="btn btn-small" id="redoBtn" type="button" disabled aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y">Redo</button>
-        <button class="btn btn-small" id="spinBtn" type="button" aria-pressed="false">Turntable</button>
-        <button class="btn btn-small" id="viewBtn" type="button">Reset view</button>
-        <button class="btn btn-small" id="copyBtn" type="button">Copy hatch config</button>
-        <span class="small muted" id="copyStatus"></span>
       </div>
       <p class="small muted" id="selectHint" style="margin:0">Click a part to select it. Shift-click to select more.</p>
       <p class="small muted" id="photoBy"></p>
