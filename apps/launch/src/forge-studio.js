@@ -855,7 +855,6 @@ function duplicateSelected() {
 let panelBeforeSelection = null
 function renderInspector() {
   const sp = spec(), box = $('panelSelection')
-  $('selectHint').hidden = !!selected.size
   const was = !box.hidden
   box.hidden = !sp || !selected.size
   if (box.hidden) {
