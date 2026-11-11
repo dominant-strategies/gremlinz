@@ -6,7 +6,7 @@
  * with our cloud-init (private; not readable back) → check the estimate → provision → wait for `launched`.
  * Docs: https://fluence.dev/docs/build/api/x402 · https://api.fluence.dev/docs
  */
-import { wrapFetchWithPaymentFromConfig } from '@x402/fetch'
+import { wrapFetchWithPaymentFromConfig, x402Client, x402HTTPClient } from '@x402/fetch'
 import { ExactEvmScheme } from '@x402/evm'
 import { createSiweMessage } from 'viem/siwe'
 import type { HostingSigner, TypedDataToSign } from './signer.js'
@@ -61,6 +61,20 @@ export function authorizationOf(td: TypedDataToSign): TopUpAuthorization {
     validBefore: Number(str(m.validBefore) ?? str(m.deadline) ?? 0),
     value: str(m.value) ?? str((m.permitted as Record<string, unknown> | undefined)?.amount),
   }
+}
+
+/**
+ * Where Fluence takes x402 USDC on Base: asks for a top-up without paying and reads the 402 answer. The maker's browser
+ * calls this itself (api.fluence.dev allows any origin) before co-signing a payment, so the board can't name the payee.
+ */
+export async function fluencePayTo(amountUsd: number, o: { baseUrl?: string; fetchImpl?: typeof fetch } = {}): Promise<string[]> {
+  const res = await (o.fetchImpl ?? fetch)(`${o.baseUrl ?? FLUENCE_API}/v2/x402/top-up?amountUsd=${amountUsd.toFixed(2)}`, { method: 'POST' })
+  if (res.status !== 402) throw new Error(`Fluence answered ${res.status}, not a payment request`)
+  const body = await res.json().catch(() => undefined)
+  const req = new x402HTTPClient(new x402Client()).getPaymentRequiredResponse((h) => res.headers.get(h), body)
+  const payTo = req.accepts.filter((a) => a.network === 'eip155:8453').map((a) => a.payTo)
+  if (!payTo.length) throw new Error('Fluence names no payee on Base')
+  return payTo
 }
 
 export function fluence(opts: { signer: HostingSigner; baseUrl?: string; fetchImpl?: typeof fetch }) {
