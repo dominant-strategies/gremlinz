@@ -59,6 +59,23 @@ upstream pulls, the fake MCP installer, automaton's memory/planner/soul/orchestr
 - Spending cap: Hermes has none. The plugin prices every call and refuses calls past the budget (fail closed).
 - `fallback_providers`: keep a cloud provider behind a local model.
 
+## Health
+
+Deterministic code keeps a gremlin able to think, whatever its model does (`packages/gremlin-mcp/src/health/`).
+gremlin-mcp runs a monitor every 10 minutes that judges six areas (compute, inference, money, earnings, updates,
+bugs) at ok < low < bad < critical, with every threshold in `policy.ts`. It tops up Hashference credit from the
+wallet within fixed caps (a new gremlin prepays $3 on its first run: the hatch page should tell makers that part of
+their funding becomes inference credit), clears the gateway's cooldown and gets a wake-up that failed for lack of
+inference run again, applies OS security fixes, and records issues and income. It writes `GREMLIN_HOME/health.json`
+(operators in dev mode can read it over SSH) and the board tier. The gateway adds the monitor's directive to every
+model call, worded more forcefully the worse health gets; at critical, spending that does not serve survival needs a
+stated reason.
+
+Mining is the last resort: after 6 hours starved (no credit, no funds to top up) the monitor runs xmrig to
+Hashference's RandomX pool, as gremlin-helper at nice 19 on at most half the cores, and stops it once credit is back
+above the floor; the gremlin can also choose mining as strategy (`mining` tool). The egg image ships xmrig 6.26.0
+(GPL-3.0-or-later; source at https://github.com/xmrig/xmrig/tree/v6.26.0), verified by sha256 in `egg.Dockerfile`.
+
 ## Risks
 
 - **Churn:** Hermes moves fast and reshuffles internals. Pin a release; build only on plugin `ctx`, MCP and config.
