@@ -152,6 +152,16 @@ export const ForgeDesign = z.object({
   care: z.boolean().optional(),
   /** Names of pictures the person uploaded (the pictures stay in their browser); the prompt lets Claude place them. */
   uploads: z.array(z.object({ id: z.string().regex(/^[a-z0-9-]{1,24}$/), label: z.string().max(120) })).max(6).optional(),
+  /** A reference picture to design from, as a PNG, JPEG or WebP data URL; Claude sees it. */
+  reference: z.string().max(6 * 1024 * 1024).optional(),
+})
+
+export const ForgeCritique = z.object({
+  /** The design under review; re-checked server-side. */
+  spec: z.unknown(),
+  /** Renders of it: at rest, then each mode at full drive. */
+  stills: z.array(z.object({ label: z.string().trim().min(1).max(60), image: z.string().max(2 * 1024 * 1024) })).min(1).max(5),
+  care: z.boolean().optional(),
 })
 
 export const ForgePhoto = z.object({

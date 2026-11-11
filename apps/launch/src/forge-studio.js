@@ -9,7 +9,7 @@ import * as T from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
-import { FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints } from '@gremlins/hatch'
+import { FORGE_CRITIQUE_MAX_STILLS, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints } from '@gremlins/hatch'
 import { fitName, hideCursor, mountHud, renderHud, tickHud } from './forge-hud.js'
 import { applySkins, applyPose, drawLabels, forgetIsolate, mountLabels, resetView, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, view } from './forge-motion.js'
 import { addDecals, artReady, wearFor, wearFrame, wearMaterial } from './forge-surfaces.js'
@@ -577,10 +577,11 @@ $('dExplode').addEventListener('click', () => { toggleExplode(); syncConsole(tru
 $('dTour').addEventListener('click', () => { if (view.tour) stopTour(); else startTour(performance.now() / 1000); syncConsole(true) })
 
 /** A square studio frame (1024×1024 PNG for the image model, small JPEGs for history) without disturbing the live view. */
-function captureRender(size = 1024, type = 'image/png') {
-  // The photo and the history thumbnails show the gremlin itself: at rest, solid, no outlines. The next frame restores the view.
+function captureRender(size = 1024, type = 'image/png', pose = { idle: false }) {
+  // The photo and the history thumbnails show the gremlin itself: at rest, solid, no outlines (review stills pass a
+  // mode's pose instead). The next frame restores the view.
   if (inner) {
-    applyPose(inner.userData.rig, spec(), { idle: false }); applySkins(inner.userData.rig, null, false)
+    applyPose(inner.userData.rig, spec(), pose); applySkins(inner.userData.rig, null, false)
     inner.traverse((n) => { if (n.userData.ink) n.visible = false })
     forgetIsolate()
   }
@@ -870,6 +871,7 @@ async function generate(mode, text) {
     if (mode === 'refine') body.spec = spec()
     const ups = Object.entries(state.uploads).slice(0, 6).map(([id, u]) => ({ id, label: u.label }))
     if (ups.length) body.uploads = ups
+    if (reference) body.reference = reference.data
     const res = await sessionPostJson('/api/forge/design', body, { scope: 'forge', signal: ctl.signal })
     const { spec: next, notes } = checkForgeSpec(res.spec)
     const allNotes = [...(res.notes || []), ...notes.filter((n) => !(res.notes || []).includes(n))]
@@ -879,11 +881,80 @@ async function generate(mode, text) {
     commit(next, allNotes, mode === 'new' ? `Forged “${short}”` : `Changed: “${short}”`)
     renderAuth() // the first request may have just unlocked the Forge
     if (mode === 'new') frame(true)
+    reviewNext = $('care').checked // Extra care: Claude also checks renders of every mode, once this one is on screen
     return true
   } catch (e) {
     setStatus(e.name === 'AbortError' ? 'Stopped.' : e.message, e.name !== 'AbortError')
     return false
-  } finally { busy(false); renderAuth() }
+  } finally {
+    busy(false); renderAuth()
+    if (reviewNext) { reviewNext = false; setTimeout(() => review(true), 300) }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------- reference picture
+let reference = null // { data: JPEG data URL, name }, kept for this visit only
+let reviewNext = false
+const REF_MAX_SIDE = 1280
+/** Reads a picture the person picked, dropped or pasted, shrunk to a JPEG Claude can look at. */
+async function loadReference(file) {
+  if (!file || !/^image\/(png|jpeg|webp)$/.test(file.type)) return setStatus('Pick a PNG, JPEG or WebP picture.', true)
+  if (file.size > 25 * 1024 * 1024) return setStatus('That picture is too big. Try one under 25 MB.', true)
+  const url = URL.createObjectURL(file)
+  try {
+    const img = new Image(); img.src = url; await img.decode()
+    const k = Math.min(1, REF_MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight))
+    const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k)
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height)
+    reference = { data: c.toDataURL('image/jpeg', 0.86), name: file.name || 'pasted picture' }
+    setStatus('Reference picture added. Describe anything to change, or just press Forge a new one.')
+  } catch {
+    setStatus('That picture could not be read. Try another.', true)
+  } finally { URL.revokeObjectURL(url) }
+  renderReference()
+}
+function renderReference() {
+  $('refChip').hidden = !reference
+  if (reference) { $('refThumb').src = reference.data; $('refName').textContent = reference.name.length > 28 ? reference.name.slice(0, 26) + '…' : reference.name }
+  $('refAdd').textContent = reference ? 'Change picture' : 'Add a reference picture'
+}
+
+// ---------------------------------------------------------------------------------------------------- review pass
+/**
+ * Renders the design from the hero angle at rest and at each mode's full drive, the way teardown's critic reads
+ * stills. The camera, the turntable and the studio go back to where they were.
+ */
+function captureStills() {
+  const sp = spec(), modes = (sp.modes || []).filter((m) => m.id !== 'idle').slice(0, FORGE_CRITIQUE_MAX_STILLS - 1)
+  const saved = { pos: camera.position.clone(), target: controls.target.clone(), turn: robot.rotation.y }
+  robot.rotation.y = 0
+  if (hero) {
+    controls.target.copy(hero.target)
+    camera.position.copy(hero.target).addScaledVector(new T.Vector3(0.36, 0.17, 0.92).normalize(), hero.dist)
+    camera.lookAt(hero.target); rig.rotation.y = Math.atan2(camera.position.x - hero.target.x, camera.position.z - hero.target.z)
+  }
+  const shots = [{ label: 'At rest', pose: { idle: false } }, ...modes.map((m) => ({ label: `${m.name} at full drive`, pose: { mode: m.id, input: 1, idle: false } }))]
+  const out = shots.map((x) => ({ label: x.label, image: captureRender(768, 'image/jpeg', x.pose) }))
+  camera.position.copy(saved.pos); controls.target.copy(saved.target); robot.rotation.y = saved.turn; camera.lookAt(controls.target)
+  return out
+}
+/** Claude looks at the stills and fixes what clashes, floats or hides; the fixed design becomes a new step. */
+async function review(auto) {
+  if (!caps.design || !glOK || !inner || ctl) return
+  ctl = new AbortController(); busy(true, 'Claude is checking renders of every mode…')
+  try {
+    const res = await sessionPostJson('/api/forge/critique', { spec: spec(), stills: captureStills(), care: $('care').checked }, { scope: 'forge', signal: ctl.signal })
+    const fixed = res.fixed || []
+    if (!fixed.length) { setStatus(`Claude checked every mode${auto ? ' (Extra care)' : ''} and found nothing to fix.`); return }
+    const { spec: next, notes } = checkForgeSpec(res.spec)
+    const allNotes = [...fixed.map((f) => `Review: ${f}`), ...(res.notes || []), ...notes.filter((n) => !(res.notes || []).includes(n))]
+    if (glOK) houseRules(next, allNotes)
+    commit(next, allNotes, `Checked by Claude: ${fixed.length} fix${fixed.length > 1 ? 'es' : ''}`)
+    const first = fixed[0].length > 140 ? fixed[0].slice(0, 138) + '…' : fixed[0]
+    setStatus(`Claude fixed ${fixed.length} thing${fixed.length > 1 ? 's' : ''}: ${first}${fixed.length > 1 ? ' The rest are under House rules.' : ''}`)
+  } catch (e) {
+    setStatus(e.name === 'AbortError' ? 'Stopped.' : e.message, e.name !== 'AbortError')
+  } finally { busy(false) }
 }
 
 async function photograph() {
@@ -903,7 +974,8 @@ async function photograph() {
 }
 
 function busy(on, text) {
-  for (const id of ['forgeBtn', 'refineBtn', 'photoBtn']) { const b = $(id); if (b) b.disabled = on }
+  if (!on) ctl = null // the request is over: nothing left to stop, and the console may tour again
+  for (const id of ['forgeBtn', 'refineBtn', 'photoBtn', 'checkBtn']) { const b = $(id); if (b) b.disabled = on }
   $('stopBtn').hidden = !on
   const st = $('stage'), b = st.querySelector('.busy')
   if (on && !b) st.insertAdjacentHTML('beforeend', '<span class="busy">working…</span>')
@@ -1176,9 +1248,17 @@ function wire() {
   }
   $('askForm').addEventListener('submit', (e) => {
     e.preventDefault(); const t = $('prompt').value.trim()
-    if (!t) return setStatus('Describe your gremlin first, or pick an idea.', true)
-    generate('new', t)
+    if (!t && !reference) return setStatus('Describe your gremlin first, add a reference picture, or pick an idea.', true)
+    generate('new', t || 'Build the machine or creature in the reference picture as a gremlin.')
   })
+  $('refFile').addEventListener('change', (e) => { loadReference(e.target.files[0]); e.target.value = '' })
+  $('refClear').addEventListener('click', () => { reference = null; renderReference(); setStatus('') })
+  const ask = $('askForm')
+  ask.addEventListener('dragover', (e) => { if ([...e.dataTransfer.items].some((i) => i.type.startsWith('image/'))) { e.preventDefault(); ask.classList.add('dragover') } })
+  ask.addEventListener('dragleave', () => ask.classList.remove('dragover'))
+  ask.addEventListener('drop', (e) => { const f = [...e.dataTransfer.files].find((x) => x.type.startsWith('image/')); if (f) { e.preventDefault(); loadReference(f) } ask.classList.remove('dragover') })
+  $('prompt').addEventListener('paste', (e) => { const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/')); if (f) { e.preventDefault(); loadReference(f) } })
+  $('checkBtn').addEventListener('click', () => review(false))
   $('refineForm').addEventListener('submit', (e) => {
     e.preventDefault(); const t = $('refine').value.trim()
     if (!t) return setStatus('Say what to change first.', true)
@@ -1240,6 +1320,7 @@ async function loadCaps() {
   try { caps = await (await fetch('/api/forge')).json() } catch { caps = { design: false, photo: null } }
   // The request boxes always show; without a designer on the server they explain why instead of sending.
   $('photoBtn').hidden = !caps.photo || !glOK
+  $('checkBtn').hidden = !caps.design || !glOK
   $('offline').hidden = !!caps.design
 }
 

@@ -118,3 +118,19 @@ describe('forgeTour', () => {
     expect(forgeTourAt([], 5)).toMatchObject({ mode: 'idle', input: 0 })
   })
 })
+
+describe('forge prompts', () => {
+  it('asks for the reviewer checklist in every design, and a reference note only with a picture', async () => {
+    const { forgeDesignPrompt, forgeCritiquePrompt } = await import('../src/forge.js')
+    const plain = forgeDesignPrompt('new', 'a toaster')
+    expect(plain).toContain('BEFORE YOU ANSWER')
+    expect(plain).not.toContain('REFERENCE PICTURE')
+    const withRef = forgeDesignPrompt('new', 'a toaster', undefined, [], { reference: true })
+    expect(withRef).toContain('REFERENCE PICTURE')
+    expect(withRef).toContain('Never copy names, logos')
+    const { spec } = checkForgeSpec(FORGE_EXAMPLES.octopod)
+    const review = forgeCritiquePrompt(spec, ['At rest', 'Strike at full drive'])
+    expect(review).toContain('1. At rest; 2. Strike at full drive')
+    expect(review).toContain('"fixed"')
+  })
+})

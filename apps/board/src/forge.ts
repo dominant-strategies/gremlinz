@@ -3,7 +3,7 @@
  * Both are optional; each is enabled by its API key in the environment and reported by GET /api/forge.
  */
 import Anthropic from '@anthropic-ai/sdk'
-import { FORGE_PHOTO_PROMPT, checkForgeSpec, forgeDesignPrompt, parseModelJson, type ForgeSpec } from '@gremlins/hatch'
+import { FORGE_CRITIQUE_MAX_STILLS, FORGE_PHOTO_PROMPT, checkForgeSpec, forgeCritiquePrompt, forgeDesignPrompt, parseModelJson, type ForgeSpec } from '@gremlins/hatch'
 
 export class ForgeError extends Error {
   readonly status: 400 | 502 | 503
@@ -15,9 +15,11 @@ export class ForgeError extends Error {
 
 // ------------------------------------------------------------------------------------------------ design (Claude)
 
+/** A picture for the model to look at: a reference to design from, or a render to review. */
+export interface ForgeImage { mime: 'image/png' | 'image/jpeg' | 'image/webp'; data: string /* base64 */ }
 export interface ForgeDesigner {
-  /** Returns the model's raw reply text for a prompt built by `forgeDesignPrompt`. */
-  complete(prompt: string, opts: { care: boolean; signal?: AbortSignal }): Promise<string>
+  /** Returns the model's raw reply text for a prompt built by `forgeDesignPrompt` or `forgeCritiquePrompt`. */
+  complete(prompt: string, opts: { care: boolean; signal?: AbortSignal; images?: ForgeImage[] }): Promise<string>
 }
 
 export const FORGE_MODEL = 'claude-opus-5-5'
@@ -25,7 +27,12 @@ export const FORGE_MODEL = 'claude-opus-5-5'
 /** Claude through the official SDK. Credentials resolve the SDK's usual way (ANTHROPIC_API_KEY, etc.). */
 export function claudeDesigner(client = new Anthropic()): ForgeDesigner {
   return {
-    async complete(prompt, { care, signal }) {
+    async complete(prompt, { care, signal, images = [] }) {
+      // pictures first, then the words that talk about them
+      const content = [
+        ...images.map((im) => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: im.mime, data: im.data } })),
+        { type: 'text' as const, text: prompt },
+      ]
       const message = await client.beta.messages
         .stream(
           {
@@ -36,7 +43,7 @@ export function claudeDesigner(client = new Anthropic()): ForgeDesigner {
             // Route policy declines to a fallback model instead of failing the forge.
             betas: ['server-side-fallback-2026-07-01'],
             fallbacks: 'default',
-            messages: [{ role: 'user', content: prompt }],
+            messages: [{ role: 'user', content }],
           },
           { signal },
         )
@@ -53,25 +60,54 @@ export function claudeDesigner(client = new Anthropic()): ForgeDesigner {
 /** Runs one design request end to end: prompt → model → JSON → house-style check. */
 export async function designGremlin(
   designer: ForgeDesigner,
-  req: { mode: 'new' | 'refine'; text: string; spec?: unknown; care?: boolean; uploads?: { id: string; label: string }[] },
+  req: { mode: 'new' | 'refine'; text: string; spec?: unknown; care?: boolean; uploads?: { id: string; label: string }[]; reference?: string },
   signal?: AbortSignal,
 ): Promise<{ spec: ForgeSpec; notes: string[] }> {
+  const images = req.reference ? [decodeImage(req.reference, 'reference picture')] : []
   let current: ForgeSpec | undefined
   if (req.mode === 'refine') {
     if (!req.spec) throw new ForgeError('A change needs the current design.', 400)
     current = checkForgeSpec(req.spec).spec
   }
-  let text: string
+  const text = await ask(designer, forgeDesignPrompt(req.mode, req.text, current, req.uploads, { reference: images.length > 0 }), { care: !!req.care, signal, images })
   try {
-    text = await designer.complete(forgeDesignPrompt(req.mode, req.text, current, req.uploads), { care: !!req.care, signal })
+    return checkForgeSpec(parseModelJson(text))
+  } catch (e) {
+    throw new ForgeError((e as Error).message)
+  }
+}
+
+async function ask(designer: ForgeDesigner, prompt: string, opts: Parameters<ForgeDesigner['complete']>[1]): Promise<string> {
+  try {
+    return await designer.complete(prompt, opts)
   } catch (e) {
     if (e instanceof ForgeError) throw e
     if (e instanceof Anthropic.RateLimitError) throw new ForgeError('The design service is busy. Try again in a minute.', 503)
     if (e instanceof Anthropic.APIError) throw new ForgeError(`The design service failed (${e.status ?? 'network'}).`)
     throw e
   }
+}
+
+/**
+ * The review pass: Claude looks at renders of the design (at rest and each mode at full drive), lists what it fixed,
+ * and returns the corrected design, which goes through the same house-style check as any other.
+ */
+export async function critiqueGremlin(
+  designer: ForgeDesigner,
+  req: { spec: unknown; stills: { label: string; image: string }[]; care?: boolean },
+  signal?: AbortSignal,
+): Promise<{ spec: ForgeSpec; notes: string[]; fixed: string[] }> {
+  let current: ForgeSpec
+  try { current = checkForgeSpec(req.spec).spec } catch (e) { throw new ForgeError((e as Error).message, 400) }
+  const stills = req.stills.slice(0, FORGE_CRITIQUE_MAX_STILLS)
+  const images = stills.map((s, i) => decodeImage(s.image, `still ${i + 1}`))
+  const text = await ask(designer, forgeCritiquePrompt(current, stills.map((s) => s.label.replace(/[\u0000-\u001f]/g, ' '))), { care: !!req.care, signal, images })
+  let reply: { fixed?: unknown; design?: unknown }
+  try { reply = parseModelJson(text) as typeof reply } catch (e) { throw new ForgeError((e as Error).message) }
+  const fixed = (Array.isArray(reply.fixed) ? reply.fixed : []).slice(0, 12).map((f) => String(f).replace(/\s+/g, ' ').trim().slice(0, 300)).filter(Boolean)
   try {
-    return checkForgeSpec(parseModelJson(text))
+    const { spec, notes } = checkForgeSpec(reply.design ?? reply)
+    return { spec, notes, fixed }
   } catch (e) {
     throw new ForgeError((e as Error).message)
   }
@@ -193,6 +229,21 @@ const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 export const FORGE_PHOTO_MAX_BYTES = 4 * 1024 * 1024
 
 /** Decodes the browser's `data:image/png;base64,…` render and checks it really is a PNG of a sane size. */
+const IMAGE_MAGIC: Record<ForgeImage['mime'], (b: Uint8Array) => boolean> = {
+  'image/png': (b) => PNG_MAGIC.every((v, i) => b[i] === v),
+  'image/jpeg': (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  'image/webp': (b) => String.fromCharCode(...b.slice(0, 4)) === 'RIFF' && String.fromCharCode(...b.slice(8, 12)) === 'WEBP',
+}
+/** A picture for Claude, from a PNG, JPEG or WebP data URL; checks the bytes really are that format. */
+export function decodeImage(dataUrl: string, what: string): ForgeImage {
+  const m = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl)
+  if (!m) throw new ForgeError(`The ${what} must be a PNG, JPEG or WebP picture.`, 400)
+  const mime = m[1] as ForgeImage['mime'], bytes = unb64(m[2]!)
+  if (bytes.length > FORGE_PHOTO_MAX_BYTES) throw new ForgeError(`The ${what} is too large (4 MB at most).`, 400)
+  if (bytes.length < 64 || !IMAGE_MAGIC[mime](bytes)) throw new ForgeError(`The ${what} isn't a readable ${mime.slice(6).toUpperCase()}.`, 400)
+  return { mime, data: m[2]! }
+}
+
 export function decodeRender(dataUrl: string): Uint8Array {
   const m = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl)
   if (!m) throw new ForgeError('The render must be a PNG data URL.', 400)

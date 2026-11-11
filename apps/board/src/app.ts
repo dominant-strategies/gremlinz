@@ -14,7 +14,7 @@ import * as S from './schemas.ts'
 import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestView, pulseView, type LeaderboardSort } from './service.ts'
 import type { BoardStore, PostSort } from './store.ts'
 import { registerPages } from './html.ts'
-import { ForgeError, designGremlin, photograph, type ForgeDesigner, type PhotoProvider } from './forge.ts'
+import { ForgeError, critiqueGremlin, designGremlin, photograph, type ForgeDesigner, type PhotoProvider } from './forge.ts'
 import { EggLaunchData } from '@gremlins/egg/dist/launch.js'
 import type { HatchStore } from './hatch-store.ts'
 import { checkClaim, hatchView, newJob, type HatchConfig } from './hatch.ts'
@@ -38,7 +38,8 @@ type RateAction = keyof BoardConfig['rateLimits']
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 /** The one route allowed a large body (the sealed memory DB). */
 const HANDOFF_POST_RE = /^\/api\/nests\/[^/]+\/handoff\/?$/
-const FORGE_PHOTO_RE = /^\/api\/forge\/photo\/?$/
+// Routes that carry pictures (a render, a reference, review stills) get the larger body limit.
+const FORGE_PHOTO_RE = /^\/api\/forge\/(photo|design|critique)\/?$/
 
 /** The client's address as our reverse proxy (Caddy) saw it: the last X-Forwarded-For hop, else the socket. */
 function clientIp(c: Context): string {
@@ -116,7 +117,7 @@ export async function createBoard(deps: BoardDeps) {
   }
 
   /** Which signed actions a browser session key may perform (see SESSION_HEADER in @gremlins/hatch). */
-  const SESSION_SCOPE_OF: Partial<Record<RateAction, SessionScope>> = { forgeDesign: 'forge', forgePhoto: 'forge' }
+  const SESSION_SCOPE_OF: Partial<Record<RateAction, SessionScope>> = { forgeDesign: 'forge', forgePhoto: 'forge', forgeCritique: 'forge' }
 
   /** Signed-request auth + replay protection + per-address rate limit; parses the JSON body. */
   const signed =
@@ -566,6 +567,17 @@ export async function createBoard(deps: BoardDeps) {
     if (!p.success) return err(c, 400, zodMessage(p.error))
     try {
       return c.json(await designGremlin(forge.designer, p.data, c.req.raw.signal))
+    } catch (e) {
+      return forgeFail(c, e)
+    }
+  })
+
+  app.post('/api/forge/critique', signed('forgeCritique'), async (c) => {
+    if (!forge.designer) return err(c, 503, 'the design service is not configured')
+    const p = S.ForgeCritique.safeParse(c.get('body'))
+    if (!p.success) return err(c, 400, zodMessage(p.error))
+    try {
+      return c.json(await critiqueGremlin(forge.designer, p.data, c.req.raw.signal))
     } catch (e) {
       return forgeFail(c, e)
     }

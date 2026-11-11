@@ -167,6 +167,12 @@ ASSEMBLIES AND MODES (the gremlin is shown on a console where each assembly is a
 - Joint moves: swing (rotates by up to "range" degrees about "axis" through "pivot": a jaw, a lid, an arm), open (like swing, and mirrored copies open the opposite way: shell halves, clamshells, beaks), curl (bends the assembly's tubes and chains progressively along their length by up to "range" degrees in total: tentacles, tails, trunks), spin (rotation: rotors, turrets, wheels), slide ("range" in model units along "axis": pistons, drawers, antennas), pulse ("range" 0-0.5 fractional swell: hearts, lamps, bellows). Put "pivot" where the hinge really is, so nothing passes through anything when it moves.
 - "modes":[{"id":"jaw-open","name":"Jaw open","drive":{"jaw":1,"head":0.3},"focus":"jaw"}] are 2 to 5 operating modes. Each drives one or more assemblies from -1 to 1 by a single input, so a mode moves the whole mechanism together. "focus" names the assembly the camera should study. The renderer adds idle motion on its own.
 
+BEFORE YOU ANSWER, check the design the way a reviewer will check renders of it, at rest and at every mode's full drive:
+- Nothing passes through anything: a jaw opening into the body, an arm swinging through a leg, a lid lifting into an antenna. Move the pivot, the part or the range until it clears.
+- Nothing floats: every part touches or overlaps what holds it, and stays attached when its assembly moves.
+- Every pivot sits at its real hinge, and its axis turns the part the way the motion should go.
+- From a front three-quarter view the face reads clearly and every assembly can be seen.
+
 Reply with only JSON: {"name":"1-3 words","tagline":"wry, at most 12 words","menace":0-10,"palette":{...},"assemblies":[...],"modes":[...],"parts":[...],"wear":[...],"art":{...},"decals":[...]} (the last three only when used)`
 
 /** Built-in designs, in the wire format the model writes. Used as starting points and as few-shot examples. */
@@ -262,18 +268,46 @@ export const FORGE_EXAMPLES: Record<'toaster' | 'octopod' | 'foreman', unknown> 
 export const FORGE_TEXT_LIMIT = 1500
 
 /** The full prompt for a new design or a change. Built server-side so the board's API key only ever designs gremlins. */
-export function forgeDesignPrompt(mode: 'new' | 'refine', text: string, current?: ForgeSpec, uploads: ForgeUpload[] = []): string {
+export function forgeDesignPrompt(mode: 'new' | 'refine', text: string, current?: ForgeSpec, uploads: ForgeUpload[] = [], opts: { reference?: boolean } = {}): string {
   const ask = text.slice(0, FORGE_TEXT_LIMIT)
+  const ref = opts.reference ? `\n\n${FORGE_REFERENCE_NOTE}` : ''
   const ups = checkUploads(uploads)
   const pics = ups.length
     ? `\n\nThe person has uploaded these pictures, which you can place as decals with "image":"upload:<id>": ${ups.map((u) => `upload:${u.id} (${JSON.stringify(u.label)})`).join(', ')}.`
     : ''
   if (mode === 'refine' && current) {
     const spec = forgeSpecToWire(current)
-    return `You design robot "gremlins" as 3D models for a character forge.\n\n${FORGE_LANGUAGE}\n\nCURRENT DESIGN:\n${JSON.stringify(spec)}${pics}\n\nApply this change and return the complete updated design. Keep everything the change doesn't touch.\n"""${ask}"""`
+    return `You design robot "gremlins" as 3D models for a character forge.\n\n${FORGE_LANGUAGE}\n\nCURRENT DESIGN:\n${JSON.stringify(spec)}${pics}${ref}\n\nApply this change and return the complete updated design. Keep everything the change doesn't touch.\n"""${ask}"""`
   }
   const examples = `EXAMPLE (a benign design):\n${JSON.stringify(FORGE_EXAMPLES.toaster)}\n\nEXAMPLE (a terrifying design):\n${JSON.stringify(FORGE_EXAMPLES.octopod)}`
-  return `You design robot "gremlins" as 3D models for a character forge.\n\n${FORGE_LANGUAGE}\n\n${examples}\n\nDesign a new, original gremlin from this description. Don't copy the examples; invent a body plan that fits.${pics}\n"""${ask}"""`
+  return `You design robot "gremlins" as 3D models for a character forge.\n\n${FORGE_LANGUAGE}\n\n${examples}\n\nDesign a new, original gremlin from this description. Don't copy the examples; invent a body plan that fits.${pics}${ref}\n"""${ask}"""`
+}
+
+/** Said when the person attached a reference picture (the picture itself goes to the model as an image). */
+export const FORGE_REFERENCE_NOTE = 'REFERENCE PICTURE: the picture attached to this message is the reference. Rebuild the machine or creature in it as a gremlin: match its body plan, silhouette, proportions, limb count and how its parts join, then translate its surfaces into the house style (enamel, chrome, brass, glass, glowing eyes). Name its real subsystems as assemblies and give its real motions as modes. The description adds to or adjusts the picture; where they disagree, follow the description. Never copy names, logos, brands or any text shown in the picture: invent the gremlin\'s own name and markings.'
+
+export const FORGE_CRITIQUE_MAX_STILLS = 5
+/**
+ * The review pass: the browser renders the design at rest and at each mode's full drive, and Claude checks the stills
+ * the way teardown's critic does, then fixes problems with numbers. `labels` names the attached stills in order.
+ */
+export function forgeCritiquePrompt(current: ForgeSpec, labels: string[]): string {
+  const spec = forgeSpecToWire(current)
+  return [
+    'You design robot "gremlins" as 3D models for a character forge. Now you are reviewing one before the person sees it.',
+    FORGE_LANGUAGE,
+    `THE DESIGN:\n${JSON.stringify(spec)}`,
+    `The pictures attached to this message are renders of this design, in order: ${labels.map((l, i) => `${i + 1}. ${l}`).join('; ')}. Each mode is shown at full drive, from a front three-quarter view.`,
+    [
+      'Review them like a critic, one picture at a time, looking for:',
+      '1. A part passing through another, in any pose.',
+      '2. A part floating off its mount, or coming loose when its assembly moves.',
+      '3. A joint whose pivot is in the wrong place, or that turns the wrong way or too far.',
+      '4. Anything that reads badly: a hidden face, a silhouette that is a blob, an assembly that cannot be seen.',
+      'Fix each problem with numbers in the design: move a pivot, a part, a range or an explode vector. Never fix a problem by removing the feature. Keep the character, the name, the palette, the surfaces and everything that works. If nothing is wrong, return the design unchanged with an empty "fixed" list.',
+    ].join('\n'),
+    'Reply with only JSON: {"fixed":["one plain sentence per fix, under 25 words, saying what was wrong and what you changed"],"design":{the complete design, in the same format}}',
+  ].join('\n\n')
 }
 
 /** Fixed instruction for turning the studio render into a photograph. No user text goes into it. */

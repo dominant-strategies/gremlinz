@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { Wallet } from 'ethers'
+import { Wallet, type HDNodeWallet } from 'ethers'
+type AnyWallet = Wallet | HDNodeWallet
 import { AUTH_HEADERS, FORGE_EXAMPLES, FORGE_PHOTO_PROMPT, SESSION_HEADER, checkArtSvg, checkForgeSpec, forgeDesignPrompt, sessionGrantMessage, signRequest } from '@gremlins/hatch'
-import { decodeRender, falProvider, geminiProvider, openaiProvider, photoProviderFromEnv, type ForgeDesigner, type PhotoProvider } from '../src/forge.ts'
+import { decodeImage, decodeRender, falProvider, geminiProvider, openaiProvider, photoProviderFromEnv, type ForgeDesigner, type PhotoProvider } from '../src/forge.ts'
 import { makeBoard } from './helpers.ts'
 
 // 1×1 transparent PNG
@@ -185,7 +186,7 @@ describe('forge session keys: sign once, then build without wallet prompts', () 
   const path = '/api/forge/design'
   const body = JSON.stringify({ mode: 'new', text: 'a cheerful toaster' })
   /** A grant from `user` to `key`, and a request signed by `signer` (the key, unless a test swaps it). */
-  async function send(b: Awaited<ReturnType<typeof makeBoard>>, o: { user?: Wallet; key?: Wallet; signer?: Wallet; grantBy?: Wallet; to?: string; expiresIn?: number; scope?: string; text?: string } = {}) {
+  async function send(b: Awaited<ReturnType<typeof makeBoard>>, o: { user?: AnyWallet; key?: AnyWallet; signer?: AnyWallet; grantBy?: AnyWallet; to?: string; expiresIn?: number; scope?: string; text?: string } = {}) {
     const user = o.user ?? Wallet.createRandom(), key = o.key ?? Wallet.createRandom(), now = Math.floor(b.clock.now / 1000)
     const terms = { address: user.address.toLowerCase(), key: key.address.toLowerCase(), scope: (o.scope ?? 'forge') as 'forge', expires: now + (o.expiresIn ?? 3600) }
     const grant = { ...terms, signature: await (o.grantBy ?? user).signMessage(sessionGrantMessage(terms)) }
@@ -228,5 +229,55 @@ describe('forge session keys: sign once, then build without wallet prompts', () 
     const r = await send(b, { to: '/api/c/general/posts', text: JSON.stringify({ title: 'not me' }) })
     expect(r.status).toBe(401)
     expect(r.body.error).toMatch(/only work in the Forge/)
+  })
+})
+
+describe('forge reference pictures and the review pass', () => {
+  const JPEG = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, ...new Array(80).fill(0)]).toString('base64')}`
+  /** A designer that records the pictures it was shown. */
+  const seeing = (reply: string) => {
+    const calls: { prompt: string; images: { mime: string }[] }[] = []
+    const d: ForgeDesigner = { complete: async (prompt, o) => { calls.push({ prompt, images: o.images ?? [] }); return reply } }
+    return Object.assign(d, { calls })
+  }
+
+  it('reads PNG, JPEG and WebP pictures and refuses anything that only claims to be one', () => {
+    expect(decodeImage(PNG, 'x').mime).toBe('image/png')
+    expect(decodeImage(JPEG, 'x').mime).toBe('image/jpeg')
+    expect(() => decodeImage(`data:image/jpeg;base64,${PNG_B64}`, 'reference picture')).toThrow(/isn't a readable JPEG/)
+    expect(() => decodeImage('data:image/gif;base64,R0lGOD', 'reference picture')).toThrow(/PNG, JPEG or WebP/)
+  })
+
+  it('designs from a reference picture: Claude sees it and the prompt says to rebuild it', async () => {
+    const designer = seeing(JSON.stringify(FORGE_EXAMPLES.octopod))
+    const b = await makeBoard({}, { forge: { designer } })
+    const r = await b.signedPost(Wallet.createRandom(), '/api/forge/design', { mode: 'new', text: 'make it a gremlin', reference: JPEG })
+    expect(r.status).toBe(200)
+    expect(designer.calls[0]!.images).toEqual([{ mime: 'image/jpeg', data: JPEG.split(',')[1] }])
+    expect(designer.calls[0]!.prompt).toContain('REFERENCE PICTURE')
+    // without a picture the prompt doesn't mention one
+    await b.signedPost(Wallet.createRandom(), '/api/forge/design', { mode: 'new', text: 'a toaster' })
+    expect(designer.calls[1]!.prompt).not.toContain('REFERENCE PICTURE')
+    expect(designer.calls[1]!.images).toEqual([])
+  })
+
+  it('reviews stills and returns the fixed design with what changed', async () => {
+    const fixedDesign = { ...(FORGE_EXAMPLES.octopod as object), name: 'Octopod' }
+    const designer = seeing('```json\n' + JSON.stringify({ fixed: ['The jaw slid into the mantle; its range is now 0.1.'], design: fixedDesign }) + '\n```')
+    const b = await makeBoard({}, { forge: { designer } })
+    const stills = [{ label: 'At rest', image: PNG }, { label: 'Strike at full drive', image: JPEG }]
+    const r = await b.signedPost(Wallet.createRandom(), '/api/forge/critique', { spec: FORGE_EXAMPLES.octopod, stills })
+    expect(r.status).toBe(200)
+    expect(r.body.fixed).toEqual(['The jaw slid into the mantle; its range is now 0.1.'])
+    expect(r.body.spec.assemblies.length).toBe(5)
+    expect(designer.calls[0]!.images.map((i) => i.mime)).toEqual(['image/png', 'image/jpeg'])
+    expect(designer.calls[0]!.prompt).toContain('1. At rest; 2. Strike at full drive')
+  })
+
+  it('turns down a review with no stills or an unreadable one', async () => {
+    const b = await makeBoard({}, { forge: { designer: seeing('{}') } })
+    expect((await b.signedPost(Wallet.createRandom(), '/api/forge/critique', { spec: FORGE_EXAMPLES.octopod, stills: [] })).status).toBe(400)
+    const bad = await b.signedPost(Wallet.createRandom(), '/api/forge/critique', { spec: FORGE_EXAMPLES.octopod, stills: [{ label: 'At rest', image: 'data:image/png;base64,AAAA' }] })
+    expect(bad.status).toBe(400)
   })
 })

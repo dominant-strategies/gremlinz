@@ -265,6 +265,12 @@
       .forge-build { grid-template-columns: minmax(0, 1fr); }
     }
     @media (prefers-reduced-motion: reduce) { .hud-cursor { transition: none; } }
+    .forge .refpic { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+    .forge .refchip { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
+    .forge .refchip img { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; border: 1.5px solid var(--line); }
+    .forge .refchip[hidden] + #refHint { display: inline; }
+    .forge .refchip:not([hidden]) + #refHint { display: none; }
+    #askForm.dragover { outline: 2px dashed var(--signal, #e8571e); outline-offset: 4px; }
   </style>
 </head>
 <body>
@@ -335,7 +341,8 @@
           <button class="btn btn-small" id="redoBtn" type="button" disabled aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y">Redo</button>
           <button class="btn btn-small" id="spinBtn" type="button" aria-pressed="false">Turntable</button>
           <button class="btn btn-small" id="viewBtn" type="button">Reset view</button>
-          <button class="btn btn-small" id="copyBtn" type="button">Copy hatch config</button>
+          <button class="btn btn-small" id="checkBtn" type="button" hidden title="Claude looks at renders of every mode and fixes parts that clash, float or hide">Check it with Claude</button>
+            <button class="btn btn-small" id="copyBtn" type="button">Copy hatch config</button>
           <span class="small muted" id="copyStatus"></span>
           <span class="small muted hint" id="selectHint">Click a part to select it. Shift-click for more.</span>
           <span class="small muted hint" id="photoBy"></span>
@@ -384,7 +391,13 @@
           <div class="row">
             <button class="btn btn-primary" id="forgeBtn" type="submit">Forge a new one</button>
             <button class="btn btn-small" id="ideaBtn" type="button">Try an idea</button>
-            <label class="check"><input type="checkbox" id="care"> Extra care</label>
+            <label class="check" title="Claude takes longer, then looks at renders of every mode and fixes what it finds"><input type="checkbox" id="care"> Extra care</label>
+          </div>
+          <div class="refpic" id="refRow">
+            <label class="btn btn-small" for="refFile" id="refAdd">Add a reference picture</label>
+            <input type="file" id="refFile" accept="image/png,image/jpeg,image/webp" hidden>
+            <span class="refchip" id="refChip" hidden><img id="refThumb" alt="Your reference picture"><span id="refName"></span><button type="button" class="linkish" id="refClear">Remove</button></span>
+            <span class="small muted" id="refHint">A photo or drawing of a machine or creature: Claude builds it as a gremlin.</span>
           </div>
         </form>
 
