@@ -1,10 +1,30 @@
 /** Per-launch progress kept in the browser so the maker can close the tab and resume. */
-import type { GremlinConfig, SignedConfig } from '@gremlins/hatch'
+import type { GremlinConfig, ModelPolicy, SignedConfig } from '@gremlins/hatch'
 import type { StepState } from './progress.js'
+
+/** The builder's steps, in order: who it is, its body, its mind, what it thinks with, the rules it lives by. */
+export const BUILD_STEPS = ['name', 'look', 'persona', 'models', 'rules'] as const
+export type BuildStep = (typeof BUILD_STEPS)[number]
+
+/** The gremlin as described so far; becomes `config` after the last builder step. */
+export interface Draft {
+  name?: string
+  goals?: string[]
+  persona?: string
+  voice?: string
+  /** null: no policy (it may use any model). */
+  models?: ModelPolicy | null
+  /** The money-and-rules form as filled in, so Back keeps it. */
+  rules?: Record<string, string[]>
+  createdAt?: string
+}
 
 export interface Session {
   launchId: string
   maker?: string
+  draft?: Draft
+  /** The builder step on screen, so Back works and a reload resumes there. */
+  at?: BuildStep
   config?: GremlinConfig
   /** Its look from the Gremlin Forge (null: skipped, keeps the creature drawn from its config). */
   look?: { spec: unknown; label?: string; image: string } | null

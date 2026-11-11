@@ -22,7 +22,8 @@ import { appendFileSync, chmodSync, chownSync, cpSync, existsSync, mkdirSync, re
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gatewayConfig } from '../bootstrap/gateway-config.js'
-import { home } from '../env.js'
+import { home, homeFile } from '../env.js'
+import { GremlinConfig } from '@gremlins/hatch'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), '[gremlin-run]', ...a)
@@ -95,7 +96,10 @@ if (gremlinIds) {
   lockDown(home()) // owner-only, whatever mode each file was created with
 }
 
-// 3. the inference gateway
+// 3. the inference gateway, keeping to the maker's model policy (bootstrap has already checked the config)
+function makerPolicy() {
+  try { return GremlinConfig.parse(JSON.parse(readFileSync(process.env.GREMLIN_CONFIG ?? homeFile('config.json'), 'utf8'))).models } catch { return undefined }
+}
 let gatewayConfigPath = process.env.GATEWAY_CONFIG
 if (!gatewayConfigPath || !existsSync(gatewayConfigPath)) {
   // Not in HERMES_HOME: Hermes reads a gateway.json there as its own legacy config.
@@ -104,6 +108,7 @@ if (!gatewayConfigPath || !existsSync(gatewayConfigPath)) {
     ollamaUrl: process.env.GREMLIN_OLLAMA_URL,
     ollamaModel: process.env.GREMLIN_OLLAMA_MODEL,
     dailyUsd: process.env.GREMLIN_DAILY_USD ? Number(process.env.GREMLIN_DAILY_USD) : undefined,
+    policy: makerPolicy(),
   }), null, 2), { mode: 0o600 })
   if (gremlinIds) chownSync(gatewayConfigPath, gremlinIds.uid, gremlinIds.gid)
 }

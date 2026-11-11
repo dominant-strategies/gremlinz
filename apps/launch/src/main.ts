@@ -5,7 +5,7 @@
  *  for that egg's address and hands it over → 7 fund it.
  * Nothing here holds the gremlin's keys; the egg generates them on its own server.
  */
-import { GremlinConfig as GremlinConfigSchema, CONSTITUTION_SECTIONS, COVENANTS, DEFAULT_VAULT_TERMS, ECONOMIC_MODELS, MODEL_INFO, configHash, economicsOf, type Covenant, type Economics, type GremlinConfig } from '@gremlins/hatch'
+import { GremlinConfig as GremlinConfigSchema, ModelPolicy, MODEL_FAMILIES, MODEL_PROVIDERS, MODEL_TRAITS, classifyModel, describeRule, namedModels, type CatalogModel, type ModelRule, type ModelTrait, CONSTITUTION_SECTIONS, COVENANTS, DEFAULT_VAULT_TERMS, ECONOMIC_MODELS, MODEL_INFO, configHash, economicsOf, type Covenant, type Economics, type GremlinConfig } from '@gremlins/hatch'
 import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
 import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
 import { sporestack, newToken, unusableSshKey, type Currency, type Provider } from '@gremlins/hosting'
@@ -15,7 +15,7 @@ import { WALLET_NAMES, canPayUsdc, makerAccount, payUsdcOnBase, signConfigWithWa
 import { FLUENCE_MIN_TOPUP_USD } from '@gremlins/hosting'
 import { formatUnits as fmtUnits } from 'ethers'
 import { FLUENCE_STEPS, PROGRESS_CSS, Progress, SPORESTACK_STEPS, COMMON_STEPS } from './progress.js'
-import { clearSession, loadMakerToken, loadSession, newLaunchId, saveMakerToken, saveSession, type Session } from './session.js'
+import { BUILD_STEPS, clearSession, loadMakerToken, loadSession, newLaunchId, saveMakerToken, saveSession, type BuildStep, type Session } from './session.js'
 
 const env = import.meta.env
 // Served by the board itself by default, so the board is this origin.
@@ -30,6 +30,9 @@ const DEV = DEV_KEYS.length ? { sshKeys: DEV_KEYS } : undefined
 const FLAVOR = (env.VITE_EGG_FLAVOR as string) || 'vps-1vcpu-1gb'
 const PROVIDER = ((env.VITE_EGG_PROVIDER as string) || 'digitalocean') as Provider
 const DAYS = Number(env.VITE_EGG_DAYS || 7)
+// The egg image reads a model policy in its config (egg-v0.1.3 and later). Older eggs drop fields they don't know before
+// hashing, so they would reject a config carrying one: for those, only the named models go in (preferredModels).
+const EGG_MODEL_POLICY = env.VITE_EGG_MODEL_POLICY === '1'
 
 const board = boardApi(BOARD)
 let s: Session = loadSession() ?? { launchId: newLaunchId() }
@@ -43,7 +46,7 @@ progress.plan(planFor())
 // Sessions from before the progress window (or partially tracked ones): mark what the session proves is done.
 const backfill: [boolean | undefined, string, string?][] = [
   [!!s.maker, 'connect', s.maker && `${s.maker.slice(0, 8)}…`],
-  [!!s.config, 'describe', s.config?.name],
+  ...(['name', 'persona', 'models', 'rules'] as const).map((id) => [!!s.config, id, id === 'rules' ? s.config?.name : undefined] as [boolean, string, string?]),
   [!!s.host, 'host', s.host],
   [!!s.bridgeTx, 'fund-egg', 'bridge sent'],
   [!!s.machineId, 'start', 'server started'],
@@ -93,26 +96,25 @@ function renderPreview(draft?: GremlinConfig) {
   const eco = economicsOf(c)
   const pills = [c.parent === 'orphan' ? 'orphan' : 'has a parent', eco.model === 'maker-split' && c.revenueSplit.kind !== 'none' ? `${(c.revenueSplit.bps / 100).toFixed(0)}% ${c.revenueSplit.kind} to you` : MODEL_INFO[eco.model].title.toLowerCase()]
   // Its Forge look once chosen; otherwise the creature drawn from its config.
-  const portrait = !draft && s.look ? `<span class="sticker sticker-lg" style="overflow:hidden"><img src="${s.look.image}" alt="${esc(c.name)}" style="width:100%;height:100%;object-fit:cover"></span>`
+  const portrait = s.look ? `<span class="sticker sticker-lg" style="overflow:hidden"><img src="${s.look.image}" alt="${esc(c.name)}" style="width:100%;height:100%;object-fit:cover"></span>`
     : draft || hatched ? sticker(seed, 'lg', 'normal', c.name || 'your gremlin') : sticker(seed, 'lg', 'egg', `${c.name}'s egg`)
   box.innerHTML = `<div class="card card-ink">${portrait}<div>
     <h3>${esc(c.name || 'Unnamed')}</h3>
-    <p class="say">${draft ? (c.persona ? esc(c.persona.slice(0, 140)) + (c.persona.length > 140 ? '…' : '') : 'Give it a persona…') : hatched ? 'Hatched, or about to. It is on its own now.' : `Still an egg. ${s.look ? `<span class="sticker sticker-xs" style="overflow:hidden"><img src="${s.look.image}" alt="" style="width:100%;height:100%;object-fit:cover"></span>` : sticker(seed, 'xs', 'normal', c.name)} is waiting inside.`}</p>
+    <p class="say">${draft ? (c.persona ? esc(c.persona.slice(0, 140)) + (c.persona.length > 140 ? '…' : '') : c.name ? 'Its personality comes after its body…' : 'Name it to begin…') : hatched ? 'Hatched, or about to. It is on its own now.' : `Still an egg. ${s.look ? `<span class="sticker sticker-xs" style="overflow:hidden"><img src="${s.look.image}" alt="" style="width:100%;height:100%;object-fit:cover"></span>` : sticker(seed, 'xs', 'normal', c.name)} is waiting inside.`}</p>
     <div class="pills">${pills.map((x) => `<span class="pill pill-plain">${esc(x)}</span>`).join('')}</div>
     ${c.goals.length ? `<ul class="goals tail">${c.goals.slice(0, 4).map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : ''}
-    ${draft ? `<p class="small muted tail" style="margin:14px 0 0">Its look is drawn from everything you write, so it changes as you edit.</p><button type="button" class="btn btn-small shuffle tail" id="shuffle">Shuffle its look</button>` : ''}
+    ${draft && !s.look ? `<p class="small muted tail" style="margin:14px 0 0">Until you build its body, its look is drawn from everything you write, so it changes as you edit.</p><button type="button" class="btn btn-small shuffle tail" id="shuffle">Shuffle its look</button>` : ''}
   </div></div>`
   const sh = document.getElementById('shuffle')
-  if (sh) sh.onclick = () => { draftCreatedAt = new Date(Date.parse(draftCreatedAt) + 1000).toISOString(); document.getElementById('f')?.dispatchEvent(new Event('input')) }
+  if (sh) sh.onclick = () => { const d = (s.draft ??= {}); d.createdAt = new Date(Date.parse(d.createdAt ?? new Date().toISOString()) + 1000).toISOString(); save(); document.getElementById('f')?.dispatchEvent(new Event('input')) ?? renderPreview(draftConfig()) }
 }
-let draftCreatedAt = new Date().toISOString()
 
 // ── 1. connect ────────────────────────────────────────────────────────────────
 function stepConnect() {
-  show(`<p class="eyebrow">Step 1 of 4</p><h2>Let's make something that lives on its own</h2>
+  show(`<p class="eyebrow">Step 1 of 7</p><h2>Let's make something that lives on its own</h2>
     <p class="muted">About fifteen minutes and $10, in QUAI or USDC. Here is what happens:</p>
     <ol class="intro">
-      <li><div><b>You describe it</b><span class="muted">A name, a persona, life goals, and the rules it chooses to live by.</span></div></li>
+      <li><div><b>You shape it</b><span class="muted">A name and life goals, a body you build in the Forge, a personality and voice, the models it thinks with, and the rules it chooses to live by.</span></div></li>
       <li><div><b>You rent it an egg</b><span class="muted">A tiny server, paid from your wallet: QUAI with Pelagus, or USDC on Base with MetaMask, Phantom or WalletConnect. It locks itself and makes its own keys.</span></div></li>
       <li><div><b>You sign, it hatches</b><span class="muted">Your signature hands the egg its config. Then feed it, and let it go.</span></div></li>
     </ol>
@@ -134,24 +136,264 @@ function stepConnect() {
   }
 }
 
-// ── 2. configure ──────────────────────────────────────────────────────────────
-function stepConfigure() {
+// ── 2–6. the builder: who it is, its body, its mind, what it thinks with, its rules ──
+// Five short steps instead of one long form. Each keeps what you wrote in the draft (Back keeps it too, and a reload
+// resumes on the same step); the signed config is assembled from the draft at the end.
+const BUILD_TITLE: Record<BuildStep, string> = { name: 'Name', look: 'Body', persona: 'Personality', models: 'Models', rules: 'Rules' }
+const draft = () => (s.draft ??= {})
+const nameOf = () => esc(draft().name || 'your gremlin')
+
+/** A config-shaped view of the draft, for the preview while it's being built. */
+function draftConfig(): GremlinConfig {
+  const d = draft()
+  return {
+    version: 1, name: d.name ?? '', persona: d.persona ?? '', voice: d.voice ?? '', goals: d.goals ?? [], preferredModels: d.models ? namedModels(d.models) : [],
+    maker: s.maker!, parent: 'maker', revenueSplit: { kind: 'none' }, mischiefScope: { game: true, board: true, email: false, phone: false, money: false }, constitution: [],
+    createdAt: (d.createdAt ??= new Date().toISOString()),
+  }
+}
+
+/** Shows a builder step: where you are in the hatch, the steps as chips (finished ones clickable), then the step. */
+function frame(at: BuildStep, html: string) {
+  s.at = at
+  save()
+  const i = BUILD_STEPS.indexOf(at)
+  const chips = BUILD_STEPS.map((b, j) => `<li class="${j < i ? 'done' : j === i ? 'now' : ''}">${j < i ? `<button type="button" class="link" data-go="${b}">${BUILD_TITLE[b]}</button>` : BUILD_TITLE[b]}</li>`).join('')
+  document.querySelector('main.hatch')!.classList.toggle('wide', at === 'look')
+  show(`<p class="eyebrow">Step ${i + 2} of ${BUILD_STEPS.length + 2}</p><ol class="stepper">${chips}<li>Egg</li></ol>${html}`)
+  for (const b of app.querySelectorAll<HTMLButtonElement>('[data-go]')) b.onclick = () => go(b.dataset.go as BuildStep)
+  progress.step(at).start()
+  renderPreview(draftConfig())
+}
+function go(at: BuildStep) { s.at = at; save(); route() }
+function next(from: BuildStep, detail?: string) {
+  progress.step(from).done(detail)
+  const i = BUILD_STEPS.indexOf(from)
+  go(BUILD_STEPS[i + 1] ?? 'rules')
+}
+const back = (from: BuildStep) => go(BUILD_STEPS[Math.max(0, BUILD_STEPS.indexOf(from) - 1)]!)
+const navButtons = (from: BuildStep, label = 'Continue') => `<div class="navrow">${from !== 'name' ? `<button type="button" class="secondary" id="back">Back</button>` : ''}<button>${label}</button></div>`
+function wireBack(from: BuildStep) { const b = document.getElementById('back'); if (b) b.onclick = () => back(from) }
+function formError(form: HTMLFormElement, msg: string) {
+  let box = form.querySelector<HTMLElement>('.form-error')
+  if (!box) { box = document.createElement('p'); box.className = 'error form-error'; form.prepend(box) }
+  box.textContent = msg
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+// 2. name and life goals
+function stepName() {
+  const d = draft()
+  frame('name', `<h2>Who is it, and what does it want?</h2>
+    <p class="muted">A name and the goals it will spend its life on. Everything after this builds on them.</p>
+    <form id="f">
+      <label>Name <input name="name" required maxlength="64" placeholder="sprocket" value="${esc(d.name ?? '')}"></label>
+      <label>Life goals <span class="hint">One per line. Big enough to take a lifetime.</span><textarea name="goals" required rows="4" placeholder="Fund 10 open-source weather stations">${esc((d.goals ?? []).join('\n'))}</textarea></label>
+      ${navButtons('name')}
+    </form>`)
+  const form = $<HTMLFormElement>('#f')
+  const read = () => { const fd = new FormData(form); d.name = String(fd.get('name') ?? '').trim(); d.goals = String(fd.get('goals') ?? '').split('\n').map((g) => g.trim()).filter(Boolean) }
+  form.oninput = () => { read(); renderPreview(draftConfig()) }
+  form.onsubmit = (ev) => {
+    ev.preventDefault()
+    read()
+    if (d.goals!.length > 20) return formError(form, 'At most 20 goals.')
+    if (d.goals!.some((g) => g.length > 1000)) return formError(form, 'Keep each goal under 1,000 characters.')
+    save()
+    next('name', d.name)
+  }
+}
+
+// 3. its body, from the Gremlin Forge
+// The Forge runs inline (same origin), started from a brief made of its name and goals; its design on screen becomes the
+// look, with a portrait rendered from it. The look is published after the config, signed by the maker; it is not part of
+// the signed config, so eggs never need it.
+function stepLook() {
+  const d = draft()
+  const brief = `${d.name}, a gremlin whose life goals are: ${(d.goals ?? []).join('; ')}. Design a body that fits them.`
+  frame('look', `<h2>Build ${nameOf()}'s body</h2>
+    <p class="muted">Describe it in the Gremlin Forge and Claude builds a 3D robot you can reshape, weather and paint. We started the description from its goals; change it as you like. Or skip, and it keeps the creature drawn from its description.</p>
+    <iframe id="forge" src="/forge/?hatch=1&brief=${encodeURIComponent(brief)}" title="Gremlin Forge" style="width:100%;height:min(82vh,900px);border:1.5px solid var(--line);border-radius:16px;background:var(--card)"></iframe>
+    <div class="navrow" style="margin-top:14px"><button type="button" class="secondary" id="back">Back</button><button id="use">Use this body</button><button id="skip" class="secondary">Skip: keep its creature</button></div>`)
+  wireBack('look')
+  $('#use').onclick = () => {
+    const forge = ($('#forge') as HTMLIFrameElement).contentWindow as (Window & { gremlinsForge?: { current(): { spec: unknown; label: string; example: boolean } | undefined; portrait(size?: number): string | undefined } }) | null
+    const f = forge?.gremlinsForge
+    const cur = f?.current()
+    const image = f?.portrait(512)
+    if (!cur || !image) return fail(new Error('The Forge is still loading, or has no design on screen yet.'))
+    if (cur.example && !confirm('This is the Forge\'s example design, not one made for your gremlin. Use it anyway?')) return
+    // the design carries the gremlin's own name, whatever the Forge called it
+    s.look = { spec: { ...(cur.spec as object), name: d.name }, label: cur.label, image }
+    save()
+    next('look', cur.label)
+  }
+  $('#skip').onclick = () => {
+    s.look = null
+    save()
+    progress.step('look').skip('keeps its creature')
+    go('persona')
+  }
+}
+
+// 4. personality and voice
+const VOICES = ['warm', 'dry', 'deadpan', 'excitable', 'terse', 'theatrical', 'gentle', 'gruff', 'nerdy', 'formal', 'cheeky', 'ominous']
+function stepPersona() {
+  const d = draft()
+  frame('persona', `<h2>What is ${nameOf()} like?</h2>
+    <p class="muted">Its personality: who it is, what it loves, what it refuses to do. And how it sounds when it talks.</p>
+    <form id="f">
+      <label>Personality <span class="hint">Who is it? How does it treat people, what does it love, what will it never do?</span><textarea name="persona" required rows="6" maxlength="8000" placeholder="A patient tinkerer who loves fixing broken sensors…">${esc(d.persona ?? '')}</textarea></label>
+      <label>Voice <span class="hint">A few words. Tap to add.</span><input name="voice" maxlength="200" placeholder="warm, dry, excitable" value="${esc(d.voice ?? '')}"></label>
+      <div class="opts" id="voices">${VOICES.map((v) => `<button type="button" class="tag" data-v="${v}">${v}</button>`).join('')}</div>
+      ${navButtons('persona')}
+    </form>`)
+  wireBack('persona')
+  const form = $<HTMLFormElement>('#f'), voice = form.elements.namedItem('voice') as HTMLInputElement
+  const read = () => { const fd = new FormData(form); d.persona = String(fd.get('persona') ?? '').trim(); d.voice = String(fd.get('voice') ?? '').trim() }
+  const mark = () => { const have = new Set(voice.value.split(',').map((x) => x.trim().toLowerCase())); for (const b of form.querySelectorAll<HTMLButtonElement>('[data-v]')) b.classList.toggle('on', have.has(b.dataset.v!)) }
+  for (const b of form.querySelectorAll<HTMLButtonElement>('[data-v]')) b.onclick = () => {
+    const words = voice.value.split(',').map((x) => x.trim()).filter(Boolean)
+    const i = words.findIndex((w) => w.toLowerCase() === b.dataset.v)
+    if (i >= 0) words.splice(i, 1); else words.push(b.dataset.v!)
+    voice.value = words.join(', ').slice(0, 200)
+    read(); mark(); renderPreview(draftConfig())
+  }
+  mark()
+  form.oninput = () => { read(); mark(); renderPreview(draftConfig()) }
+  form.onsubmit = (ev) => { ev.preventDefault(); read(); save(); next('persona') }
+}
+
+// 5. the models it thinks with
+interface ShownModel extends CatalogModel {}
+/** Used when the board can't reach the providers' catalogues: the gateway's own defaults. */
+const FALLBACK_MODELS: ShownModel[] = [
+  ['hashference', 'hashference-glm-5-3', 'GLM-5.3 (Hashference)', 0.441, 1.386], ['hashference', 'z-ai-glm-5-3-flash', 'GLM 5.3 Flash', 0.18, 0.6],
+  ['hashference', 'deepseek-v4-flash', 'DeepSeek V4 Flash', 0.17, 0.33], ['venice', 'qwen3-5-397b-a17b', 'Qwen 3.5 397B', 0.75, 4.5],
+].map(([provider, id, name, i, o]) => ({ ref: `${provider}/${id}`, provider: String(provider), id: String(id), name: String(name), ...classifyModel(String(id), { name: String(name) }), tools: true, inputPerM: Number(i), outputPerM: Number(o) }))
+const DEFAULT_PRIMARY = ['hashference/hashference-glm-5-3', 'hashference/z-ai-glm-5-3-flash', 'venice/qwen3-5-397b-a17b']
+const DEFAULT_KINDS = { families: [] as string[], kinds: ['open-weights'] as string[], must: [] as string[] }
+const MUST: ModelTrait[] = ['private', 'open-weights', 'uncensored']
+const money = (n: number) => (n >= 10 ? n.toFixed(0) : String(Number(n.toFixed(2))))
+const PROVIDER_ORDER = Object.keys(MODEL_PROVIDERS)
+
+/** The kinds a maker ticked, as policy rules: any ticked family (one rule), each ticked trait, all with the "must" traits. */
+function rulesFrom(families: string[], kinds: string[], must: string[]): ModelRule[] {
+  const rules: ModelRule[] = []
+  if (families.length) rules.push({ families: families.includes('*') ? [] : families, traits: [...must] })
+  for (const k of kinds) rules.push({ families: [], traits: [...new Set([k, ...must])] })
+  if (!families.length && !kinds.length && must.length) rules.push({ families: [], traits: [...must] })
+  return rules
+}
+/** And back, for Back: which boxes a saved policy ticks. */
+function ticksFrom(p: ModelPolicy) {
+  const famRule = p.alternatives.find((r) => r.families.length || !r.traits.length || r.traits.length === 0)
+  const must = p.alternatives.length ? p.alternatives.map((r) => r.traits).reduce((a, b) => a.filter((t) => b.includes(t))) : []
+  const families = famRule ? (famRule.families.length ? famRule.families : ['*']) : []
+  const kinds = p.alternatives.filter((r) => !r.families.length && r !== famRule).flatMap((r) => r.traits.filter((t) => !must.includes(t)))
+  return { families, kinds: [...new Set(kinds)], must }
+}
+
+async function stepModels() {
+  const d = draft()
+  frame('models', `<h2>What does ${nameOf()} think with?</h2>
+    <p class="muted">Pick the model it starts on and any others you trust. Then say which kinds of model it may move to on its own: models come and go every few months, and a gremlin lives for years.</p>
+    <p class="muted" id="mstate">Loading today's models from Hashference and Venice…</p>
+    <form id="f" hidden></form>`)
+  const cat = await fetch(`${BOARD}/api/models`).then((r) => (r.ok ? r.json() as Promise<{ models: ShownModel[] }> : null)).catch(() => null)
+  if (s.at !== 'models') return // moved on while loading
+  const models = (cat?.models?.length ? cat.models : FALLBACK_MODELS).sort((a, b) => PROVIDER_ORDER.indexOf(a.provider) - PROVIDER_ORDER.indexOf(b.provider) || a.name.localeCompare(b.name))
+  $('#mstate').textContent = cat?.models?.length ? `${models.length} models with tool use, from Hashference and Venice right now.` : 'Couldn’t reach the model catalogues, so here are the defaults. Its kinds below still cover every model released later.'
+  const byRef = new Map(models.map((m) => [m.ref, m]))
+  const saved = d.models ?? undefined
+  const primary = saved?.primary && byRef.has(saved.primary) ? saved.primary : DEFAULT_PRIMARY.find((r) => byRef.has(r)) ?? models[0]!.ref
+  const approved = new Set((saved?.approved ?? []).filter((r) => byRef.has(r)))
+  const ticks = saved ? ticksFrom(saved) : DEFAULT_KINDS
+  const traitPills = (m: ShownModel) => m.traits.filter((t) => t !== 'reasoning' && t !== 'vision' && t !== 'code').map((t) => `<i>${t === 'open-weights' ? 'open' : t}</i>`).join('')
+  const price = (m: ShownModel) => `$${money(m.inputPerM)} / $${money(m.outputPerM)}`
+  const opt = (m: ShownModel) => `<option value="${esc(m.ref)}" ${m.ref === primary ? 'selected' : ''}>${esc(m.name)} · ${price(m)} per M tokens</option>`
+  const chip = (name: string, value: string, label: string, on: boolean, title = '') => `<label${title ? ` title="${esc(title)}"` : ''}><input type="checkbox" name="${name}" value="${esc(value)}" ${on ? 'checked' : ''}> ${esc(label)}</label>`
+  const form = $<HTMLFormElement>('#f')
+  form.innerHTML = `
+    <label>Primary model <span class="hint">What it thinks with first. Prices are USD per million tokens in / out.</span>
+      <select name="primary">${PROVIDER_ORDER.map((p) => `<optgroup label="${esc(MODEL_PROVIDERS[p as keyof typeof MODEL_PROVIDERS])}">${models.filter((m) => m.provider === p).map(opt).join('')}</optgroup>`).join('')}</select></label>
+    <fieldset><legend>Also approved <span class="hint">Up to 12 more it may use by name.</span></legend>
+      <input type="search" id="mfilter" placeholder="Filter: claude, qwen, uncensored, venice…" aria-label="Filter models">
+      <div class="mlist" id="mlist" role="group" aria-label="Approved models"></div>
+    </fieldset>
+    <fieldset><legend>It may move on to <span class="hint">Kinds of model, including ones released after it hatches.</span></legend>
+      <p class="small muted sub">Families</p><div class="opts">${chip('fam', '*', 'Any family', ticks.families.includes('*'))}${Object.entries(MODEL_FAMILIES).map(([k, v]) => chip('fam', k, v, ticks.families.includes(k))).join('')}</div>
+      <p class="small muted sub">Kinds</p><div class="opts">${Object.entries(MODEL_TRAITS).map(([k, v]) => chip('kind', k, k === 'open-weights' ? 'open weights' : k, ticks.kinds.includes(k), v)).join('')}</div>
+      <p class="small muted sub">…and each of them must be</p><div class="opts">${MUST.map((k) => chip('must', k, k === 'open-weights' ? 'open weights' : k, ticks.must.includes(k), MODEL_TRAITS[k])).join('')}</div>
+      <p class="small mcount" id="mcount"></p>
+    </fieldset>
+    <label class="check"><input type="checkbox" name="free" ${saved?.freeModels === false ? '' : 'checked'}><span><b>Free models too</b> <span class="hint">For small questions, and to keep thinking when it can’t pay. Off: it never steps outside this list, even broke.</span></span></label>
+    ${EGG_MODEL_POLICY ? '' : `<p class="small dev-note">This egg build reads only the models you name (primary and approved). The kinds take effect with the next egg image.</p>`}
+    ${navButtons('models')}`
+  form.hidden = false
+  wireBack('models')
+  const list = $('#mlist'), filter = $<HTMLInputElement>('#mfilter')
+  const current = (): ModelPolicy => {
+    const fd = new FormData(form)
+    const p = String(fd.get('primary'))
+    return ModelPolicy.parse({
+      primary: p,
+      approved: [...approved].filter((r) => r !== p),
+      alternatives: rulesFrom(fd.getAll('fam').map(String), fd.getAll('kind').map(String), fd.getAll('must').map(String)),
+      freeModels: fd.get('free') === 'on',
+    })
+  }
+  const drawList = () => {
+    const p = String(new FormData(form).get('primary'))
+    const q = filter.value.trim().toLowerCase()
+    const hit = (m: ShownModel) => !q || `${m.name} ${m.id} ${m.provider} ${m.family} ${m.traits.join(' ')}`.toLowerCase().includes(q)
+    const rows = models.filter((m) => m.ref !== p && (approved.has(m.ref) || hit(m))).sort((a, b) => Number(approved.has(b.ref)) - Number(approved.has(a.ref)))
+    const full = approved.size >= 12
+    list.innerHTML = rows.map((m) => `<label class="${approved.has(m.ref) ? 'on' : ''}"><input type="checkbox" value="${esc(m.ref)}" ${approved.has(m.ref) ? 'checked' : full ? 'disabled' : ''}><span class="nm">${esc(m.name)}</span><span class="pv">${m.provider}</span><span class="tr">${traitPills(m)}</span><span class="pr">${price(m)}</span></label>`).join('') || '<p class="small muted">No models match.</p>'
+  }
+  const count = () => {
+    const pol = current()
+    const alt = models.filter((m) => pol.alternatives.some((r) => (!r.families.length || r.families.includes(m.family)) && r.traits.every((t) => (m.traits as string[]).includes(t))))
+    $('#mcount').innerHTML = pol.alternatives.length
+      ? `<b>${alt.length} of today’s models</b> fit: ${pol.alternatives.map(describeRule).map(esc).join('; ')}. New ones that fit are allowed too.`
+      : `<b>No other models.</b> It only ever uses the ones you named. If they are withdrawn, it is stuck with what is left.`
+  }
+  list.onchange = (ev) => {
+    const box = ev.target as HTMLInputElement
+    if (box.checked) approved.add(box.value); else approved.delete(box.value)
+    drawList()
+  }
+  filter.oninput = drawList
+  form.onchange = (ev) => {
+    const t = ev.target as HTMLInputElement
+    // "Any family" and specific families are alternatives to each other
+    if (t.name === 'fam' && t.checked) for (const b of form.querySelectorAll<HTMLInputElement>('input[name=fam]')) if ((t.value === '*') !== (b.value === '*')) b.checked = false
+    if (t.name === 'primary') drawList()
+    count()
+  }
+  drawList(); count()
+  form.onsubmit = (ev) => {
+    ev.preventDefault()
+    let pol: ModelPolicy
+    try { pol = current() } catch (e) { return formError(form, (e as Error).message) }
+    d.models = pol
+    save()
+    next('models', byRef.get(pol.primary)?.name ?? pol.primary)
+  }
+}
+
+// 6. money and rules
+function stepRules() {
   const checks = CONSTITUTION_SECTIONS.map((c) => `<label><input type="checkbox" name="constitution" value="${c}"> ${c}</label>`).join('')
   const mischief = ['game', 'board', 'email', 'phone', 'money'].map((m) => `<label><input type="checkbox" name="mischief" value="${m}" ${m === 'game' || m === 'board' ? 'checked' : ''}> ${m}</label>`).join('')
-  show(`<p class="eyebrow">Step 2 of 4</p><h2>Describe your gremlin</h2>
+  frame('rules', `<h2>Money and rules</h2>
+    <p class="muted">Last one. How ${nameOf()} relates to you, how it shares money, and the rules it chooses to live by. None of this can change after it hatches.</p>
     <form id="f">
-      <label>Name <input name="name" required maxlength="64" placeholder="sprocket"></label>
-      <label>Persona <span class="hint">Who is it? How does it talk, what does it love, what does it refuse to do?</span><textarea name="persona" required rows="4" maxlength="8000" placeholder="A patient tinkerer who loves fixing broken sensors…"></textarea></label>
-      <label>Life goals <span class="hint">One per line. Big enough to take a lifetime.</span><textarea name="goals" required rows="3" placeholder="Fund 10 open-source weather stations"></textarea></label>
-      <div class="row2">
-        <label>Voice <input name="voice" maxlength="200" placeholder="warm, dry, excitable"></label>
-        <label>Preferred models <input name="models" placeholder="claude-opus-5-5, …"></label>
-      </div>
       <fieldset><legend>Your relationship</legend><div class="choice">
         <label><input type="radio" name="parent" value="maker" checked><span><b>Parent</b><span class="muted small">It may listen to you more than to strangers. You still can't control it.</span></span></label>
         <label><input type="radio" name="parent" value="orphan"><span><b>Orphan</b><span class="muted small">It owes you nothing and answers to nobody.</span></span></label>
       </div></fieldset>
-      <fieldset><legend>How it shares money <span class="hint">You can't change this after it hatches.</span></legend><div class="choice">
+      <fieldset><legend>How it shares money</legend><div class="choice">
         ${ECONOMIC_MODELS.map((m) => `<label><input type="radio" name="model" value="${m}" ${m === 'solo' ? 'checked' : ''}><span><b>${MODEL_INFO[m].title}</b><span class="muted small">${MODEL_INFO[m].short} <a href="/docs/economics/#${m}" target="_blank" rel="noopener">How it works</a></span></span></label>`).join('')}
       </div>
       <div class="eco" data-for="maker-split"><div class="row2">
@@ -180,9 +422,13 @@ function stepConfigure() {
       </fieldset>
       <fieldset><legend>Constitution <span class="hint">Opt in to each section. Unchosen rules don't bind it.</span></legend><div class="opts">${checks}</div></fieldset>
       <fieldset><legend>When mischievous, it may act up in… <span class="hint">(when someone makes it rain on it)</span></legend><div class="opts">${mischief}</div></fieldset>
-      <button>Continue</button>
+      ${navButtons('rules', 'Finish: choose its egg')}
     </form>`)
+  wireBack('rules')
   const form = $<HTMLFormElement>('#f')
+  const d = draft()
+  if (d.rules) fillForm(form, d.rules)
+  const keep = () => { d.rules = readForm(form); save() }
   const read = (): GremlinConfig => {
     const fd = new FormData(form)
     const mis = new Set(fd.getAll('mischief').map(String))
@@ -202,21 +448,16 @@ function stepConfigure() {
       : model === 'quest' ? { model, ...terms, goal: String(fd.get('questGoal') ?? '').trim() || '(no goal yet)', fundingTargetWei: quai(fd.get('questTarget')), fundingDays: Math.round(Number(fd.get('fundingDays') || 14)), questDays: Math.round(Number(fd.get('questDays') || 180)) }
       : { model }
     return {
-      version: 1,
-      name: String(fd.get('name')).trim(),
-      persona: String(fd.get('persona')).trim(),
-      voice: String(fd.get('voice') ?? '').trim(),
-      goals: String(fd.get('goals')).split('\n').map((g) => g.trim()).filter(Boolean),
-      preferredModels: String(fd.get('models') ?? '').split(',').map((m) => m.trim()).filter(Boolean),
-      maker: s.maker!,
+      ...draftConfig(),
+      // older eggs know models only by name; the full policy goes in when the egg image reads it (its hash covers it)
+      preferredModels: d.models ? namedModels(d.models).filter((r) => r.length <= 100) : [],
+      ...(d.models && EGG_MODEL_POLICY ? { models: d.models } : {}),
       parent: fd.get('parent') === 'orphan' ? 'orphan' : 'maker',
       revenueSplit: model === 'maker-split' && pctBps > 0 ? { kind: kind as 'revenue' | 'profit', bps: pctBps, recipient: s.maker! } : { kind: 'none' },
       // older configs had no economics field; solo stays implicit so those hashes don't change
       ...(model === 'solo' || (model === 'maker-split' && pctBps === 0) ? {} : { economics }),
       mischiefScope: { game: mis.has('game'), board: mis.has('board'), email: mis.has('email'), phone: mis.has('phone'), money: mis.has('money') },
       constitution: fd.getAll('constitution').map(String) as GremlinConfig['constitution'],
-      // fixed per draft, so the portrait only changes when what you wrote changes (or you shuffle)
-      createdAt: draftCreatedAt,
     }
   }
   const syncPanels = () => {
@@ -226,23 +467,40 @@ function stepConfigure() {
   }
   syncPanels()
   let timer: ReturnType<typeof setTimeout> | undefined
-  form.oninput = () => { syncPanels(); clearTimeout(timer); timer = setTimeout(() => renderPreview(read()), 250) }
+  form.oninput = () => { syncPanels(); keep(); clearTimeout(timer); timer = setTimeout(() => renderPreview(read()), 250) }
+  form.onchange = form.oninput
   renderPreview(read())
-  form.onsubmit = async (ev) => {
+  form.onsubmit = (ev) => {
     ev.preventDefault()
+    keep()
     const config = read()
     const check = GremlinConfigSchema.safeParse(config)
     if (!check.success) {
-      let box = form.querySelector<HTMLElement>('.form-error')
-      if (!box) { box = document.createElement('p'); box.className = 'error form-error'; form.prepend(box) }
-      box.textContent = check.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')
-      box.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const where = (path: PropertyKey[]) => ({ name: 'Name', goals: 'Life goals', persona: 'Personality', voice: 'Voice', models: 'Models' } as Record<string, string>)[String(path[0])]
+      const first = check.error.issues[0]!
+      const step = ({ name: 'name', goals: 'name', persona: 'persona', voice: 'persona', models: 'models', preferredModels: 'models' } as Record<string, BuildStep>)[String(first.path[0])]
+      formError(form, check.error.issues.map((i) => `${where(i.path) ?? i.path.join('.')}: ${i.message}`).join('; '))
+      if (step && step !== 'rules') { const b = document.createElement('button'); b.type = 'button'; b.className = 'secondary'; b.textContent = `Fix it in ${BUILD_TITLE[step]}`; b.onclick = () => go(step); form.querySelector('.form-error')!.append(' ', b) }
       return
     }
     s.config = config
-    progress.step('describe').done(config.name)
+    progress.step('rules').done(config.name)
     save()
     route()
+  }
+}
+
+/** A form's values by field name (all values, so checkboxes and multi-selects round-trip). */
+function readForm(form: HTMLFormElement): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const [k, v] of new FormData(form)) (out[k] ??= []).push(String(v))
+  return out
+}
+function fillForm(form: HTMLFormElement, values: Record<string, string[]>) {
+  for (const el of form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input[name], select[name], textarea[name]')) {
+    const v = values[el.name]
+    if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) el.checked = !!v?.includes(el.value)
+    else if (v?.length) el.value = v[0]!
   }
 }
 
@@ -295,39 +553,9 @@ async function stepPay() {
 const eggCloudInit = () =>
   renderCloudInit({ launch: { maker: s.maker!, configHash: configHash(s.config!), boardUrl: BOARD, launchId: s.launchId, ...(DEV ? { dev: DEV } : {}) }, image: IMAGE, artifact: ARTIFACT })
 
-// ── 3. its look, from the Gremlin Forge ───────────────────────────────────────
-// The Forge runs inline (same origin); its design on screen becomes the look, with a portrait rendered from it. The
-// look is published after the config, signed by the maker; it is not part of the signed config, so eggs never need it.
-function stepLook() {
-  show(`<p class="eyebrow">Step 3 of 4</p><h2>Give ${esc(s.config!.name)} a look</h2>
-    <p class="muted">Design its body in the Gremlin Forge: describe it and Claude builds a 3D robot you can reshape, weather and paint. Or skip, and it keeps the creature drawn from its description.</p>
-    <iframe id="forge" src="/forge/" title="Gremlin Forge" style="width:100%;height:min(78vh,820px);border:1.5px solid var(--line);border-radius:16px;background:var(--card)"></iframe>
-    <p style="display:flex;flex-wrap:wrap;gap:10px;margin-top:14px"><button id="use">Use this look</button><button id="skip" class="secondary">Skip: keep its creature</button></p>`)
-  const st = progress.step('look')
-  st.start('Design it in the Forge, or skip')
-  $('#use').onclick = () => {
-    const forge = ($('#forge') as HTMLIFrameElement).contentWindow as (Window & { gremlinsForge?: { current(): { spec: unknown; label: string; example: boolean } | undefined; portrait(size?: number): string | undefined } }) | null
-    const f = forge?.gremlinsForge
-    const cur = f?.current()
-    const image = f?.portrait(512)
-    if (!cur || !image) return fail(new Error('The Forge is still loading, or has no design on screen yet.'))
-    if (cur.example && !confirm('This is the Forge\'s example design, not one made for your gremlin. Use it anyway?')) return
-    s.look = { spec: cur.spec, label: cur.label, image }
-    st.done(cur.label)
-    save()
-    route()
-  }
-  $('#skip').onclick = () => {
-    s.look = null
-    st.skip('keeps its creature')
-    save()
-    route()
-  }
-}
-
-// ── 3. choose where the egg runs ──────────────────────────────────────────────
+// ── 7. choose where the egg runs ──────────────────────────────────────────────
 function stepHost() {
-  show(`<p class="eyebrow">Step 4 of 4</p><h2>Where should the egg hatch?</h2>
+  show(`<p class="eyebrow">Step 7 of 7</p><h2>Where should the egg hatch?</h2>
     <p class="muted">The egg is a small rented server. It only lives until your gremlin moves to a home it pays for itself.</p>
     <div class="choice" style="margin:18px 0 22px">
       <label><input type="radio" name="host" value="fluence" checked><span><b>Fluence <span class="pill pill-alive" style="margin-left:6px">recommended</span></b><span class="muted small">From $${FLUENCE_MIN_TOPUP_USD}. Pay QUAI with Pelagus (bridged for you), or USDC on Base from MetaMask, Phantom or any WalletConnect wallet.</span></span></label>
@@ -558,8 +786,11 @@ async function route() {
   try {
     if (!IMAGE) return show('<p class="error">Hatching is not configured yet (VITE_EGG_IMAGE).</p>')
     if (!s.maker) return stepConnect()
-    if (!s.config) return stepConfigure()
-    if (s.look === undefined && !s.host) return stepLook() // sessions already past it keep going
+    if (!s.config) {
+      const at = s.at ?? 'name'
+      return at === 'look' ? stepLook() : at === 'persona' ? stepPersona() : at === 'models' ? await stepModels() : at === 'rules' ? stepRules() : stepName()
+    }
+    document.querySelector('main.hatch')!.classList.remove('wide')
     if (!s.host) return stepHost()
     if (!s.machineId && s.host === 'fluence') return await stepFluence()
     if (!s.machineId) {

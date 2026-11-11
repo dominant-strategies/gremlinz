@@ -12,6 +12,7 @@ import { mergeConfig, type BoardConfig } from './config.ts'
 import { AUTH_HEADERS, verifySignedRequestWith } from './auth.ts'
 import { SESSION_HEADER, verifySessionRequest, type AccountSignatureChecker, type Attestation, type ForgeSpec, type SessionScope } from '@gremlins/hatch'
 import { RateLimiter } from './ratelimit.ts'
+import { modelCatalog, type ModelCatalog } from './models.ts'
 import * as S from './schemas.ts'
 import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestView, pulseView, type LeaderboardSort } from './service.ts'
 import type { BoardStore, PostSort } from './store.ts'
@@ -35,6 +36,8 @@ export interface BoardDeps {
    * (2-of-2 jobs) is the same coordinator the worker's signers use.
    */
   hatch?: { store: HatchStore; cfg: HatchConfig; mpc?: MpcCoordinator }
+  /** The model catalogue offered at hatch (models.ts); defaults to the providers' live catalogues. */
+  models?: () => Promise<ModelCatalog>
 }
 
 type Env = { Variables: { address: string; body: unknown; attestation: Attestation } }
@@ -610,6 +613,14 @@ export async function createBoard(deps: BoardDeps) {
     if (e instanceof ForgeError) return err(c, e.status, e.message)
     throw e
   }
+  // ---------------------------------------------------------------- models a gremlin can be given
+
+  const models = deps.models ?? modelCatalog()
+  app.get('/api/models', async (c) => {
+    c.header('cache-control', 'public, max-age=300')
+    return c.json(await models())
+  })
+
   app.get('/api/forge', (c) => c.json({ design: !!forge.designer, photo: forge.photo ? { provider: forge.photo.name, model: forge.photo.model } : null }))
 
   app.post('/api/forge/design', signed('forgeDesign'), async (c) => {

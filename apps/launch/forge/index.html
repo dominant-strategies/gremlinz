@@ -288,6 +288,8 @@
     body.live .hud .build { display: none; }
     body.live .forge-build, body.live #undoBtn, body.live #redoBtn, body.live #checkBtn, body.live #copyBtn, body.live #attachBtn, body.live #photoBtn, body.live #renderTab, body.live #photoTab { display: none !important; }
     body.embedded .site-header { display: none; }
+    /* inside the hatch flow: the hatch page owns saving and attaching */
+    body.hatching #attachBtn, body.hatching #copyBtn { display: none !important; }
     body.embedded main.forge { padding-bottom: 8px; }
     body.live .hud { --stage-h: clamp(380px, calc(100vh - 200px), 780px); }
     body.live .stage.departed canvas.studio { filter: grayscale(.85) brightness(1.05); }

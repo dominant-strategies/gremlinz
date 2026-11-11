@@ -1673,6 +1673,12 @@ initStudio()
 wire()
 if (LIVE) startLiveMode()
 else {
+  // Hatching (the hatch page embeds the Forge): start from the gremlin it's for, with a first brief to build from.
+  const q = new URLSearchParams(location.search)
+  if (q.has('hatch')) {
+    document.body.classList.add('embedded', 'hatching')
+    if (q.get('brief') && !$('prompt').value) $('prompt').value = q.get('brief').slice(0, 1500)
+  }
   if (!step()) { const r = checkForgeSpec(structuredClone(FORGE_EXAMPLES.octopod)); state.steps = [{ spec: r.spec, house: r.notes, label: 'Example: Octopod', parent: -1, t: Date.now() }]; state.cur = 0 }
   render(true)
 }

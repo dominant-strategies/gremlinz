@@ -12,6 +12,7 @@ import { setKnownSecrets } from './glean.js'
 import { base58 } from '@scure/base'
 import { hashferenceFetch } from './providers.js'
 import { healthReader } from '../health/gate.js'
+import { applyCatalog, fetchCatalog } from './catalog.js'
 
 const cfg = GatewayConfig.parse(JSON.parse(readFileSync(process.env.GATEWAY_CONFIG ?? '/etc/gremlin/gateway.json', 'utf8')))
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a)
@@ -28,6 +29,16 @@ const fetchers = Object.fromEntries([
   ...cfg.providers.filter((p) => p.kind === 'venice-x402').map((p) => [p.id, veniceFetch(p, keys().evm.privateKey, keepBalance(p.id))]),
   ...cfg.providers.filter((p) => p.kind === 'hashference').map((p) => [p.id, hashferenceFetch(p, keepBalance(p.id))]),
 ])
+
+// The providers' catalogues, every 6 hours: prices for the maker's named models, and spare models of the kinds its model
+// policy allows (so a withdrawn model is replaced by one the maker would accept).
+const spares = new Set<string>()
+const refreshCatalog = async () => {
+  const notes = applyCatalog(cfg, await fetchCatalog(), spares)
+  if (notes.length) log(`catalog: ${notes.join('; ')}`)
+}
+void refreshCatalog()
+setInterval(() => void refreshCatalog(), 6 * 3_600_000).unref()
 
 // gremlin-auto reads ratings (GREMLIN_HOME/ratings.json, refreshed by the rating skill) and the last 30 days of the
 // ledger, at most once a minute.

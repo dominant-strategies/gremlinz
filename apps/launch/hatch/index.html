@@ -42,6 +42,33 @@
     .intro li { counter-increment: s; display: grid; grid-template-columns: 36px 1fr; gap: 12px; align-items: start; }
     .intro li::before { content: counter(s); display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 1.5px solid var(--ink); font: 800 15px var(--display); background: var(--field); }
     .intro b { display: block; }
+    /* the builder: steps as chips, Back/Continue, a wide stage for the Forge */
+    .stepper { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 0; margin: -4px 0 18px; font: 600 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    .stepper li { padding: 7px 10px; border-radius: 999px; border: 1.5px solid var(--line); color: var(--ink-2); }
+    .stepper li.now { border-color: var(--ink); background: var(--ink); color: #f7f3ec; }
+    .stepper li.done { border-color: var(--ink); color: var(--ink); }
+    .stepper li.done button.link { all: unset; cursor: pointer; }
+    .stepper li.done:hover { background: var(--field); }
+    .navrow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    @media (min-width: 900px) { .hatch.wide { grid-template-columns: minmax(0, 1fr); } }
+    .hatch.wide .preview { display: none; }
+    .flow button.tag { min-height: 32px; padding: 0 12px; font: 600 13px var(--body); background: var(--card); color: var(--ink); border-color: var(--line); }
+    .flow button.tag.on { border-color: var(--ink); background: var(--field); }
+    .flow .sub { margin: 6px 0 -4px; }
+    .flow label.check { display: flex; gap: 10px; align-items: flex-start; font-weight: 500; }
+    .flow label.check input { margin-top: 4px; }
+    .mlist { max-height: 300px; overflow: auto; border: 1.5px solid var(--line); border-radius: 12px; }
+    .mlist label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "box nm pr" "box pv tr"; column-gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); cursor: pointer; font-weight: 500; }
+    .mlist label:last-child { border-bottom: 0; }
+    .mlist label.on { background: var(--field); }
+    .mlist input { grid-area: box; margin: 0; }
+    .mlist .nm { grid-area: nm; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mlist .pv { grid-area: pv; font: 12px var(--mono); color: var(--ink-2); }
+    .mlist .pr { grid-area: pr; font: 12px var(--mono); color: var(--ink-2); text-align: right; white-space: nowrap; }
+    .mlist .tr { grid-area: tr; display: flex; gap: 4px; justify-content: flex-end; }
+    .mlist .tr i { font: normal 600 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .05em; padding: 3px 6px; border-radius: 4px; background: var(--paper-2); color: var(--ink-2); }
+    .mlist input[type=search], .flow input[type=search] { width: 100%; }
+    .mcount { margin: 4px 0 0; }
     .preview { text-align: center; }
     .preview .card { padding: 28px 20px; }
     .preview .sticker { margin: 4px auto 18px; }

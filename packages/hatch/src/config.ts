@@ -5,6 +5,7 @@
  */
 import { z } from 'zod'
 import { Economics, economicsProblem } from './economics.js'
+import { ModelPolicy } from './models.js'
 
 /** Constitution sections a maker can opt into. None are mandatory. */
 export const CONSTITUTION_SECTIONS = [
@@ -27,6 +28,8 @@ export const GremlinConfig = z.object({
   voice: z.string().max(200).default(''),
   goals: z.array(z.string().min(1).max(1_000)).min(1).max(20),
   preferredModels: z.array(z.string().min(1).max(100)).max(10).default([]),
+  /** Which models it may think with (models.ts). Absent: any (configs from before policies, and eggs that predate them). */
+  models: ModelPolicy.optional(),
   maker: address,
   /** Parent gets influence (their signed messages are labelled), never control. */
   parent: z.enum(['maker', 'orphan']),

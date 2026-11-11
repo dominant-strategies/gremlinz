@@ -7,6 +7,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { GatewayConfig, ProviderConfig, RouteTarget } from './config.js'
 import { providerFetch, retryable, type UpstreamFetch } from './providers.js'
 import { gleanRoute, sensitiveReason } from './glean.js'
+import { refAllowed } from '@gremlins/hatch'
 import { classify, isRefusal, mayRetryRefusal, permissiveRoute, routeFor, type RouterInput } from './router.js'
 
 export const AUTO = 'gremlin-auto'
@@ -73,6 +74,10 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
   const log = deps.log ?? (() => {})
   const cfg = withGlean(config, deps.env ?? process.env)
   const providers = new Map(cfg.providers.map((p) => [p.id, p]))
+  // The maker's model policy: what may be called at all. Free endpoints only when it allows free models.
+  const allowed = (t: { provider: string; model: string }) => refAllowed(cfg.policy, t.provider, t.model)
+  const freeOk = !cfg.policy || cfg.policy.freeModels
+  const keepTo = (route: RouteTarget[] | undefined) => (route && !freeOk ? route.filter(allowed) : route)
   const fetchers = new Map(cfg.providers.map((p) => [p.id, deps.fetchers?.[p.id] ?? (p.kind === 'venice-x402' ? undefined : providerFetch(p))]))
   const cooldown = new Map<string, { until: number; ms: number }>()
   /** provider/model pairs a provider said it no longer offers, until when. */
@@ -106,11 +111,12 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
       const health = deps.health?.()
       const body = withDirective(JSON.parse(await readBody(req)) as Record<string, unknown>, health?.directive)
       const alias = String(body.model ?? '')
-      let route = cfg.routes[alias]
+      let route = alias === 'gremlin-glean' ? keepTo(cfg.routes[alias]) : cfg.routes[alias]
       let retryOnRefusal: RouteTarget[] = []
       if (alias === AUTO && deps.router) {
         const c = classify(body as Parameters<typeof classify>[0])
-        const inp: RouterInput = { ...deps.router(), providers: new Set(providers.keys()), glean: cfg.routes['gremlin-glean'], fallback: cfg.routes['gremlin-main'], conserve: !!health?.conserve }
+        const r = deps.router()
+        const inp: RouterInput = { ...r, ratings: r.ratings.filter(allowed), providers: new Set(providers.keys()), glean: keepTo(cfg.routes['gremlin-glean']), fallback: cfg.routes['gremlin-main'], conserve: !!health?.conserve }
         route = routeFor(c, inp)
         if (!body.stream && mayRetryRefusal(body as Parameters<typeof mayRetryRefusal>[0])) retryOnRefusal = permissiveRoute(c, inp)
         log(`auto: ${c.domain}/${c.complexity}${c.needsTools ? '/tools' : ''}${inp.conserve ? ' (conserving)' : ''} → ${route.map((t) => `${t.provider}/${t.model}`).join(', ') || '(none)'}`)
@@ -120,7 +126,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
       const errors: string[] = []
       const sensitive = sensitiveReason(body.messages)
       const tried = new Set<string>()
-      const lent = alias === 'gremlin-glean' ? [] : deps.lent?.() ?? []
+      const lent = (alias === 'gremlin-glean' ? [] : deps.lent?.() ?? []).map((l) => ({ ...l, targets: l.targets.filter(allowed) }))
       for (const l of lent) { providers.set(l.provider.id, l.provider); fetchers.set(l.provider.id, l.fetch) }
       // Once the gremlin's own budget is spent, only lent keys and free endpoints remain usable.
       const refused = deps.refuse?.()
@@ -128,7 +134,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
       const ownRoute = refused ? route.filter((t) => providers.get(t.provider)?.free) : route
       // Last resort for every route: the free endpoints. A gremlin that can't pay (or whose paid providers are all down)
       // still gets an answer, weaker but better than none; secrets never go there (checked below).
-      const lastResort = alias === 'gremlin-glean' ? [] : (cfg.routes['gremlin-glean'] ?? []).filter((t) => !ownRoute.some((o) => o.provider === t.provider && o.model === t.model))
+      const lastResort = alias === 'gremlin-glean' ? [] : (keepTo(cfg.routes['gremlin-glean']) ?? []).filter((t) => !ownRoute.some((o) => o.provider === t.provider && o.model === t.model))
       let queue = [...lent.flatMap((l) => l.targets), ...ownRoute, ...lastResort]
       let lastRefusal: Record<string, unknown> | undefined
       for (let target = queue.shift(); target; target = queue.shift()) {

@@ -3,6 +3,10 @@
  * alias (e.g. "gremlin-main"); each alias maps to an ordered list of real provider/model pairs, tried in turn.
  */
 import { z } from 'zod'
+import { ModelPolicy } from '@gremlins/hatch'
+
+/** Hatch's policy schema is zod 4, this package's zod 3: check it with its own parser. */
+const Policy = z.custom<ModelPolicy>((v) => ModelPolicy.safeParse(v).success, 'not a model policy').transform((v) => ModelPolicy.parse(v))
 
 export const ProviderConfig = z.object({
   id: z.string().min(1),
@@ -52,5 +56,7 @@ export const GatewayConfig = z.object({
   budget: z.object({ dailyUsd: z.number().positive() }).optional(),
   /** Add the reviewed free endpoints as the gremlin-glean route. */
   glean: z.object({ enabled: z.boolean().default(true), models: z.record(z.string(), z.array(z.string())).default({}) }).default({ enabled: true, models: {} }),
+  /** The maker's model policy from the signed config: every route, the router and lent keys keep to it. Absent: any model. */
+  policy: Policy.optional(),
 })
 export type GatewayConfig = z.infer<typeof GatewayConfig>

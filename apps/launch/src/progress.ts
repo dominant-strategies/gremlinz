@@ -39,8 +39,11 @@ export interface StepDef {
 
 export const COMMON_STEPS: StepDef[] = [
   { id: 'connect', title: 'Sign in with your wallet', sigs: 1, who: 'you' },
-  { id: 'describe', title: 'Describe your gremlin', sigs: 0, who: 'you' },
-  { id: 'look', title: 'Give it a look in the Forge', sigs: 0, who: 'you' },
+  { id: 'name', title: 'Name it and give it life goals', sigs: 0, who: 'you' },
+  { id: 'look', title: 'Build its body in the Forge', sigs: 0, who: 'you' },
+  { id: 'persona', title: 'Give it a personality and a voice', sigs: 0, who: 'you' },
+  { id: 'models', title: 'Choose the models it thinks with', sigs: 0, who: 'you' },
+  { id: 'rules', title: 'Set its money and rules', sigs: 0, who: 'you' },
   { id: 'host', title: 'Choose where the egg hatches', sigs: 0, who: 'you' },
 ]
 
