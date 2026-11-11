@@ -729,10 +729,21 @@ export interface ForgeCut {
   order?: ForgeSection[]
   /** The film's own wording, keyed "mode:<id>" or "asm:<id>": a title in place of its name, and a sentence about it. */
   text?: Record<string, { title?: string; caption?: string }>
+  /** Its score: one of FORGE_MUSIC, generated to fit the cut, or "none". (A track of the maker's own is chosen in the page.) */
+  music?: ForgeMusicStyle
   /** An end card: a headline, and a link shown as text and as a QR code (its gremlinz page). */
   closer?: { headline: string; url: string } | null
 }
 export const FORGE_CUT_LIMITS = { title: 32, caption: 140, instructions: 1000 } as const
+/** Scores the film can be cut to, generated in the browser so every one is new and needs no licence. */
+export const FORGE_MUSIC = {
+  pulse: 'Industrial pulse: driving, mechanical, mid tempo',
+  ominous: 'Deep and ominous: slow, dark, heavy low end',
+  bright: 'Bright and bouncy: upbeat, playful, major key',
+  ambient: 'Calm ambient: soft pads, no drums',
+  none: 'Silence',
+} as const
+export type ForgeMusicStyle = keyof typeof FORGE_MUSIC
 /** The film's sections between the opening shot and the finale, in their default order. */
 export const FORGE_SECTIONS = ['goals', 'spotlights', 'modes', 'exploded', 'motive'] as const
 export type ForgeSection = (typeof FORGE_SECTIONS)[number]
@@ -1031,7 +1042,7 @@ export function parseModelJson(text: string): unknown {
 export function forgeCutPrompt(spec: ForgeSpec, story: ForgeStory | null, cut: ForgeCut, instructions: string, link?: string): string {
   const asms = (spec.assemblies ?? []).map((a) => `- ${a.id}: ${a.name}${a.role ? ` (${a.role})` : ''}`).join('\n')
   const modes = (spec.modes ?? []).filter((m) => m.id !== 'idle').map((m) => `- ${m.id}: ${m.name}${m.focus ? `, works the ${m.focus}` : ''}${m.when ? `, plays when it is ${m.when}` : ''}`).join('\n')
-  return `You edit the film of a robot called ${spec.name} ("${spec.tagline}"), made in the Gremlin Forge. The film is cut from fixed sections, and you choose how. It is silent: no music or sound.
+  return `You edit the film of a robot called ${spec.name} ("${spec.tagline}"), made in the Gremlin Forge. The film is cut from fixed sections, and you choose how, including its music.
 
 The film always opens on a hero shot and ends on one (then the optional closer). Between them, these sections, in an order you choose:
 - goals: a title card listing its life goals (pick which).
@@ -1063,6 +1074,7 @@ Reply with only JSON: {"cut":{...},"note":"one or two plain sentences: what you 
 - "goals": which life goals the card lists (copied exactly from the list above); "motive": false drops the motive card; "exploded": false drops the exploded view.
 - "pace": ${FORGE_CUT_PACE[0]} to ${FORGE_CUT_PACE[1]}; 1 is normal, lower is slower and calmer, higher is faster and punchier.
 - "text": {"mode:<id>" or "asm:<id>": {"title": at most ${FORGE_CUT_LIMITS.title} characters, "caption": one sentence, at most ${FORGE_CUT_LIMITS.caption} characters}}.
+- "music": one of ${Object.entries(FORGE_MUSIC).map(([k, v]) => `"${k}" (${v})`).join(', ')}. The score is generated to the cut: hits on each new shot, a build into the exploded view.
 - "closer": {"headline": at most 60 characters, "url": an https link} to end on a call to action with a QR code; keep the current url unless the maker gives another${link ? `, and when there is none use ${link}` : ''}. "closer": false removes it.
 Write titles and sentences in plain words, true to the robot above; never put names, brands or claims in them that the maker did not give you.`
 }
@@ -1077,6 +1089,7 @@ export function checkForgeCut(raw: unknown, spec: ForgeSpec, story: ForgeStory |
   const modes = ids(r.modes, modeIds, MODE_TREATMENTS.length); if (modes) out.modes = modes
   const spotlight = ids(r.spotlight, asmIds, 8); if (spotlight) out.spotlight = spotlight
   const goals = ids(r.goals, story?.goals ?? [], 3); if (goals) out.goals = goals
+  if (typeof r.music === 'string' && r.music in FORGE_MUSIC) out.music = r.music as ForgeMusicStyle
   if (typeof r.motive === 'boolean') out.motive = r.motive
   if (typeof r.exploded === 'boolean') out.exploded = r.exploded
   if (Number.isFinite(Number(r.pace)) && r.pace !== null && r.pace !== '') out.pace = Math.min(FORGE_CUT_PACE[1], Math.max(FORGE_CUT_PACE[0], Math.round(Number(r.pace) * 100) / 100))

@@ -351,6 +351,11 @@
     .cut-plan { margin: 0; font-family: var(--mono); font-size: 12px; color: #66625b; }
     .cut-plan span { color: #24211d; }
     .cut-plan .link { background: none; border: 0; padding: 0; margin-left: 6px; color: #e8571e; text-decoration: underline; cursor: pointer; font: inherit; }
+    .cut-music-row { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+    .cut-opts.music label { flex-direction: column; align-items: flex-start; gap: 2px; padding: 7px 10px; }
+    .cut-opts.music label small { font-size: 11.5px; color: #66625b; }
+    .cut-opts.music label input { position: absolute; opacity: 0; pointer-events: none; }
+    .cut-opts.music label { position: relative; }
     .cut-opts .none { font-size: 13px; color: #66625b; margin: 0; }
     .cut-foot { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
     .cut-foot .mono { margin-right: auto; font-size: 12.5px; color: #66625b; }
@@ -386,6 +391,9 @@
       <fieldset id="cutSpots"><legend>Spotlight assemblies <span>each shown alone, close up</span></legend><div class="cut-opts"></div></fieldset>
       <fieldset id="cutModes"><legend>Modes <span>up to 5</span></legend><div class="cut-opts"></div></fieldset>
       <fieldset id="cutMore"><legend>Also</legend><div class="cut-opts"></div></fieldset>
+      <fieldset id="cutMusic"><legend>Music <span>composed to this cut, or your own</span></legend><div class="cut-opts music"></div>
+        <div class="cut-music-row"><button class="btn btn-small" type="button" id="cutHear">▶ Preview</button><input type="file" id="cutTrack" accept="audio/*" hidden><span class="small muted" id="cutTrackName"></span></div>
+      </fieldset>
       <fieldset id="cutCloser"><legend>Closer <span>optional, the film ends on it</span></legend><div class="cut-opts"></div></fieldset>
       <div class="cut-foot"><span class="mono" id="cutLen">0 s</span><button class="btn btn-small" type="button" id="cutCancel">Cancel</button><button class="btn btn-small btn-ink" type="submit" id="cutGo">Cut the video</button></div>
     </form>

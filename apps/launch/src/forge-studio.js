@@ -13,8 +13,9 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
-import { FORGE_CRITIQUE_MAX_STILLS, FORGE_CUT_LIMITS, forgeCutOrder, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints, forgeShotAt, forgeTour, forgeTourAt } from '@gremlins/hatch'
+import { FORGE_CRITIQUE_MAX_STILLS, FORGE_CUT_LIMITS, FORGE_MUSIC, forgeCutOrder, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints, forgeShotAt, forgeTour, forgeTourAt } from '@gremlins/hatch'
 import { drawQr, encodeVideo, paintOverlay, videoSupport } from './forge-record.js'
+import { fitTrack, playPreview, renderScore } from './forge-music.js'
 import { fitName, hideCursor, liveHud, modelCode, mountHud, renderHud, tickHud } from './forge-hud.js'
 import { modeFor, quai, watchGremlin } from './forge-live.js'
 import { applySkins, applyPose, drawLabels, layoutLabels, forgetIsolate, mountLabels, resetView, setTourCut, setTourStory, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, tourStory, view } from './forge-motion.js'
@@ -1108,7 +1109,10 @@ async function recordTour(cut = {}) {
   const sp = spec(), beats = forgeTour(sp, tourStory(sp), cut), lastBeat = beats[beats.length - 1]
   const len = Math.min(75, Math.max(8, lastBeat ? lastBeat.at + lastBeat.dur : 8)), frames = Math.round(len * REC.fps)
   if (!(await videoSupport(REC.w, REC.h, REC.fps))) return setStatus('This browser can’t encode video. Try Chrome, Edge or Safari 17 or newer.', true)
-  ctl = new AbortController(); busy(true, 'Recording the tour… this takes about a minute.')
+  ctl = new AbortController(); busy(true, cut.music && cut.music !== 'none' ? 'Composing the music…' : 'Recording the tour… this takes about a minute.')
+  let audio = null
+  try { audio = await filmMusic(sp, tourStory(sp), cut) } catch (e) { setStatus(`The music couldn’t be made (${e.message}); recording without it.`, true) }
+  busyNote('Recording the tour… this takes about a minute.')
   recording = true
   const out = document.createElement('canvas'); out.width = REC.w; out.height = REC.h
   const ctx = out.getContext('2d')
@@ -1123,7 +1127,7 @@ async function recordTour(cut = {}) {
     camera.aspect = REC.w / REC.h; camera.updateProjectionMatrix()
     robot.rotation.y = 0
     const blob = await encodeVideo({
-      canvas: out, frames, fps: REC.fps, signal: ctl.signal,
+      canvas: out, frames, fps: REC.fps, signal: ctl.signal, audio,
       onProgress: (d, n) => busyNote(`${Math.round((d / n) * 100)}% of ${len.toFixed(0)} s`),
       draw: (i) => {
         const t = i / REC.fps, s = forgeTourAt(beats, t), b = beats[s.beat]
@@ -1146,7 +1150,7 @@ async function recordTour(cut = {}) {
     })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${slug}-tour.mp4`
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60_000)
-    setStatus(`Saved ${slug}-tour.mp4: ${len.toFixed(0)} seconds at 1080p, ${(blob.size / 1048576).toFixed(1)} MB.`)
+    setStatus(`Saved ${slug}-tour.mp4: ${len.toFixed(0)} seconds at 1080p${audio ? ', with music' : ''}, ${(blob.size / 1048576).toFixed(1)} MB.`)
   } catch (e) {
     setStatus(e.name === 'AbortError' ? 'Recording stopped.' : `The recording failed: ${e.message}`, e.name !== 'AbortError')
   } finally {
@@ -1162,6 +1166,17 @@ async function recordTour(cut = {}) {
  * Before a film is cut: what it features. Its goals card (goal by goal) and motive card, assemblies to spotlight, the
  * modes it plays, the exploded view. Shows the running length as you choose; remembered per design for this visit.
  */
+/** A track of the maker's own for the film (kept for this visit only; it never leaves the browser). */
+let ownTrack = null
+/** The film's music for a cut: its composed score, or the maker's track fitted to it; null for silence. */
+async function filmMusic(sp, story, cut) {
+  const beats = forgeTour(sp, story, cut), last = beats[beats.length - 1]
+  const seconds = Math.round(Math.min(75, Math.max(8, last ? last.at + last.dur : 8)) * REC.fps) / REC.fps
+  if (cut.music === 'own') return ownTrack ? fitTrack(ownTrack, seconds) : null
+  if (!cut.music || cut.music === 'none') return null
+  let seed = 7; for (const ch of `${sp.name}|${cut.music}`) seed = Math.imul(seed ^ ch.charCodeAt(0), 16777619)
+  return renderScore(beats, cut.music, seconds, seed)
+}
 const cuts = new Map((() => { try { return Object.entries(JSON.parse(localStorage.getItem('gremlins.forge.cuts') || '{}')) } catch { return [] } })())
 function openCut() {
   const sp = spec(); if (!sp || !glOK || ctl) return
@@ -1193,6 +1208,10 @@ function openCut() {
     opts('cutCloser').innerHTML = `<label><input type="checkbox" name="closer" ${was.closer ? 'checked' : ''}> End on a call to action with a QR code</label>
       <input class="ct" name="closerHead" maxlength="60" value="${esc(was.closer?.headline ?? defHead)}" aria-label="Closer headline">
       <input class="cc" name="closerUrl" type="url" maxlength="200" value="${esc(was.closer?.url ?? defUrl)}" aria-label="Closer link">`
+    // music: a score composed to the cut in one of the styles, silence, or a track of your own
+    const pick = was.music ?? 'pulse'
+    const label = (k, v) => { const [name, what] = v.split(': '); return `<label><input type="radio" name="music" value="${k}" ${pick === k ? 'checked' : ''}><b>${esc(name)}</b>${what ? `<small>${esc(what)}</small>` : ''}</label>` }
+    opts('cutMusic').innerHTML = Object.entries(FORGE_MUSIC).filter(([k]) => k !== 'none').map(([k, v]) => label(k, v)).join('') + label('own', 'Your own track: an audio file you have the rights to') + label('none', FORGE_MUSIC.none)
     if (was.instructions !== undefined) $('cutAsk').value = was.instructions
   }
   const read = () => {
@@ -1200,7 +1219,7 @@ function openCut() {
     const text = {}
     for (const i of form.querySelectorAll('input[data-key]')) if (i.value.trim()) (text[i.dataset.key] ??= {})[i.dataset.f] = i.value.trim()
     const closer = fd.has('closer') ? { headline: String(fd.get('closerHead') || '').trim(), url: String(fd.get('closerUrl') || '').trim() } : undefined
-    return { goals: fd.getAll('goal').map(String), spotlight: fd.getAll('spot').map(String), modes: fd.getAll('mode').map(String), motive: fd.has('motive'), exploded: fd.has('exploded'), text, ...(closer ? { closer } : {}), ...plan }
+    return { goals: fd.getAll('goal').map(String), spotlight: fd.getAll('spot').map(String), modes: fd.getAll('mode').map(String), motive: fd.has('motive'), exploded: fd.has('exploded'), text, ...(closer ? { closer } : {}), music: String(fd.get('music') || 'none'), ...plan }
   }
   const showPlan = () => {
     const bits = []
@@ -1251,6 +1270,24 @@ function openCut() {
       if (e.name !== 'AbortError') { note.textContent = e.message; note.className = 'cut-note bad'; note.hidden = false }
     } finally { asking = null; btn.disabled = false; btn.textContent = 'Apply with Claude' }
   }
+  // music: choosing your own track asks for the file; Preview plays the music as it will be in this cut
+  const showTrack = () => { $('cutTrackName').textContent = ownTrack ? `${ownTrack.name} (${(ownTrack.size / 1048576).toFixed(1)} MB)` : '' }
+  showTrack()
+  form.querySelector('#cutMusic').addEventListener('change', (e) => { if (e.target.value === 'own' && !ownTrack) $('cutTrack').click() })
+  $('cutTrack').onchange = () => { ownTrack = $('cutTrack').files?.[0] || null; showTrack(); if (!ownTrack) form.querySelector('input[name=music][value=pulse]').checked = true }
+  let stopHear = null
+  const quiet = () => { stopHear?.(); stopHear = null; $('cutHear').textContent = '▶ Preview' }
+  $('cutHear').onclick = async () => {
+    if (stopHear) return quiet()
+    const cut = read(); if (cut.music === 'none') return
+    $('cutHear').textContent = 'Composing…'
+    try {
+      const buf = await filmMusic(sp, story, cut)
+      if (!buf) return quiet()
+      stopHear = playPreview(buf); $('cutHear').textContent = '■ Stop'
+    } catch (e) { quiet(); setStatus(`The music couldn’t play: ${e.message}`, true) }
+  }
+  dlg.addEventListener('close', quiet, { once: true })
   $('cutCancel').onclick = () => { asking?.abort(); dlg.close() }
   form.onsubmit = (e) => {
     e.preventDefault()

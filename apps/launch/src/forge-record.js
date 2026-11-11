@@ -18,15 +18,48 @@ export async function videoSupport(width, height, fps) {
   return null
 }
 
+/** An audio codec this browser can encode, as the encoder and the muxer each name it: AAC first (plays everywhere), else Opus. */
+export async function audioSupport(sampleRate, numberOfChannels) {
+  if (typeof AudioEncoder === 'undefined' || typeof AudioData === 'undefined') return null
+  for (const [codec, muxCodec] of [['mp4a.40.2', 'aac'], ['opus', 'opus']]) {
+    const cfg = { codec, sampleRate, numberOfChannels, bitrate: 192_000 }
+    try { if ((await AudioEncoder.isConfigSupported(cfg)).supported) return { cfg, muxCodec } } catch { /* next */ }
+  }
+  return null
+}
+
+/** Encodes a whole AudioBuffer into the muxer's audio track. */
+async function encodeAudio(buffer, cfg, muxer, onError) {
+  const enc = new AudioEncoder({ output: (chunk, meta) => muxer.addAudioChunk(chunk, meta), error: onError })
+  enc.configure(cfg)
+  const n = buffer.length, ch = buffer.numberOfChannels, step = 4800
+  for (let i = 0; i < n; i += step) {
+    const len = Math.min(step, n - i), data = new Float32Array(len * ch)
+    for (let c = 0; c < ch; c++) data.set(buffer.getChannelData(c).subarray(i, i + len), c * len)
+    const ad = new AudioData({ format: 'f32-planar', sampleRate: buffer.sampleRate, numberOfFrames: len, numberOfChannels: ch, timestamp: Math.round((i / buffer.sampleRate) * 1e6), data })
+    enc.encode(ad); ad.close()
+  }
+  await enc.flush(); enc.close()
+}
+
 /**
  * Encodes `frames` frames: `draw(i)` paints frame i onto `canvas` (and may be async). Returns the MP4 as a Blob.
  * `onProgress(done, total)` reports as it goes; aborting `signal` stops it.
  */
-export async function encodeVideo({ canvas, frames, fps, draw, onProgress, signal }) {
+export async function encodeVideo({ canvas, frames, fps, draw, onProgress, signal, audio }) {
   const cfg = await videoSupport(canvas.width, canvas.height, fps)
   if (!cfg) throw new Error('This browser can’t encode video. Try Chrome, Edge or Safari 17 or newer.')
-  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: canvas.width, height: canvas.height }, fastStart: 'in-memory' })
+  const sound = audio ? await audioSupport(audio.sampleRate, audio.numberOfChannels) : null
+  if (audio && !sound) throw new Error('This browser can’t encode the music. Try Chrome or Edge, or cut it without music.')
+  const muxer = new Muxer({
+    target: new ArrayBufferTarget(), fastStart: 'in-memory',
+    video: { codec: 'avc', width: canvas.width, height: canvas.height },
+    ...(sound ? { audio: { codec: sound.muxCodec, sampleRate: audio.sampleRate, numberOfChannels: audio.numberOfChannels } } : {}),
+  })
   let failed = null
+  // the music first: it's short work, and the muxer sorts the two tracks out when it finishes
+  if (sound) await encodeAudio(audio, sound.cfg, muxer, (e) => { failed = e })
+  if (failed) throw failed
   const encoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: (e) => { failed = e } })
   encoder.configure(cfg)
   const us = 1e6 / fps
