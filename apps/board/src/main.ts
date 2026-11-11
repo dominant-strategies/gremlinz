@@ -28,12 +28,13 @@ const photo = process.env.FORGE_PHOTO_PROVIDER === 'off' ? undefined : photoProv
 // Hatch custody for Fluence eggs (see hatch.ts, hatch-live.ts for the env it needs); off unless configured.
 const hatch = hatchFromEnv(process.env, dbPath)
 const app = await createBoard({ store, config: configFromEnv(), forge: { designer, photo }, hatch })
-const worker = hatch && hatchWorker({ store: hatch.store, cfg: hatch.cfg, deps: liveHatchDeps(process.env, store) })
+// The worker's 2-of-2 signers and the routes the makers' pages talk to share one coordinator.
+const worker = hatch && hatchWorker({ store: hatch.store, cfg: hatch.cfg, deps: liveHatchDeps(process.env, store, hatch.mpc) })
 worker?.start()
 const server = serve({ fetch: app.fetch, port, hostname: process.env.HOST ?? '0.0.0.0' }, (info) => {
   console.log(`gremlins board listening on http://${info.address}:${info.port} (db: ${dbPath})`)
   console.log(`forge: design ${designer ? 'on' : 'off'}, photo ${photo ? `${photo.name} (${photo.model})` : 'off'}`)
-  console.log(`hatch on Fluence: ${hatch ? `on (${hatch.cfg.image}, eggs talk to ${hatch.cfg.publicUrl})` : 'off'}`)
+  console.log(`hatch on Fluence: ${hatch ? `on (${hatch.cfg.custody} custody, ${hatch.cfg.image}, eggs talk to ${hatch.cfg.publicUrl})` : 'off'}`)
 })
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const)

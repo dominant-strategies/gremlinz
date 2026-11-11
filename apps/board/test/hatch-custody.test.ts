@@ -2,9 +2,12 @@ import { mkdtempSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { SigningKey, Wallet, hexlify, randomBytes } from 'ethers'
-import { configHash, hatchProof, openHostingHandover, signMessage } from '@gremlins/hatch'
-import { TopUpUnderReview, type TopUpAuthorization } from '@gremlins/hosting'
+import { SigningKey, Wallet, computeAddress, getAddress, hexlify, randomBytes, verifyMessage, verifyTypedData } from 'ethers'
+import { createSiweMessage } from 'viem/siwe'
+import { configHash, hatchProof, openHostingHandover, sealBrowserShard, signMessage } from '@gremlins/hatch'
+import { TopUpUnderReview, localSigner, type HostingSigner, type TopUpAuthorization, type TypedDataToSign } from '@gremlins/hosting'
+import { BASE_QUAI, BASE_USDC, COW_SETTLEMENT, COW_VAULT_RELAYER, browserKeygen, cosignOnce, digestOf, party2Sign, httpMpcTransport, mpcAuthOf, mpcCoordinator, shareScalar, type CosignEvent, type PolicyContext } from '@gremlins/hosting/mpc'
+import { ORDER_TYPES } from '@gremlins/treasury'
 import { EggLaunchData, announcement as eggAnnouncement, generatePhrase, hostingStep, httpBoardClient, keysFromPhrase, type HostingFile } from '@gremlins/egg'
 import { HatchStore } from '../src/hatch-store.ts'
 import { hatchWorker, type FluenceClient, type HatchConfig, type HatchDeps } from '../src/hatch.ts'
@@ -15,6 +18,23 @@ const cfg: HatchConfig = { image: 'ghcr.io/gremlins/egg@sha256:' + 'c'.repeat(64
 const MICRO = 1_000_000n
 
 type TopUpMode = 'ok' | 'review' | 'lost' // lost: signed and sent, then the response never came back
+const FLUENCE_PAYEE = '0x000000000000000000000000000000000000fee5'
+const QUAI = 10n ** 18n
+
+/** What the real clients sign, built here so every signature in these tests goes through the job's HostingSigner. */
+const transferAuth = (from: string, value: bigint, validBefore: number, nonce: string): TypedDataToSign => ({
+  domain: { name: 'USD Coin', version: '2', chainId: 8453, verifyingContract: getAddress(BASE_USDC) },
+  types: { TransferWithAuthorization: [
+    { name: 'from', type: 'address' }, { name: 'to', type: 'address' }, { name: 'value', type: 'uint256' },
+    { name: 'validAfter', type: 'uint256' }, { name: 'validBefore', type: 'uint256' }, { name: 'nonce', type: 'bytes32' },
+  ] },
+  primaryType: 'TransferWithAuthorization',
+  message: { from, to: FLUENCE_PAYEE, value, validAfter: BigInt(validBefore - 900), validBefore: BigInt(validBefore), nonce },
+})
+const verifies = async (signer: HostingSigner, td: TypedDataToSign) => {
+  const sig = await signer.signTypedData(td)
+  expect(verifyTypedData(td.domain, td.types as never, td.message, sig)).toBe(signer.address)
+}
 
 /** Fake Fluence + Base: one shared world, so a "restarted" worker sees what the old one did. */
 function world(clock: { now: number }) {
@@ -32,14 +52,15 @@ function world(clock: { now: number }) {
     /** Whether a "lost" payment actually settled on-chain. */
     lostSettles: false,
   }
-  const fluenceFor = (key: string): FluenceClient => {
-    const address = new Wallet(key).address
+  const fluenceFor = (signer: HostingSigner): FluenceClient => {
+    const address = signer.address
     let token = false
     const authed = () => { if (!token) throw new Error('call login() first') }
     return {
       async topUp(amountUsd, o) {
         const auth: TopUpAuthorization = { primaryType: 'TransferWithAuthorization', nonce: hexlify(randomBytes(32)), validBefore: Math.floor(clock.now / 1000) + 300, value: String(BigInt(amountUsd) * MICRO) }
         await o.onAuthorization?.(auth)
+        await verifies(signer, transferAuth(address, BigInt(amountUsd) * MICRO, auth.validBefore, auth.nonce)) // not sent unless signed
         w.topUps.push({ address, auth })
         const pay = () => {
           w.usedNonces.add(auth.nonce)
@@ -56,6 +77,8 @@ function world(clock: { now: number }) {
       },
       async login() {
         if (!w.deposited.get(address)) throw new Error('Fluence sign-in failed (401): no account')
+        const message = createSiweMessage({ domain: 'api.fluence.dev', address: getAddress(address) as `0x${string}`, uri: 'https://api.fluence.dev', version: '1', chainId: 8453, nonce: 'n' + hexlify(randomBytes(8)).slice(2), issuedAt: new Date(clock.now) })
+        expect(verifyMessage(message, await signer.signMessage(message))).toBe(address)
         token = true
         w.logins.push({ address, at: clock.now })
       },
@@ -82,8 +105,12 @@ function world(clock: { now: number }) {
       usdc: async (a) => w.usdc.get(a) ?? 0n,
       quai: async (a) => w.quai.get(a) ?? 0n,
       authorizationUsed: async (_a, nonce) => w.usedNonces.has(nonce),
-      async sellQuai(key, amount) {
-        const a = new Wallet(key).address
+      async sellQuai(signer, amount) {
+        const a = signer.address
+        // what gaslessSell signs: the permit for CoW's vault relayer, then the order
+        const t = Math.floor(clock.now / 1000)
+        await verifies(signer, { domain: { name: 'Symbiosis', version: '1', chainId: 8453, verifyingContract: BASE_QUAI }, types: { Permit: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }, { name: 'value', type: 'uint256' }, { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint256' }] }, primaryType: 'Permit', message: { owner: a, spender: COW_VAULT_RELAYER, value: amount, nonce: 0n, deadline: BigInt(t + 3600) } })
+        await verifies(signer, { domain: { name: 'Gnosis Protocol', version: 'v2', chainId: 8453, verifyingContract: COW_SETTLEMENT }, types: ORDER_TYPES as never, primaryType: 'Order', message: { sellToken: BASE_QUAI, buyToken: BASE_USDC, receiver: a, sellAmount: amount, buyAmount: (amount / QUAI) * MICRO / 10n, validTo: t + 1800, appData: '0x' + '00'.repeat(32), feeAmount: 0n, kind: 'sell', partiallyFillable: false, sellTokenBalance: 'erc20', buyTokenBalance: 'erc20' } })
         w.swaps.push({ address: a, amount })
         w.quai.set(a, 0n)
         w.usdc.set(a, (w.usdc.get(a) ?? 0n) + (amount / 10n ** 18n) * MICRO / 10n) // 10 QUAI per USDC
@@ -134,7 +161,7 @@ describe('hatch custody: jobs', () => {
     const s = await setup()
     const r = await s.b.postJson('/api/hatch/fluence', s.body)
     expect(r.status).toBe(201)
-    expect(r.body).toEqual({ jobId: expect.any(String), hostingAddress: expect.stringMatching(/^0x[0-9a-fA-F]{40}$/), minUsd: 10 })
+    expect(r.body).toEqual({ jobId: expect.any(String), custody: 'local', status: 'funding', hostingAddress: expect.stringMatching(/^0x[0-9a-fA-F]{40}$/), minUsd: 10 })
     const job = s.hatchStore.get(r.body.jobId)!
     expect(new Wallet(job.key!).address).toBe(r.body.hostingAddress)
     // at rest: encrypted, not in the JSON data
@@ -329,7 +356,7 @@ describe('hatch custody: crash safety', () => {
     s.w.usdc.set(hostingAddress, 10n * MICRO)
     const toppedUp = await until(s, jobId, 'topped-up')
     // crash after Fluence made the draft but before we saved its id
-    const fl = s.d.fluence(toppedUp.key!)
+    const fl = s.d.fluence(localSigner(toppedUp.key! as `0x${string}`))
     await fl.login()
     await fl.createDraft({ name: 'x', plan: await fl.cheapestPlan(), imageId: 'u24', cloudInit: '', idempotencyKey: `egg-${s.launchId}` })
     await until(s, jobId, 'launching')
@@ -410,4 +437,218 @@ describe('hatch custody: crash safety', () => {
     await until(s, jobId, 'topped-up')
     expect(s.w.topUps).toHaveLength(0)
   })
+})
+
+// ---------------------------------------------------------------- 2-of-2 (the maker's page holds the other key share)
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+async function setupMpc() {
+  const hatchStore = new HatchStore(':memory:', SECRET)
+  const mpc = mpcCoordinator({ waitMs: 5_000 })
+  const mcfg: HatchConfig = { ...cfg, custody: 'mpc' }
+  const b = await makeBoard({}, { hatch: { store: hatchStore, cfg: mcfg, mpc } })
+  const { w, deps } = world(b.clock)
+  const d = { ...deps(b), mpc }
+  const worker = hatchWorker({ store: hatchStore, cfg: mcfg, deps: d, log: () => {} })
+  const maker = Wallet.createRandom()
+  const config = makeConfig(maker.address)
+  const launchId = 'launch-' + hexlify(randomBytes(6)).slice(2)
+  const secret = hexlify(randomBytes(32))
+  const body = { maker: maker.address, configHash: configHash(config), launchId, boardUrl: cfg.publicUrl, mpcAuth: await mpcAuthOf(secret) }
+  const fetchApp = ((url: string, init?: RequestInit) => b.app.request(new URL(url).pathname + new URL(url).search, init)) as typeof fetch
+  return { b, w, d, mpc, hatchStore, worker, maker, config, launchId, body, secret, fetchApp, path: ':memory:' }
+}
+type MpcSetup = Awaited<ReturnType<typeof setupMpc>>
+
+/** The maker's hatch page: key generation, then co-signing in the background until stopped. */
+async function makerPage(s: MpcSetup, jobId: string, held?: { share: string; address: string }) {
+  const t = httpMpcTransport(cfg.publicUrl, jobId, s.secret, s.fetchApp)
+  let mine = held
+  if (!mine) {
+    mine = await browserKeygen(t, jobId)
+    await t.confirmKeygen(mine.address) // after the page stored its shard
+  }
+  const ctx: PolicyContext = {
+    hostingAddress: mine.address, maxTopUpMicro: BigInt(cfg.topUpUsd) * MICRO, now: () => s.b.clock.now,
+    fluencePayTo: async () => [FLUENCE_PAYEE], cowQuote: async (sell) => (sell / QUAI) * MICRO / 10n,
+  }
+  const events: CosignEvent[] = []
+  let on = true
+  const loop = (async () => {
+    while (on) if (!(await cosignOnce(t, jobId, mine!.share, ctx, (e) => events.push(e)).catch(() => false))) await sleep(3)
+  })()
+  while (!s.mpc.present(jobId)) await sleep(1) // its first poll has landed
+  return { ...mine, events, t, stop: async () => { on = false; await loop } }
+}
+
+describe('hatch custody: 2-of-2 with the maker’s page', () => {
+  it('keygen → fund → top-up, sign-in and hand-over, all co-signed; the key exists only in the egg', async () => {
+    const s = await setupMpc()
+    const r = await s.b.postJson('/api/hatch/fluence', s.body)
+    expect(r.status).toBe(201)
+    expect(r.body).toMatchObject({ custody: 'mpc', status: 'keygen', hostingAddress: null })
+    const jobId = r.body.jobId
+    await s.worker.tick()
+    expect(s.hatchStore.get(jobId)!.status).toBe('keygen') // the worker waits for the page
+
+    const page = await makerPage(s, jobId)
+    const job = s.hatchStore.get(jobId)!
+    expect(job).toMatchObject({ status: 'funding', hostingAddress: getAddress(page.address), custody: 'mpc' })
+    // the board holds a share, not the key: its scalar alone is not the account
+    expect(new Wallet(shareScalar(job.key!)).address).not.toBe(job.hostingAddress)
+    expect(JSON.stringify(s.hatchStore.raw(jobId))).not.toContain(shareScalar(page.share).slice(2))
+
+    s.w.quai.set(job.hostingAddress, 120n * QUAI) // QUAI bridged in: the page co-signs the permit and the order
+    const launching = await until(s as never, jobId, 'launching')
+    expect(s.w.swaps).toHaveLength(1)
+    expect(s.w.topUps).toHaveLength(1)
+    expect(s.w.logins.length).toBeGreaterThan(0)
+    expect(page.events.filter((e) => 'verdict' in e).map((e) => ('verdict' in e && e.verdict.ok ? e.verdict.kind : 'refused'))).toEqual(expect.arrayContaining(['cow-permit', 'cow-order', 'x402', 'siwe']))
+    expect(page.events.some((e) => 'verdict' in e && !e.verdict.ok)).toBe(false)
+
+    s.w.vms.get(launching.vmId!)!.status = 'launched'
+    await until(s as never, jobId, 'launched')
+    const egg = await eggBoots(s as never, jobId)
+    const done = await until(s as never, jobId, 'done')
+    expect(done.key).toBeNull()
+    expect(s.hatchStore.raw(jobId)!.key_enc).toBeNull()
+
+    // the board's half alone: the egg can't open an account with it
+    let h = await s.b.json(`/api/hatch/handoff/${egg.address}`)
+    expect(h.body.browserHandoff).toBeNull()
+
+    // the page sees the claim, checks the egg is the announced one for its launch, and seals its shard to it
+    const view = (await s.b.json(`/api/hatch/${jobId}`)).body.job
+    expect(computeAddress(view.eggPublicKey)).toBe(view.eggAddress)
+    const announced = (await s.b.json(`/api/eggs?launchId=${s.launchId}`)).body.egg
+    expect(announced.address.toLowerCase()).toBe(view.eggAddress.toLowerCase())
+    const sealed = await sealBrowserShard(view.eggPublicKey, { v: 2, custody: 'mpc', launchId: s.launchId, hostingAddress: page.address, shard: shareScalar(page.share) })
+    const post = (body: unknown, secret = s.secret) => s.b.json(`/api/hatch/${jobId}/mpc/handoff`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hatch-auth': secret }, body: JSON.stringify(body) })
+    expect((await post({ sealed }, hexlify(randomBytes(32)))).status).toBe(403)
+    expect((await post({ sealed })).status).toBe(201)
+    await page.stop()
+
+    h = await s.b.json(`/api/hatch/handoff/${egg.address}`)
+    const opened = await openHostingHandover(egg.signingKey, h.body.handoff, h.body.browserHandoff)
+    expect(new Wallet(opened.hostingKey).address).toBe(job.hostingAddress)
+    expect(opened).toMatchObject({ v: 1, vmId: launching.vmId, hostingAddress: job.hostingAddress })
+  }, 60_000)
+
+  it('authenticates the page: wrong secret, another browser, a board without mpcAuth', async () => {
+    const s = await setupMpc()
+    const { jobId } = (await s.b.postJson('/api/hatch/fluence', s.body)).body
+    const keygen = (secret: string) => s.b.json(`/api/hatch/${jobId}/mpc/keygen`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-hatch-auth': secret }, body: JSON.stringify({ msg: null }) })
+    expect((await keygen(hexlify(randomBytes(32)))).status).toBe(403)
+    expect((await keygen('')).status).toBe(403)
+    expect((await s.b.postJson('/api/hatch/fluence', { ...s.body, mpcAuth: await mpcAuthOf(hexlify(randomBytes(32))) })).status).toBe(409)
+    expect((await s.b.postJson('/api/hatch/fluence', s.body)).body.jobId).toBe(jobId)
+    const { mpcAuth: _a, ...noAuth } = s.body
+    expect((await s.b.postJson('/api/hatch/fluence', { ...noAuth, launchId: 'other' })).status).toBe(400)
+    // a funding address only once the page confirmed it holds its shard
+    expect((await s.b.json(`/api/hatch/${jobId}`)).body.job).toMatchObject({ status: 'keygen', hostingAddress: null })
+    // nothing to sign for a stranger
+    expect((await s.b.json(`/api/hatch/${jobId}/mpc/sign`, { headers: { 'x-hatch-auth': hexlify(randomBytes(32)) } })).status).toBe(403)
+  }, 60_000)
+
+  it('page closed: nothing is journalled or paid; reopened from the same browser, it carries on', async () => {
+    const s = await setupMpc()
+    const { jobId } = (await s.b.postJson('/api/hatch/fluence', s.body)).body
+    const page = await makerPage(s, jobId)
+    await page.stop()
+    s.b.clock.now += 61_000
+    s.w.usdc.set(page.address, 10n * MICRO)
+    await s.worker.tick() // funding → paying (no signature needed)
+    // the page is not polling: wait out the presence window, then the worker must not start a payment
+    s.mpc.forget(jobId)
+    for (let i = 0; i < 3; i++) {
+      s.b.clock.now += 61_000
+      await s.worker.tick()
+    }
+    const waiting = s.hatchStore.get(jobId)!
+    expect(waiting.status).toBe('paying')
+    expect(waiting.topUp).toBeUndefined() // no authorization journalled without the page
+    expect(waiting.error).toMatch(/hatch page is not open/)
+    expect(s.w.topUps).toHaveLength(0)
+
+    const again = await makerPage(s, jobId, { share: page.share, address: page.address }) // same browser, shard from storage
+    await until(s as never, jobId, 'topped-up')
+    expect(s.w.topUps).toHaveLength(1)
+    await again.stop()
+  }, 60_000)
+
+  it('a signing session lost mid-top-up (board restart) never pays twice', async () => {
+    const s = await setupMpc()
+    const { jobId } = (await s.b.postJson('/api/hatch/fluence', s.body)).body
+    const page = await makerPage(s, jobId)
+    s.w.usdc.set(page.address, 20n * MICRO)
+    s.w.topUpMode = 'lost'
+    s.w.lostSettles = true
+    await until(s as never, jobId, 'paying')
+    await s.worker.tick() // signed with the page, sent; the response is lost
+    expect(s.w.topUps).toHaveLength(1)
+    expect(s.hatchStore.get(jobId)!.topUp!.auths).toHaveLength(1)
+    s.mpc.forget(jobId) // the coordinator's sessions die with the process
+    s.w.topUpMode = 'ok'
+    await until(s as never, jobId, 'topped-up')
+    expect(s.w.topUps).toHaveLength(1)
+    expect(s.w.usdc.get(page.address)).toBe(10n * MICRO)
+    await page.stop()
+  }, 60_000)
+
+  it('a page that refuses (an unexpected payee) blocks the payment; nothing is sent', async () => {
+    const s = await setupMpc()
+    const { jobId } = (await s.b.postJson('/api/hatch/fluence', s.body)).body
+    const page = await makerPage(s, jobId)
+    await page.stop()
+    // the same browser, but Fluence (asked directly) names another payee than the board's request
+    const t = httpMpcTransport(cfg.publicUrl, jobId, s.secret, s.fetchApp)
+    const ctx: PolicyContext = { hostingAddress: page.address, maxTopUpMicro: 10n * MICRO, now: () => s.b.clock.now, fluencePayTo: async () => ['0x0000000000000000000000000000000000000001'] }
+    const events: CosignEvent[] = []
+    let on = true
+    const loop = (async () => { while (on) if (!(await cosignOnce(t, jobId, page.share, ctx, (e) => events.push(e)).catch(() => false))) await sleep(3) })()
+    while (!s.mpc.present(jobId)) await sleep(1)
+    s.w.usdc.set(page.address, 10n * MICRO)
+    s.b.clock.now += 61_000
+    await s.worker.tick() // funding → paying
+    s.b.clock.now += 61_000
+    await s.worker.tick() // the payment the page refuses
+    expect(s.hatchStore.get(jobId)!.error).toMatch(/refused to sign TransferWithAuthorization: payment to .*which Fluence does not name/)
+    s.b.clock.now += 61_000
+    await s.worker.tick() // the unsigned authorization is waited out, never sent
+    on = false
+    await loop
+    expect(events.some((e) => 'verdict' in e && !e.verdict.ok && /Fluence does not name/.test(e.verdict.reason))).toBe(true)
+    expect(s.w.topUps).toHaveLength(0)
+  }, 60_000)
+
+  it('a page that sends a bad final round freezes the job for good (Lindell 2017 abort rule)', async () => {
+    const s = await setupMpc()
+    const { jobId } = (await s.b.postJson('/api/hatch/fluence', s.body)).body
+    const page = await makerPage(s, jobId)
+    await page.stop()
+    // a hostile page probing the board's share: it tampers with its last message
+    let on = true
+    const hostile = (async () => {
+      while (on) {
+        const req = await page.t.poll().catch(() => null)
+        if (!req) { await sleep(3); continue }
+        const p2 = party2Sign(jobId, req.id, page.share, digestOf(req.payload))
+        const m3 = (await page.t.answer(req.id, { msg: (await p2.step(req.msg)).msg! })).msg
+        const m4 = JSON.parse((await p2.step(m3)).msg!)
+        m4.c3 = m4.c3.replace(/^./, (ch: string) => (ch === 'A' ? 'B' : 'A'))
+        await page.t.answer(req.id, { msg: JSON.stringify(m4) }).catch(() => {})
+      }
+    })()
+    while (!s.mpc.present(jobId)) await sleep(1)
+    s.w.usdc.set(page.address, 10n * MICRO)
+    await until(s as never, jobId, 'failed', s.worker, s.hatchStore, 4)
+    on = false
+    await hostile
+    const job = s.hatchStore.get(jobId)!
+    expect(job).toMatchObject({ status: 'failed', mpcAbortedAt: expect.any(Number) })
+    expect(job.error).toMatch(/aborted for good.*frozen/)
+    expect(s.w.topUps).toHaveLength(0)
+    expect((await s.b.json(`/api/hatch/${jobId}`)).body.job.mpcAborted).toBe(true)
+  }, 60_000)
 })

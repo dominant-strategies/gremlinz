@@ -52,7 +52,13 @@ export class MakerAway extends Error {
   }
 }
 
-export const keygenSessionId = (jobId: string) => `gremlins-hatch-keygen:${jobId}`
+/** What the board keeps of the page's per-job secret (0x + 32 bytes hex): its SHA-256, 0x-hex. */
+export async function mpcAuthOf(secret: string): Promise<string> {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret.toLowerCase()))
+  return `0x${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('')}`
+}
+
+export const keygenSessionId =(jobId: string) => `gremlins-hatch-keygen:${jobId}`
 export const signSessionId = (jobId: string, reqId: string) => `gremlins-hatch-sign:${jobId}:${reqId}`
 
 const jsonSafe = (v: unknown): unknown =>

@@ -2,6 +2,8 @@
  * Hatch jobs (hatch.ts), in their own SQLite file (mode 0600), apart from the public board data. The hosting key and the
  * egg's hatch secret are encrypted at rest (AES-256-GCM, key from BOARD_HATCH_SECRET, bound to the job id) and set to
  * NULL once the key is sealed to its egg; secure_delete and a WAL checkpoint keep the old pages from lingering.
+ * 2-of-2 jobs keep the board's key share where the key would be; the maker's shard is never here (only, at the end,
+ * sealed to the egg in `browser_handoff`).
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { closeSync, openSync } from 'node:fs'
@@ -10,6 +12,7 @@ import type { Sealed } from '@gremlins/hatch'
 import type { TopUpAuthorization } from '@gremlins/hosting'
 
 export type HatchStatus =
+  | 'keygen' // 2-of-2: waiting for the maker's page to finish key generation
   | 'funding' // waiting for USDC (or bridged QUAI) at the hosting address
   | 'paying' // x402 top-up started; resolved before anything else is paid
   | 'topped-up' // Fluence credited
@@ -25,12 +28,19 @@ export interface HatchJob {
   maker: string
   configHash: string
   boardUrl: string
+  /** '' until 2-of-2 key generation has finished. */
   hostingAddress: string
   status: HatchStatus
+  /** Who holds the account key: the board alone (dev/tests) or 2-of-2 with the maker's page. Absent: local. */
+  custody?: 'local' | 'mpc'
+  /** 2-of-2: SHA-256 of the maker page's per-job secret (it authenticates the MPC endpoints). */
+  mpcAuth?: string
+  /** 2-of-2: a final signature failed its check; the board share never signs again. */
+  mpcAbortedAt?: number
   topUpUsd: number
   createdAt: number
   updatedAt: number
-  /** Plaintext in memory only; null once handed off. */
+  /** Plaintext in memory only; null once handed off. 2-of-2: the board's key share (JSON), not the key. */
   key: string | null
   /** Hatch secret in the egg's cloud-init; null once handed off. */
   secret: string | null
@@ -50,6 +60,8 @@ export interface HatchJob {
   launchedAt?: number
   claim?: { address: string; publicKey: string; at: number }
   handoff?: Sealed
+  /** 2-of-2: the maker's shard, sealed to the egg by its page (the board can't open it). */
+  browserHandoff?: Sealed
   handedOffAt?: number
   keyDeletedAt?: number
   error?: string
@@ -89,6 +101,7 @@ CREATE TABLE IF NOT EXISTS hatch_jobs (
   status      TEXT NOT NULL,
   key_enc     TEXT,
   secret_enc  TEXT,
+  browser_handoff TEXT,
   data        TEXT NOT NULL,
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL
@@ -98,8 +111,8 @@ CREATE INDEX IF NOT EXISTS hatch_jobs_status ON hatch_jobs(status);
 
 const TERMINAL: HatchStatus[] = ['done', 'failed']
 
-type Row = { id: string; key_enc: string | null; secret_enc: string | null; claim: string | null; data: string }
-const COLS = 'id, key_enc, secret_enc, claim, data'
+type Row = { id: string; key_enc: string | null; secret_enc: string | null; claim: string | null; browser_handoff: string | null; data: string }
+const COLS = 'id, key_enc, secret_enc, claim, browser_handoff, data'
 
 export class HatchStore {
   private db: DatabaseSync
@@ -113,6 +126,8 @@ export class HatchStore {
     this.db = new DatabaseSync(path)
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA secure_delete = ON;')
     this.db.exec(SCHEMA)
+    const cols = (this.db.prepare('PRAGMA table_info(hatch_jobs)').all() as { name: string }[]).map((c) => c.name)
+    if (!cols.includes('browser_handoff')) this.db.exec('ALTER TABLE hatch_jobs ADD COLUMN browser_handoff TEXT')
   }
 
   private toJob(r: Row | undefined): HatchJob | null {
@@ -121,6 +136,7 @@ export class HatchStore {
     job.key = r.key_enc ? this.box.open(r.key_enc, `key:${r.id}`) : null
     job.secret = r.secret_enc ? this.box.open(r.secret_enc, `secret:${r.id}`) : null
     if (r.claim) job.claim = JSON.parse(r.claim)
+    if (r.browser_handoff) job.browserHandoff = JSON.parse(r.browser_handoff)
     return job
   }
 
@@ -162,6 +178,25 @@ export class HatchStore {
     }
   }
 
+  /**
+   * API-side change to a job the worker leaves alone (2-of-2 key generation: the worker skips `keygen` jobs). `key`
+   * sets the encrypted key column.
+   */
+  update(id: string, fn: (job: HatchJob) => void, key?: string): HatchJob | null {
+    const job = this.get(id)
+    if (!job) return null
+    fn(job)
+    if (key !== undefined) this.db.prepare('UPDATE hatch_jobs SET key_enc = ? WHERE id = ?').run(this.box.seal(key, `key:${id}`), id)
+    this.save(job)
+    return job
+  }
+
+  /** The maker's sealed shard; first one wins (a resent copy is a different box of the same shard). */
+  setBrowserHandoff(id: string, sealed: Sealed): boolean {
+    this.db.prepare('UPDATE hatch_jobs SET browser_handoff = ? WHERE id = ? AND browser_handoff IS NULL').run(JSON.stringify(sealed), id)
+    return !!this.get(id)?.browserHandoff
+  }
+
   /** Drop the hosting key and hatch secret for good, and scrub them from the file. */
   forgetSecrets(id: string): void {
     this.db.prepare('UPDATE hatch_jobs SET key_enc = NULL, secret_enc = NULL WHERE id = ?').run(id)
@@ -184,7 +219,7 @@ export class HatchStore {
   }
 
   private data(job: HatchJob): string {
-    const { key: _k, secret: _s, claim: _c, ...rest } = job
+    const { key: _k, secret: _s, claim: _c, browserHandoff: _b, ...rest } = job
     return JSON.stringify(rest)
   }
 

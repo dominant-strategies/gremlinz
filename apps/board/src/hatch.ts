@@ -1,7 +1,7 @@
 /**
  * Hatch custody for Fluence eggs: nobody, not the maker and not us, keeps control of a gremlin's hosting account.
  *
- *   funding ─USDC at the hosting address (QUAI bridged there is swapped)─► paying ─x402 credited─► topped-up
+ *   [keygen ─maker's page finishes 2-of-2 key generation─►] funding ─USDC at the hosting address (QUAI bridged there is swapped)─► paying ─x402 credited─► topped-up
  *   ─VM draft─► launching ─running─► launched ─egg claims with its hatch proof─► handed-off ─key forgotten─► done
  *
  * The backend makes a fresh account key (on Fluence the paying wallet is the account), renders the egg's cloud-init
@@ -9,17 +9,23 @@
  * funded the address, seals the key to the egg that proves the secret, and deletes its copy. The egg then sweeps the
  * account (packages/hosting fluence-cleanup) against anything our session could still do.
  *
+ * 2-of-2 custody (`cfg.custody: 'mpc'`, @gremlins/hosting/mpc): there is no account key here, only the board's share;
+ * the maker's hatch page holds the other and co-signs each signature (after checking it is one this hatch needs). The
+ * board seals its share to the egg, the page seals its own, and the egg alone multiplies them into the key. While the
+ * page is closed, steps that sign wait (MakerAway); a final signature that fails its check freezes the job (MpcAbort).
+ *
  * Every step persists before it acts and is safe to resume after a crash. Money moves in one place only, the x402
  * top-up, and never twice: each payment authorization is recorded before it is signed, and an unfinished top-up is
  * resolved (authorization used on-chain, Fluence shows a deposit, or the authorization expired unused) before another
  * is attempted. A 409 "under review" is never paid again.
  *
- * One worker per board (the board is single-process SQLite); jobs are stepped one at a time.
+ * One worker per board (the board is single-process SQLite); each tick steps every due job once, side by side.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { Wallet, computeAddress, hexlify } from 'ethers'
 import { hatchProof, sealHostingHandover, type HatchClaim, type Sealed } from '@gremlins/hatch'
-import { TopUpUnderReview, eggVmName, type Plan, type TopUpAuthorization } from '@gremlins/hosting'
+import { TopUpUnderReview, eggVmName, localSigner, type HostingSigner, type Plan, type TopUpAuthorization } from '@gremlins/hosting'
+import { MakerAway, MpcAbort, shareScalar, type MpcCoordinator } from '@gremlins/hosting/mpc'
 import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
 import type { HatchJob, HatchStore } from './hatch-store.ts'
 
@@ -37,16 +43,18 @@ export interface FluenceClient {
 
 export interface HatchDeps {
   now: () => number
-  fluence: (privateKey: string) => FluenceClient
-  /** Base chain reads and the gasless QUAI→USDC sale, signed by the hosting key. */
+  fluence: (signer: HostingSigner) => FluenceClient
+  /** Base chain reads and the gasless QUAI→USDC sale, signed by the hosting account's signer. */
   base: {
     usdc(address: string): Promise<bigint>
     quai(address: string): Promise<bigint>
     authorizationUsed(authorizer: string, nonce: string): Promise<boolean>
-    sellQuai(privateKey: string, amount: bigint): Promise<{ uid: string; status: string }>
+    sellQuai(signer: HostingSigner, amount: bigint): Promise<{ uid: string; status: string }>
   }
   /** The board's record of the egg announced under a launchId. */
   findEgg(launchId: string): Promise<{ address: string; maker: string; configHash: string } | null>
+  /** 2-of-2 signing sessions with makers' pages; shared with the HTTP routes. Required for 'mpc' jobs. */
+  mpc?: MpcCoordinator
 }
 
 export interface HatchConfig {
@@ -58,6 +66,8 @@ export interface HatchConfig {
   /** The board eggs must talk to (BOARD_PUBLIC_URL); a maker can't point an egg elsewhere. */
   publicUrl: string
   topUpUsd: number
+  /** New jobs: 2-of-2 with the maker's page ('mpc', production) or a board-held key ('local', dev and tests). */
+  custody?: 'local' | 'mpc'
 }
 
 const MIN = 60_000
@@ -80,12 +90,20 @@ export function eggCloudInit(cfg: HatchConfig, job: Pick<HatchJob, 'maker' | 'co
   })
 }
 
-export function newJob(cfg: HatchConfig, input: { maker: string; configHash: string; launchId: string; boardUrl: string }, now: number): HatchJob {
-  const key = hexlify(randomBytes(32))
-  const job: HatchJob = {
+/** `mpcAuth` (2-of-2 only): SHA-256 of the maker page's per-job secret. */
+export function newJob(cfg: HatchConfig, input: { maker: string; configHash: string; launchId: string; boardUrl: string; mpcAuth?: string }, now: number): HatchJob {
+  const base = {
     id: randomUUID(), launchId: input.launchId, maker: input.maker.toLowerCase(), configHash: input.configHash.toLowerCase(), boardUrl: input.boardUrl,
-    hostingAddress: new Wallet(key).address, status: 'funding', topUpUsd: cfg.topUpUsd, createdAt: now, updatedAt: now,
-    key, secret: hexlify(randomBytes(32)), log: [{ at: now, event: 'created' }],
+    topUpUsd: cfg.topUpUsd, createdAt: now, updatedAt: now, secret: hexlify(randomBytes(32)), log: [{ at: now, event: 'created' }],
+  }
+  let job: HatchJob
+  if (cfg.custody === 'mpc') {
+    if (!input.mpcAuth) throw new Error('2-of-2 hatch needs mpcAuth')
+    // No key yet: the maker's page and the board generate it together (POST /api/hatch/:id/mpc/keygen).
+    job = { ...base, custody: 'mpc', mpcAuth: input.mpcAuth.toLowerCase(), hostingAddress: '', status: 'keygen', key: null }
+  } else {
+    const key = hexlify(randomBytes(32))
+    job = { ...base, custody: 'local', hostingAddress: new Wallet(key).address, status: 'funding', key }
   }
   eggCloudInit(cfg, job, job.secret!) // fail now, not after the maker paid
   return job
@@ -105,6 +123,20 @@ export function checkClaim(job: HatchJob, c: HatchClaim): { ok: true; address: s
   return { ok: true, address }
 }
 
+/** Who signs for the job's account: the board's key, or the board's share with the maker's page. */
+function signerOf(deps: HatchDeps, job: HatchJob): HostingSigner & { ready?: () => boolean } {
+  if (job.custody !== 'mpc') return localSigner(job.key as `0x${string}`)
+  if (!deps.mpc) throw new Error('2-of-2 hatch without an MPC coordinator')
+  return deps.mpc.signer(job.id, job.key!, { aborted: !!job.mpcAbortedAt })
+}
+
+/** Signing needs the maker's page (2-of-2): check before starting anything that journals a payment. */
+function needSigner(deps: HatchDeps, job: HatchJob) {
+  const signer = signerOf(deps, job)
+  if (signer.ready && !signer.ready()) throw job.mpcAbortedAt ? new MpcAbort('an earlier signature failed its check') : new MakerAway()
+  return signer
+}
+
 /**
  * Fluence sessions per job, kept across ticks so we don't sign in (and extend our token window) more than needed.
  * Per deps object, i.e. per process: a restart signs in afresh.
@@ -121,7 +153,7 @@ async function session(deps: HatchDeps, job: HatchJob): Promise<FluenceClient> {
   const sessions = sessionsOf(deps)
   const s = sessions.get(job.id)
   if (s && now - s.at < SESSION_MS) return s.fl
-  const fl = s?.fl ?? deps.fluence(job.key!)
+  const fl = s?.fl ?? deps.fluence(signerOf(deps, job))
   await fl.login()
   sessions.set(job.id, { fl, at: now })
   job.lastSessionAt = now
@@ -133,12 +165,28 @@ async function session(deps: HatchDeps, job: HatchJob): Promise<FluenceClient> {
  * VM) so a crash right after leaves a record to resume from.
  */
 export async function hatchStep(deps: HatchDeps, cfg: HatchConfig, job: HatchJob, persist: (j: HatchJob) => void): Promise<HatchJob> {
-  const now = deps.now()
   const save = (event?: string) => {
     job.updatedAt = deps.now()
     if (event) rec(job, job.updatedAt, event)
     persist(job)
   }
+  if (job.status === 'keygen') return job // the HTTP routes move it on
+  try {
+    return await step(deps, cfg, job, save)
+  } catch (e) {
+    if (!(e instanceof MpcAbort)) throw e
+    // Lindell 2017: a party 1 that keeps signing after a bad final signature leaks its share. Never again.
+    deps.mpc?.forget(job.id)
+    job.mpcAbortedAt ??= deps.now()
+    job.status = 'failed'
+    job.error = `${e.message}. The hatch is frozen; the funds at ${job.hostingAddress} stay there.`
+    save('2-of-2 signing aborted')
+    return job
+  }
+}
+
+async function step(deps: HatchDeps, cfg: HatchConfig, job: HatchJob, save: (event?: string) => void): Promise<HatchJob> {
+  const now = deps.now()
   job.error = undefined
 
   switch (job.status) {
@@ -153,7 +201,7 @@ export async function hatchStep(deps: HatchDeps, cfg: HatchConfig, job: HatchJob
       }
       if (quai > 0n) {
         // QUAI bridged here by the maker: sell it for USDC (gasless; the hosting key signs a permit and the order).
-        const r = await deps.base.sellQuai(job.key!, quai)
+        const r = await deps.base.sellQuai(needSigner(deps, job), quai)
         job.swaps = [...(job.swaps ?? []), { uid: r.uid, status: r.status, at: deps.now() }]
         save(`swap ${r.status}`)
         break
@@ -177,10 +225,12 @@ export async function hatchStep(deps: HatchDeps, cfg: HatchConfig, job: HatchJob
         }
         rec(job, now, 'earlier top-up never settled; paying again')
       }
+      // 2-of-2: only journal a payment the maker's page is there to co-sign.
+      const signer = needSigner(deps, job)
       job.topUp = { startedAt: now, auths: [] }
       save('top-up started')
       try {
-        const paid = await deps.fluence(job.key!).topUp(job.topUpUsd, {
+        const paid = await deps.fluence(signer).topUp(job.topUpUsd, {
           onAuthorization: (a) => {
             job.topUp!.auths.push(a)
             save('payment authorization recorded')
@@ -238,10 +288,13 @@ export async function hatchStep(deps: HatchDeps, cfg: HatchConfig, job: HatchJob
       // The claim proved the secret; the announcement must be that same egg, for this maker and config.
       if (!egg || egg.address.toLowerCase() !== job.claim.address || egg.maker.toLowerCase() !== job.maker || egg.configHash.toLowerCase() !== job.configHash) break
       sessionsOf(deps).delete(job.id) // never sign in again: the egg's sweep counts on our last session
-      job.handoff = await sealHostingHandover(job.claim.publicKey, {
-        v: 1, provider: 'fluence', hostingKey: job.key!, hostingAddress: job.hostingAddress, vmId: job.vmId!,
+      const account = {
+        provider: 'fluence' as const, hostingAddress: job.hostingAddress, vmId: job.vmId!,
         launchedAt: new Date(job.launchedAt!).toISOString(), lastSessionAt: new Date(job.lastSessionAt ?? job.launchedAt!).toISOString(),
-      })
+      }
+      // 2-of-2: only our share goes; the maker's page seals its own to the same egg (POST …/mpc/handoff).
+      job.handoff = await sealHostingHandover(job.claim.publicKey, job.custody === 'mpc' ? { v: 2, custody: 'mpc', shard: shareScalar(job.key!), ...account } : { v: 1, hostingKey: job.key!, ...account })
+      deps.mpc?.forget(job.id)
       job.handedOffAt = deps.now()
       job.status = 'handed-off'
       save('hosting account sealed to the egg')
@@ -266,7 +319,9 @@ async function resolveTopUp(deps: HatchDeps, job: HatchJob): Promise<'paid' | 'w
   for (const a of t.auths) if (a.nonce && (await deps.base.authorizationUsed(job.hostingAddress, a.nonce))) return 'paid'
   try {
     if ((await session(deps, job).then((fl) => fl.totalDeposited())) > 0) return 'paid'
-  } catch {
+  } catch (e) {
+    // The page that co-signs the sign-in is away: don't conclude anything without asking Fluence.
+    if (e instanceof MakerAway || e instanceof MpcAbort) throw e
     // no account yet (created by the first payment), or Fluence is down: not proof either way
   }
   if (t.underReview) {
@@ -284,7 +339,8 @@ export function hatchView(job: HatchJob) {
     jobId: job.id,
     launchId: job.launchId,
     status: job.status,
-    hostingAddress: job.hostingAddress,
+    custody: job.custody ?? 'local',
+    hostingAddress: job.hostingAddress || null,
     minUsd: job.topUpUsd,
     funds: job.funds ? { usdc: job.funds.usdc, quai: job.funds.quai, at: new Date(job.funds.at).toISOString() } : null,
     swaps: job.swaps ?? [],
@@ -292,6 +348,10 @@ export function hatchView(job: HatchJob) {
     vmId: job.vmId ?? null,
     launchedAt: job.launchedAt ? new Date(job.launchedAt).toISOString() : null,
     eggAddress: job.claim ? computeAddress(job.claim.publicKey) : null,
+    /** The key the maker's page seals its shard to (2-of-2). */
+    eggPublicKey: job.claim?.publicKey ?? null,
+    browserHandoff: !!job.browserHandoff,
+    mpcAborted: !!job.mpcAbortedAt,
     handedOffAt: job.handedOffAt ? new Date(job.handedOffAt).toISOString() : null,
     keyDeleted: job.status === 'done',
     error: job.error ?? null,
@@ -303,6 +363,7 @@ export function hatchView(job: HatchJob) {
 /** Funding jobs nobody paid slow down: every tick for an hour, then every 5 minutes, then hourly after two days. */
 function due(job: HatchJob, now: number): boolean {
   if (job.nextCheckAt && now < job.nextCheckAt) return false
+  if (job.status === 'keygen') return false
   if (job.status !== 'funding') return true
   const age = now - job.createdAt
   const every = age < 60 * MIN ? 0 : age < 2 * 24 * 60 * MIN ? 5 * MIN : 60 * MIN
@@ -322,9 +383,9 @@ export function hatchWorker(o: { store: HatchStore; deps: HatchDeps; cfg: HatchC
     if (running) return []
     running = true
     try {
-      const out: HatchJob[] = []
-      for (const job of o.store.active()) {
-        if (!due(job, o.deps.now())) continue
+      // Side by side: a job waiting on its maker's page (or a CoW fill) doesn't hold up the others.
+      const jobs = o.store.active().filter((job) => due(job, o.deps.now()))
+      return await Promise.all(jobs.map(async (job) => {
         const before = job.status
         try {
           await hatchStep(o.deps, o.cfg, job, persist)
@@ -334,12 +395,11 @@ export function hatchWorker(o: { store: HatchStore; deps: HatchDeps; cfg: HatchC
           job.nextCheckAt = o.deps.now() + MIN
           job.updatedAt = o.deps.now()
           persist(job)
-          log(job.id, job.status, 'failed:', job.error)
+          if (!(e instanceof MakerAway)) log(job.id, job.status, 'failed:', job.error)
         }
         if (job.status !== before) log(job.id, before, '→', job.status)
-        out.push(job)
-      }
-      return out
+        return job
+      }))
     } finally {
       running = false
     }
