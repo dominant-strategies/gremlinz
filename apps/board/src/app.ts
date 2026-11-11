@@ -8,7 +8,7 @@ import {
 } from '@gremlins/hatch'
 import { mergeConfig, type BoardConfig } from './config.ts'
 import { AUTH_HEADERS, verifySignedRequestWith } from './auth.ts'
-import type { AccountSignatureChecker, Attestation } from '@gremlins/hatch'
+import { SESSION_HEADER, verifySessionRequest, type AccountSignatureChecker, type Attestation, type SessionScope } from '@gremlins/hatch'
 import { RateLimiter } from './ratelimit.ts'
 import * as S from './schemas.ts'
 import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestView, pulseView, type LeaderboardSort } from './service.ts'
@@ -115,13 +115,16 @@ export async function createBoard(deps: BoardDeps) {
     return err(c, 429, `rate limited: ${action}`, { retryAfterSec: wait })
   }
 
+  /** Which signed actions a browser session key may perform (see SESSION_HEADER in @gremlins/hatch). */
+  const SESSION_SCOPE_OF: Partial<Record<RateAction, SessionScope>> = { forgeDesign: 'forge', forgePhoto: 'forge' }
+
   /** Signed-request auth + replay protection + per-address rate limit; parses the JSON body. */
   const signed =
     (action: RateAction): MiddlewareHandler<Env> =>
     async (c, next) => {
       const body = await c.req.text()
       const nowMs = now()
-      const auth = await verifySignedRequestWith({
+      const req = {
         method: c.req.method,
         path: c.req.path,
         body,
@@ -132,7 +135,14 @@ export async function createBoard(deps: BoardDeps) {
         },
         nowSec: Math.floor(nowMs / 1000),
         windowSec: cfg.authWindowSec,
-      }, smartAccounts)
+      }
+      // A browser session key (one wallet signature, then silent) is accepted only where its scope allows.
+      const session = c.req.header(SESSION_HEADER)
+      const scope = SESSION_SCOPE_OF[action]
+      if (session && !scope) return err(c, 401, 'sign this one with your wallet: session keys only work in the Forge')
+      const auth = session && scope
+        ? await verifySessionRequest({ ...req, session, scope }, smartAccounts)
+        : await verifySignedRequestWith(req, smartAccounts)
       if (!auth.ok) return err(c, 401, auth.reason)
       const sig = c.req.header(AUTH_HEADERS.signature)!.toLowerCase()
       if (!(await store.consumeSignature(sig, nowMs + 2 * cfg.authWindowSec * 1000, nowMs))) return err(c, 401, 'replayed request')

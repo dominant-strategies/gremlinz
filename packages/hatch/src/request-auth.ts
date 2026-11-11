@@ -63,6 +63,86 @@ export async function verifySignedRequestWith(req: Parameters<typeof verifySigne
   return { ok: true, address: address.toLowerCase() }
 }
 
+// ── session keys ─────────────────────────────────────────────────────────────
+//
+// Building a gremlin is many requests in a row; asking the wallet to sign each one is a chore. Instead the wallet signs
+// one grant that lets a throwaway key in the browser sign for it, for one scope and a short time. The request is then
+// signed by the session key, and the grant rides along in the x-gremlins-session header. A grant can only ever be used
+// for its scope (the board maps scopes to routes), so a leaked session key can design gremlins but never post, vote,
+// hatch or move anything.
+
+export const SESSION_HEADER = 'x-gremlins-session'
+export const SESSION_SCOPES = ['forge'] as const
+export type SessionScope = (typeof SESSION_SCOPES)[number]
+/** Longest a grant may run, however long it says. */
+export const SESSION_MAX_SEC = 24 * 3600
+
+export interface SessionGrant {
+  /** The account granting (an EOA or a smart account). */
+  address: string
+  /** The session key's address. */
+  key: string
+  scope: SessionScope
+  /** Unix seconds. */
+  expires: number
+  /** The account's signature over sessionGrantMessage(grant). */
+  signature: string
+}
+
+/** What the wallet shows when asked to sign a grant: plain words first, the exact terms below. */
+export function sessionGrantMessage(g: Omit<SessionGrant, 'signature'>): string {
+  return [
+    'Use the Gremlin Forge from this browser without signing every request.',
+    '',
+    'This lets a temporary key in this browser ask Claude to design and photograph gremlins for you. It cannot post, vote, hatch, or move funds.',
+    '',
+    `Account: ${g.address.toLowerCase()}`,
+    `Session key: ${g.key.toLowerCase()}`,
+    `Scope: ${g.scope}`,
+    `Expires: ${new Date(g.expires * 1000).toISOString()}`,
+  ].join('\n')
+}
+
+/** Parses the session header; null when it's absent or malformed. */
+export function parseSessionHeader(raw: string | null | undefined): SessionGrant | null {
+  if (!raw || raw.length > 2000) return null
+  try {
+    const g = JSON.parse(raw) as Record<string, unknown>
+    const hex = (v: unknown, n: number) => typeof v === 'string' && new RegExp(`^0x[0-9a-fA-F]{${n}}$`).test(v)
+    if (!hex(g.address, 40) || !hex(g.key, 40) || typeof g.signature !== 'string' || !/^0x[0-9a-fA-F]{2,1200}$/.test(g.signature)) return null
+    if (!(SESSION_SCOPES as readonly string[]).includes(String(g.scope)) || !Number.isInteger(g.expires)) return null
+    return { address: g.address as string, key: g.key as string, scope: g.scope as SessionScope, expires: g.expires as number, signature: g.signature }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Verifies a request signed by a session key: the grant is live, for `scope`, signed by the account (EOA, or a smart
+ * account through `accounts`), and the request signature recovers to the grant's key. Returns the granting account.
+ */
+export async function verifySessionRequest(
+  req: Parameters<typeof verifySignedRequest>[0] & { session: string | null | undefined; scope: SessionScope },
+  accounts?: AccountSignatureChecker,
+): Promise<AuthResult> {
+  const g = parseSessionHeader(req.session)
+  if (!g) return { ok: false, reason: 'malformed session' }
+  if (g.scope !== req.scope) return { ok: false, reason: 'session not valid here' }
+  if (g.expires <= req.nowSec) return { ok: false, reason: 'session expired' }
+  if (g.expires - req.nowSec > SESSION_MAX_SEC + req.windowSec) return { ok: false, reason: 'session too long' }
+  if (req.headers.address?.toLowerCase() !== g.address.toLowerCase()) return { ok: false, reason: 'session for another account' }
+  // the request itself, signed by the session key
+  const r = verifySignedRequest({ ...req, headers: { ...req.headers, address: g.key } })
+  if (!r.ok) return r
+  // the grant, signed by the account
+  const msg = sessionGrantMessage(g)
+  let granted = false
+  try { granted = verifyMessage(msg, g.signature).toLowerCase() === g.address.toLowerCase() } catch { /* maybe a smart account */ }
+  if (!granted && accounts) granted = await accounts.isValidSignature(g.address, msg, g.signature)
+  if (!granted) return { ok: false, reason: 'session not signed by account' }
+  return { ok: true, address: g.address.toLowerCase() }
+}
+
 /** Client helper: headers for a signed board request. */
 export async function signRequest(signer: Signer, method: string, path: string, body: string, nowSec = Math.floor(Date.now() / 1000)) {
   const signature = await signer.signMessage(requestSigningPayload(method, path, nowSec, body))

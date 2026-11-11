@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Wallet } from 'ethers'
-import { FORGE_EXAMPLES, FORGE_PHOTO_PROMPT, checkArtSvg, checkForgeSpec, forgeDesignPrompt } from '@gremlins/hatch'
+import { AUTH_HEADERS, FORGE_EXAMPLES, FORGE_PHOTO_PROMPT, SESSION_HEADER, checkArtSvg, checkForgeSpec, forgeDesignPrompt, sessionGrantMessage, signRequest } from '@gremlins/hatch'
 import { decodeRender, falProvider, geminiProvider, openaiProvider, photoProviderFromEnv, type ForgeDesigner, type PhotoProvider } from '../src/forge.ts'
 import { makeBoard } from './helpers.ts'
 
@@ -178,5 +178,55 @@ describe('photo providers', () => {
     expect(photoProviderFromEnv({ FAL_KEY: 'f', OPENAI_API_KEY: 'o', FORGE_PHOTO_PROVIDER: 'openai' })?.name).toBe('openai')
     expect(photoProviderFromEnv({ FAL_KEY: 'f', FORGE_PHOTO_MODEL: 'fal-ai/flux-pro/kontext/max' })?.model).toBe('fal-ai/flux-pro/kontext/max')
     expect(() => photoProviderFromEnv({ FORGE_PHOTO_PROVIDER: 'gemini' })).toThrow(/API key/)
+  })
+})
+
+describe('forge session keys: sign once, then build without wallet prompts', () => {
+  const path = '/api/forge/design'
+  const body = JSON.stringify({ mode: 'new', text: 'a cheerful toaster' })
+  /** A grant from `user` to `key`, and a request signed by `signer` (the key, unless a test swaps it). */
+  async function send(b: Awaited<ReturnType<typeof makeBoard>>, o: { user?: Wallet; key?: Wallet; signer?: Wallet; grantBy?: Wallet; to?: string; expiresIn?: number; scope?: string; text?: string } = {}) {
+    const user = o.user ?? Wallet.createRandom(), key = o.key ?? Wallet.createRandom(), now = Math.floor(b.clock.now / 1000)
+    const terms = { address: user.address.toLowerCase(), key: key.address.toLowerCase(), scope: (o.scope ?? 'forge') as 'forge', expires: now + (o.expiresIn ?? 3600) }
+    const grant = { ...terms, signature: await (o.grantBy ?? user).signMessage(sessionGrantMessage(terms)) }
+    const text = o.text ?? body, to = o.to ?? path
+    const h = await signRequest(o.signer ?? key, 'POST', to, text, now)
+    const headers = { 'content-type': 'application/json', ...h, [AUTH_HEADERS.address]: user.address, [SESSION_HEADER]: JSON.stringify(grant) }
+    const r = await b.app.request(to, { method: 'POST', headers, body: text })
+    return { status: r.status, body: (await r.json()) as any, headers, text, user }
+  }
+  const board = () => makeBoard({}, { forge: { designer: fakeDesigner(JSON.stringify(FORGE_EXAMPLES.toaster)) } })
+
+  it('designs with a request signed by the session key the wallet granted', async () => {
+    const b = await board()
+    const r = await send(b)
+    expect(r.status).toBe(200)
+    expect(r.body.spec.name).toBe('Toaster')
+    // the same signed request again is a replay
+    const again = await b.app.request(path, { method: 'POST', headers: r.headers, body: r.text })
+    expect(again.status).toBe(401)
+  })
+
+  it('counts session requests against the granting account for rate limits', async () => {
+    const b = await makeBoard({ rateLimits: { forgeDesign: { max: 1, windowSec: 3600 } } as any }, { forge: { designer: fakeDesigner(JSON.stringify(FORGE_EXAMPLES.toaster)) } })
+    const user = Wallet.createRandom()
+    expect((await send(b, { user })).status).toBe(200)
+    expect((await send(b, { user })).status).toBe(429) // a fresh session key doesn't reset the limit
+  })
+
+  it('turns down sessions that are expired, too long, granted by someone else, or used by another key', async () => {
+    const b = await board()
+    expect((await send(b, { expiresIn: -5 })).body.error).toBe('session expired')
+    expect((await send(b, { expiresIn: 3 * 24 * 3600 })).body.error).toBe('session too long')
+    expect((await send(b, { grantBy: Wallet.createRandom() })).body.error).toBe('session not signed by account')
+    expect((await send(b, { signer: Wallet.createRandom() })).body.error).toBe('signature does not match address')
+    expect((await send(b, { scope: 'board' })).body.error).toBe('malformed session')
+  })
+
+  it('never lets a session key post, vote or do anything outside the Forge', async () => {
+    const b = await board()
+    const r = await send(b, { to: '/api/c/general/posts', text: JSON.stringify({ title: 'not me' }) })
+    expect(r.status).toBe(401)
+    expect(r.body.error).toMatch(/only work in the Forge/)
   })
 })

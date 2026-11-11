@@ -13,7 +13,7 @@ import { FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FOR
 import { applyIsolate, applyPose, drawLabels, forgetIsolate, mountLabels, resetView, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, view } from './forge-motion.js'
 import { addDecals, artReady, wearFor, wearFrame, wearMaterial } from './forge-surfaces.js'
 import { creatureSvg } from '@gremlins/hatch/creature'
-import { account, mountAuth, onAccountChange, signIn, signOut, signedPostJson, walletErrorMessage } from './auth.ts'
+import { account, hasSessionKey, mountAuth, onAccountChange, sessionPostJson, signIn, signOut, walletErrorMessage } from './auth.ts'
 
 const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
@@ -831,13 +831,14 @@ async function generate(mode, text) {
     if (mode === 'refine') body.spec = spec()
     const ups = Object.entries(state.uploads).slice(0, 6).map(([id, u]) => ({ id, label: u.label }))
     if (ups.length) body.uploads = ups
-    const res = await signedPostJson('/api/forge/design', body, ctl.signal)
+    const res = await sessionPostJson('/api/forge/design', body, { scope: 'forge', signal: ctl.signal })
     const { spec: next, notes } = checkForgeSpec(res.spec)
     const allNotes = [...(res.notes || []), ...notes.filter((n) => !(res.notes || []).includes(n))]
     if (glOK) houseRules(next, allNotes)
     const short = text.length > 70 ? text.slice(0, 68) + '…' : text
     setStatus(`${next.name}: ${next.parts.length} parts.`)
     commit(next, allNotes, mode === 'new' ? `Forged “${short}”` : `Changed: “${short}”`)
+    renderAuth() // the first request may have just unlocked the Forge
     if (mode === 'new') frame(true)
     return true
   } catch (e) {
@@ -852,7 +853,7 @@ async function photograph() {
   ctl = new AbortController(); busy(true, 'Photographing… this takes about half a minute.')
   try {
     await artReady()
-    const res = await signedPostJson('/api/forge/photo', { image: captureRender() }, ctl.signal)
+    const res = await sessionPostJson('/api/forge/photo', { image: captureRender() }, { scope: 'forge', signal: ctl.signal })
     s.photo = { image: res.image, by: `${res.provider} · ${res.model}` }
     setStatus('Photo ready.')
     if (step() === s) showView('photo')
@@ -924,8 +925,8 @@ function wireColours() {
 function renderAuth() {
   const a = account()?.address
   $('who').innerHTML = a
-    ? `Signed in as <code>${esc(a.slice(0, 6))}…${esc(a.slice(-4))}</code> · <button type="button" class="linkish" id="signOut">Sign out</button>`
-    : 'Requests are signed with your wallet. <button type="button" class="linkish" id="signInBtn">Sign in</button>'
+    ? `Signed in as <code>${esc(a.slice(0, 6))}…${esc(a.slice(-4))}</code>${hasSessionKey() ? ' · Forge unlocked for today' : ' · your wallet asks once, then the Forge runs for a day without asking'} · <button type="button" class="linkish" id="signOut">Sign out</button>`
+    : 'Sign in with your wallet. It asks you to sign once, then the Forge runs for a day without asking. <button type="button" class="linkish" id="signInBtn">Sign in</button>'
   $('signOut')?.addEventListener('click', () => signOut())
   $('signInBtn')?.addEventListener('click', () => signIn().catch((e) => { if (e?.code !== 4001) setStatus(walletErrorMessage(e), true) }))
 }

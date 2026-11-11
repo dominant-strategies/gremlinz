@@ -61,6 +61,7 @@ let current = readAccount()
 const listeners = new Set<(a: Account | undefined) => void>()
 
 function setAccount(a: Account | undefined) {
+  if (!a || a.address.toLowerCase() !== current?.address.toLowerCase()) clearSessionKey() // a grant belongs to one account
   current = a
   store(KEY, a?.address)
   store(KIND, a?.kind)
@@ -140,12 +141,12 @@ export async function evmWallet(): Promise<{ provider: Eip1193; address: string 
 
 // ── signed requests ──────────────────────────────────────────────────────────
 
-/** POSTs JSON as a signed board request (signing in first if needed). */
-export async function signedPost(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
-  // The Smart Wallet signs in a popup, which the browser allows only straight from the click: open it before any await.
-  if (current?.kind === 'smartwallet') prepareSmartWallet()
-  // Signing code loads with the first signed request, so pages that only show the button stay light.
-  const [{ hexlify, toUtf8Bytes }, { AUTH_HEADERS, requestSigningPayload }] = await Promise.all([import('ethers'), import('@gremlins/hatch')])
+/**
+ * Signs `message(address)` with the signed-in wallet (signing in first if needed) and returns who signed.
+ * The message is built after the wallet answers, since the wallet decides which address is signing.
+ */
+async function walletSign(message: (address: string) => string): Promise<{ address: string; signature: string }> {
+  const { hexlify, toUtf8Bytes } = await import('ethers')
   const a = current ?? (await signIn())
   let p: Eip1193 | undefined
   if (a.kind === 'smartwallet') {
@@ -153,15 +154,24 @@ export async function signedPost(path: string, body: unknown, signal?: AbortSign
     const safe = await smartWalletAccount()
     if (safe.toLowerCase() !== a.address.toLowerCase()) setAccount({ ...a, address: safe })
   } else p = await walletProvider()
-  const address = current!.address
-  const raw = JSON.stringify(body)
-  const ts = Math.floor(Date.now() / 1000)
-  const message = requestSigningPayload('POST', path, ts, raw)
+  const address = current!.address, m = message(address)
   // Pelagus, MetaMask, Phantom and WalletConnect wallets all take personal_sign([hexMessage, account]) (EIP-191); the
   // Smart Wallet takes the message itself and has its Safe sign the same EIP-191 hash.
   const signature = p
-    ? ((await p.request({ method: 'personal_sign', params: [hexlify(toUtf8Bytes(message)), address] })) as string)
-    : await smartWalletSign(address, message)
+    ? ((await p.request({ method: 'personal_sign', params: [hexlify(toUtf8Bytes(m)), address] })) as string)
+    : await smartWalletSign(address, m)
+  return { address, signature }
+}
+
+/** POSTs JSON as a signed board request (signing in first if needed). */
+export async function signedPost(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+  // The Smart Wallet signs in a popup, which the browser allows only straight from the click: open it before any await.
+  if (current?.kind === 'smartwallet') prepareSmartWallet()
+  // Signing code loads with the first signed request, so pages that only show the button stay light.
+  const { AUTH_HEADERS, requestSigningPayload } = await import('@gremlins/hatch')
+  const raw = JSON.stringify(body)
+  const ts = Math.floor(Date.now() / 1000)
+  const { address, signature } = await walletSign(() => requestSigningPayload('POST', path, ts, raw))
   return fetch(path, {
     method: 'POST',
     signal,
@@ -170,15 +180,80 @@ export async function signedPost(path: string, body: unknown, signal?: AbortSign
   })
 }
 
-/** signedPost, returning the parsed reply; throws with the board's error message. */
-export async function signedPostJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await signedPost(path, body, signal)
+// ── session keys ─────────────────────────────────────────────────────────────
+
+/** A throwaway key the wallet has granted one scope to, kept in this browser until it expires or you sign out. */
+interface StoredSession { pk: string; grant: import('@gremlins/hatch').SessionGrant }
+const SESSION_KEY = 'gremlins.session'
+const SESSION_SEC = 24 * 3600
+function loadStoredSession(scope: string): StoredSession | undefined {
+  try {
+    const s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null') as StoredSession | null
+    const now = Math.floor(Date.now() / 1000)
+    if (s && s.grant.scope === scope && s.grant.expires > now + 120 && s.grant.address.toLowerCase() === current?.address.toLowerCase()) return s
+  } catch { /* none, or private mode */ }
+  return undefined
+}
+export function clearSessionKey(): void {
+  try { localStorage.removeItem(SESSION_KEY) } catch { /* ignore */ }
+}
+/** Has this browser a live session for `scope`, so the next request won't open the wallet? */
+export const hasSessionKey = (scope: 'forge' = 'forge') => !!loadStoredSession(scope)
+
+/**
+ * POSTs JSON signed by a browser session key: the wallet signs once to grant the key `scope` for a day, and every
+ * request after that goes without a wallet prompt. A rejected session is dropped and granted again, once.
+ */
+export async function sessionPost(path: string, body: unknown, opts: { scope: 'forge'; signal?: AbortSignal }): Promise<Response> {
+  let stored = loadStoredSession(opts.scope)
+  if (!stored && current?.kind === 'smartwallet') prepareSmartWallet() // popup only from the click, before any await
+  const [{ Wallet }, { AUTH_HEADERS, SESSION_HEADER, requestSigningPayload, sessionGrantMessage }] = await Promise.all([import('ethers'), import('@gremlins/hatch')])
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!stored) {
+      const key = Wallet.createRandom(), expires = Math.floor(Date.now() / 1000) + SESSION_SEC
+      let terms: { address: string; key: string; scope: 'forge'; expires: number } | undefined
+      const { signature } = await walletSign((address) => sessionGrantMessage((terms = { address: address.toLowerCase(), key: key.address.toLowerCase(), scope: opts.scope, expires })))
+      stored = { pk: key.privateKey, grant: { ...terms!, signature } }
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify(stored)) } catch { /* private mode: lives for this page */ }
+    }
+    const raw = JSON.stringify(body), ts = Math.floor(Date.now() / 1000)
+    const signature = await new Wallet(stored.pk).signMessage(requestSigningPayload('POST', path, ts, raw))
+    const res = await fetch(path, {
+      method: 'POST',
+      signal: opts.signal,
+      headers: {
+        'content-type': 'application/json',
+        [AUTH_HEADERS.address]: stored.grant.address,
+        [AUTH_HEADERS.timestamp]: String(ts),
+        [AUTH_HEADERS.signature]: signature,
+        [SESSION_HEADER]: JSON.stringify(stored.grant),
+      },
+      body: raw,
+    })
+    if (res.status !== 401 || attempt) return res
+    const why = ((await res.clone().json().catch(() => ({}))) as { error?: string }).error ?? ''
+    if (!/session/.test(why)) return res
+    clearSessionKey(); stored = undefined // the board turned the session down (expired, clock skew): grant a fresh one
+  }
+  throw new Error('unreachable')
+}
+
+/** sessionPost, returning the parsed reply; throws with the board's error message. */
+export async function sessionPostJson<T>(path: string, body: unknown, opts: { scope: 'forge'; signal?: AbortSignal }): Promise<T> {
+  return readReply<T>(await sessionPost(path, body, opts))
+}
+async function readReply<T>(res: Response): Promise<T> {
   const j = (await res.json().catch(() => ({}))) as T & { error?: string; retryAfterSec?: number }
   if (!res.ok) {
     if (res.status === 429) throw new Error(`You've reached today's limit. Try again in ${Math.ceil((j.retryAfterSec ?? 3600) / 60)} minutes.`)
     throw new Error(j.error ?? `The board answered ${res.status}.`)
   }
   return j
+}
+
+/** signedPost, returning the parsed reply; throws with the board's error message. */
+export async function signedPostJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  return readReply<T>(await signedPost(path, body, signal))
 }
 
 /** A wallet error in plain words: declining is not a failure worth shouting about. */
