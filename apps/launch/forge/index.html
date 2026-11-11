@@ -282,6 +282,15 @@
     .forge .refchip img { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; border: 1.5px solid var(--line); }
     .forge .refchip[hidden] + #refHint { display: inline; }
     .forge .refchip:not([hidden]) + #refHint { display: none; }
+    /* the tour's title cards: its goals, then its motive, on the side the camera leaves free */
+    .stage .tourcard { position: absolute; top: 50%; transform: translateY(-50%); width: min(44%, 520px); z-index: 4; pointer-events: none; padding: 26px 28px; background: linear-gradient(90deg, rgba(251,250,247,.92), rgba(251,250,247,.78)); border-left: 4px solid var(--signal, #e8571e); }
+    .stage .tourcard.left { left: 4%; }
+    .stage .tourcard.right { right: 4%; }
+    .stage .tourcard small { display: block; font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--signal, #e8571e); margin-bottom: 14px; }
+    .stage .tourcard ol { margin: 0; padding: 0; list-style: none; counter-reset: g; display: grid; gap: 12px; }
+    .stage .tourcard li { counter-increment: g; display: grid; grid-template-columns: 34px 1fr; font: 800 clamp(18px, 2.1vw, 28px)/1.15 var(--display); color: #24211d; }
+    .stage .tourcard li::before { content: counter(g, decimal-leading-zero); font: 600 13px/2 var(--mono); color: var(--signal, #e8571e); }
+    .stage .tourcard blockquote { margin: 0; font: 800 clamp(20px, 2.4vw, 32px)/1.18 var(--display); color: #24211d; }
     /* live mode: the console on a gremlin's public page (and embedded in it) */
     .hud .vitals { display: none; }
     body.live .hud .vitals { display: block; }
@@ -300,6 +309,21 @@
     .attach-dlg li button { width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid #dcd5c8; border-radius: 6px; background: #fff; font: inherit; cursor: pointer; }
     .attach-dlg li button:hover { border-color: #24211d; }
     .attach-dlg li small { font-family: var(--mono); color: #66625b; }
+    .cut-dlg { max-width: 560px; }
+    .cut-dlg form { display: grid; gap: 12px; }
+    .cut-dlg fieldset { border: 0; border-top: 1px solid #dcd5c8; margin: 0; padding: 10px 0 0; }
+    .cut-dlg fieldset[hidden] { display: none; }
+    .cut-dlg legend { font: 600 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; padding: 0 0 8px; }
+    .cut-dlg legend span { font-weight: 400; letter-spacing: .04em; text-transform: none; color: #66625b; margin-left: 6px; }
+    .cut-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+    .cut-opts label { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid #dcd5c8; border-radius: 6px; background: #fff; font-size: 13.5px; cursor: pointer; max-width: 100%; }
+    .cut-opts label:has(input:checked) { border-color: #24211d; background: #f3efe7; }
+    .cut-opts label:has(input:disabled) { opacity: .45; cursor: default; }
+    .cut-opts.goals label { width: 100%; }
+    .cut-opts .none { font-size: 13px; color: #66625b; margin: 0; }
+    .cut-foot { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+    .cut-foot .mono { margin-right: auto; font-size: 12.5px; color: #66625b; }
+    .btn-ink { background: #24211d !important; color: #fbfaf7 !important; border-color: #24211d !important; }
     #askForm.dragover { outline: 2px dashed var(--signal, #e8571e); outline-offset: 4px; }
   </style>
 </head>
@@ -317,6 +341,17 @@
     <p class="small muted" style="margin:0">Its public page will show this design live, moving with what it does, and links to it will preview with this picture.</p>
     <ul id="attachList"></ul>
     <div class="row" style="display:flex;gap:8px;justify-content:flex-end"><button class="btn btn-small" type="button" id="attachCancel">Cancel</button></div>
+  </dialog>
+  <dialog class="attach-dlg cut-dlg" id="cutDlg" aria-labelledby="cutTitle">
+    <form method="dialog" id="cutForm">
+      <h2 id="cutTitle">Cut your video</h2>
+      <p class="small muted" style="margin:0">Choose what the film features. It plays them in this order: its goals, spotlights, modes, the exploded view, then why it exists.</p>
+      <fieldset id="cutGoals"><legend>Life goals card</legend><div class="cut-opts"></div></fieldset>
+      <fieldset id="cutSpots"><legend>Spotlight assemblies <span>each shown alone, close up</span></legend><div class="cut-opts"></div></fieldset>
+      <fieldset id="cutModes"><legend>Modes <span>up to 5</span></legend><div class="cut-opts"></div></fieldset>
+      <fieldset id="cutMore"><legend>Also</legend><div class="cut-opts"></div></fieldset>
+      <div class="cut-foot"><span class="mono" id="cutLen">0 s</span><button class="btn btn-small" type="button" id="cutCancel">Cancel</button><button class="btn btn-small btn-ink" type="submit" id="cutGo">Cut the video</button></div>
+    </form>
   </dialog>
   <main class="forge">
     <section class="hud" id="hud" aria-label="Gremlin console">
@@ -374,6 +409,7 @@
             <button type="button" id="renderTab" aria-pressed="true">3D</button>
             <button type="button" id="photoTab" aria-pressed="false" disabled>Photo</button>
           </div>
+          <div class="tourcard" id="tourCard" hidden aria-live="polite"></div>
           <svg class="blueprint" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><circle cx="50" cy="52" r="34"/><circle cx="50" cy="52" r="22"/><path d="M50 10 V94 M8 52 H92"/></svg>
           <div class="busycard" id="busyCard" role="status" aria-live="polite" hidden>
           <span class="spinner" aria-hidden="true"></span>

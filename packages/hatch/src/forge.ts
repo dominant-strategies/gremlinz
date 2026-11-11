@@ -110,9 +110,15 @@ export interface ForgePart {
   /** Added by a house rule rather than by the model. */
   house?: true
 }
+/** What it lives for, for the film's title cards: a few life goals and why it does what it does. */
+export interface ForgeStory { goals: string[]; motive: string }
+export const FORGE_STORY_LIMITS = { goals: 3, goal: 90, motive: 170 } as const
+
 export interface ForgeSpec {
   name: string
   tagline: string
+  /** Its goals and motive in a few words (the tour's title cards). */
+  story?: ForgeStory
   menace: number
   palette: { enamel: string; accent: string; glow: string }
   parts: ForgePart[]
@@ -172,17 +178,20 @@ ASSEMBLIES AND MODES (the gremlin is shown on a console where each assembly is a
 - Joint moves: swing (rotates by up to "range" degrees about "axis" through "pivot": a jaw, a lid, an arm), open (like swing, and mirrored copies open the opposite way: shell halves, clamshells, beaks), curl (bends the assembly's tubes and chains progressively along their length by up to "range" degrees in total: tentacles, tails, trunks), spin (rotation: rotors, turrets, wheels), slide ("range" in model units along "axis": pistons, drawers, antennas), pulse ("range" 0-0.5 fractional swell: hearts, lamps, bellows). Put "pivot" where the hinge really is, so nothing passes through anything when it moves.
 - "modes":[{"id":"jaw-open","name":"Jaw open","drive":{"jaw":1,"head":0.3},"focus":"jaw"}] are 3 to 5 operating modes (at least 3: the tour gives each its own camera, and a gremlin with fewer has little to show). Each drives one or more assemblies from -1 to 1 by a single input, so a mode moves the whole mechanism together. "focus" names the assembly the camera should study. The renderer adds idle motion on its own. "when" ties a mode to what the live agent is doing, and its public page plays that mode as it happens: "thinking" (it checks in, decides, runs inference), "posting" (it writes on the board), "earning" (money comes in), "paying" (it spends). Tag each of your modes with the one it fits best, each at most once.
 
+STORY: "story":{"goals":["...","..."],"motive":"..."} is shown on title cards in its film. 1 to 3 life goals, each at most 12 words, in its own voice and plain words ("Map every wreck in the North Sea"); if the description gives goals, condense those, never invent different ones. "motive" is one sentence, at most 25 words, on why it wants them: what drives it, said with character.
+
 BEFORE YOU ANSWER, check the design the way a reviewer will check renders of it, at rest and at every mode's full drive:
 - Nothing passes through anything: a jaw opening into the body, an arm swinging through a leg, a lid lifting into an antenna. Move the pivot, the part or the range until it clears.
 - Nothing floats: every part touches or overlaps what holds it, and stays attached when its assembly moves.
 - Every pivot sits at its real hinge, and its axis turns the part the way the motion should go.
 - From a front three-quarter view the face reads clearly and every assembly can be seen.
 
-Reply with only JSON: {"name":"1-3 words","tagline":"wry, at most 12 words","menace":0-10,"palette":{...},"assemblies":[...],"modes":[...],"parts":[...],"wear":[...],"art":{...},"decals":[...]} (the last three only when used)`
+Reply with only JSON: {"name":"1-3 words","tagline":"wry, at most 12 words","story":{"goals":[...],"motive":"..."},"menace":0-10,"palette":{...},"assemblies":[...],"modes":[...],"parts":[...],"wear":[...],"art":{...},"decals":[...]} (the last three only when used)`
 
 /** Built-in designs, in the wire format the model writes. Used as starting points and as few-shot examples. */
 export const FORGE_EXAMPLES: Record<'toaster' | 'octopod' | 'foreman', unknown> = {
   toaster: { name: 'Toaster', tagline: 'Pops up, says hi, asks for nothing.', menace: 0,
+    story: { goals: ['Make breakfast for everyone on the board', 'Never burn a single slice'], motive: 'It believes a warm slice of toast fixes most bad mornings, and it has the data to prove it.' },
     palette: { enamel: '#efe3c8', accent: '#c9302c', glow: '#ffb347' },
     assemblies: [
       { id: 'head', name: 'Pop-up head', role: 'Enamel capsule with a visor and a smile', states: ['DOWN', 'POPPED'], explode: [0, 0.6, 0.1], joint: { move: 'slide', pivot: [0, 1.6, 0], axis: [0, 1, 0], range: 0.28 } },
@@ -217,6 +226,7 @@ export const FORGE_EXAMPLES: Record<'toaster' | 'octopod' | 'foreman', unknown> 
     art: { starburst: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-50 -50 100 100"><g fill="#c9302c"><polygon points="0,-48 6,-10 0,-6 -6,-10"/><polygon points="0,48 6,10 0,6 -6,10"/><polygon points="-48,0 -10,6 -6,0 -10,-6"/><polygon points="48,0 10,6 6,0 10,-6"/></g><g fill="#e0ad55"><polygon points="30,-30 8,-3 3,-8"/><polygon points="-30,30 -8,3 -3,8"/><polygon points="-30,-30 -3,-8 -8,-3"/><polygon points="30,30 3,8 8,3"/></g><circle r="7" fill="#c9302c"/></svg>' },
     decals: [{ art: 'starburst', at: [0.37, 1.0, 0.37], dir: [0.7, 0, 0.7], size: 0.26, finish: 'paint', mirror: 'x' }] },
   octopod: { name: 'Octopod', tagline: 'Eight arms, all of them busy.', menace: 10,
+    story: { goals: ['Hold a stake in every market at once', 'Own the deepest vault on the seabed'], motive: 'It was built for pressure, and the deep taught it that whoever grips the most never gets swept away.' },
     palette: { enamel: '#2b2b2e', accent: '#c9302c', glow: '#ff3b30' },
     assemblies: [
       { id: 'mantle', name: 'Mantle shell', role: 'Riveted enamel dome over the pump core', states: ['SEALED', 'PUMPING'], explode: [0, 0.7, -0.2], joint: { move: 'pulse', pivot: [0, 1.2, 0], axis: [0, 1, 0], range: 0.06 } },
@@ -254,6 +264,7 @@ export const FORGE_EXAMPLES: Record<'toaster' | 'octopod' | 'foreman', unknown> 
     art: { kraken: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><g fill="none" stroke="#e9dcc0" stroke-width="5" stroke-linecap="round"><path d="M50 52 C30 60 20 80 8 78"/><path d="M50 52 C70 60 80 80 92 78"/><path d="M50 56 C40 74 36 90 24 94"/><path d="M50 56 C60 74 64 90 76 94"/></g><path d="M50 8 C72 8 80 26 74 44 C70 54 30 54 26 44 C20 26 28 8 50 8Z" fill="#e9dcc0"/><circle cx="40" cy="32" r="6" fill="#c9302c"/><circle cx="60" cy="32" r="6" fill="#c9302c"/></svg>' },
     decals: [{ art: 'kraken', at: [0.55, 1.25, 0.55], dir: [0.72, 0, 0.7], size: 0.34, rot: -8, finish: 'ink', mirror: 'x' }] },
   foreman: { name: 'Foreman', tagline: 'Runs the boiler room. Keeps the pressure up.', menace: 3,
+    story: { goals: ['Keep every machine on the floor running', 'Train the next shift better than the last'], motive: 'A foreman is only as good as the crew that walks out at the end of the day.' },
     palette: { enamel: '#a9d8c4', accent: '#c9302c', glow: '#ffb347' },
     parts: [
       { kind: 'lathe', mat: 'enamel', profile: [[0, 0.58], [0.4, 0.58], [0.44, 0.64], [0.44, 1.64], [0.4, 1.7], [0, 1.7]] },
@@ -665,7 +676,8 @@ export function curlPoints(points: Vec3[], axis: Vec3, deg: number): Vec3[] {
  * elevation), `dist` a multiple of the hero distance, `frame` how far the camera's aim moves from the body's centre
  * toward the beat's focus assembly (0 to 1).
  */
-export interface ForgeShot { az: number; el: number; dist: number; frame: number }
+/** `side` slides the gremlin sideways in the frame (a share of its width, + to the right), to leave room for a title card. */
+export interface ForgeShot { az: number; el: number; dist: number; frame: number; side?: number }
 /** How a beat looks: the focus isolated (the rest ghosted), x-ray, and which labels show. */
 export interface ForgeLook { isolate: boolean; xray: boolean; labels: 'none' | 'focus' | 'all' }
 export interface ForgeBeat {
@@ -677,6 +689,12 @@ export interface ForgeBeat {
   take: number
   focus?: string
   look: ForgeLook
+  /** A title card over this beat: its life goals, or its motive. */
+  card?: 'goals' | 'motive'
+  /** The card's words: the goals, one a line, or the motive. */
+  lines?: string[]
+  /** A spotlight: its focus shown alone at rest. */
+  spot?: boolean
 }
 const HERO_SHOT: ForgeShot = { az: 0, el: 0.17, dist: 1, frame: 0 }
 /** Each mode gets its own camera and treatment, so the tour never shows the same thing twice in a row. */
@@ -695,13 +713,32 @@ const PLAIN: ForgeLook = { isolate: false, xray: false, labels: 'none' }
  * on a wide orbit with every part named, then back to the hero. Times in seconds; pure, so a recording can seek to any
  * frame and the stage and the video play exactly the same film.
  */
-export function forgeTour(spec: ForgeSpec): ForgeBeat[] {
+/**
+ * What a film features, picked before it is cut (Record video): the modes it plays, assemblies it gives a spotlight
+ * shot each, which goals its card lists, and whether it has the motive card and the exploded view. Unset: the default
+ * cut (every mode up to five, no spotlights, both cards, exploded when there is more than one assembly).
+ */
+export interface ForgeCut { modes?: string[]; spotlight?: string[]; goals?: string[]; motive?: boolean; exploded?: boolean }
+
+export function forgeTour(spec: ForgeSpec, story: ForgeStory | null = spec.story ?? null, cut: ForgeCut = {}): ForgeBeat[] {
   const beats: ForgeBeat[] = []
   let at = 0
   let take = 0
   const push = (b: Omit<ForgeBeat, 'at' | 'take'>, same = false) => { if (!same) take++; beats.push({ at: Math.round(at * 100) / 100, take, ...b }); at += b.dur }
+  const told = story && checkStory(story, true)
+  const goals = told ? (cut.goals ? told.goals.filter((g) => cut.goals!.includes(g)) : told.goals) : []
+  const card = told && (goals.length || cut.motive !== false) ? { goals, motive: cut.motive === false ? '' : told.motive } : null
   push({ label: 'Hero', mode: 'idle', input: [0, 0], explode: [0, 0], dur: 3, shot: { ...HERO_SHOT, az: -0.18, dist: 1.1 }, drift: 0.1, look: PLAIN })
-  const modes = (spec.modes ?? []).filter((x) => x.id !== 'idle').slice(0, MODE_TREATMENTS.length)
+  // what it lives for, read while the camera swings wide with the gremlin to one side; long enough to read every goal
+  if (card?.goals.length) push({ label: 'Life goals', mode: 'idle', input: [0, 0], explode: [0, 0], dur: Math.min(6, 2.2 + 1.1 * card.goals.length), shot: { az: 0.75, el: 0.2, dist: 1.18, frame: 0, side: 0.2 }, drift: -0.06, look: PLAIN, card: 'goals', lines: card.goals })
+  // spotlights: each chosen assembly alone, close, named, turning slowly
+  const asms = spec.assemblies ?? []
+  for (const id of cut.spotlight ?? []) {
+    const a = asms.find((x) => x.id === id); if (!a) continue
+    const n = beats.filter((b) => b.label.startsWith('Spotlight')).length
+    push({ label: `Spotlight: ${a.name}`, mode: 'idle', input: [0, 0], explode: [0, 0], dur: 2.8, shot: { az: n % 2 ? -0.9 : 0.9, el: 0.22, dist: 0.88, frame: 0.7 }, drift: n % 2 ? 0.09 : -0.09, focus: a.id, look: { isolate: true, xray: false, labels: 'focus' }, spot: true })
+  }
+  const modes = (spec.modes ?? []).filter((x) => x.id !== 'idle' && (!cut.modes || cut.modes.includes(x.id))).slice(0, MODE_TREATMENTS.length)
   modes.forEach((m, i) => {
     const t = MODE_TREATMENTS[i]!, focus = m.focus
     const look = focus ? t.look : { ...t.look, isolate: false, labels: t.look.labels === 'focus' ? 'none' as const : t.look.labels }
@@ -711,12 +748,14 @@ export function forgeTour(spec: ForgeSpec): ForgeBeat[] {
     push({ ...base, input: [1, 1], dur: 2.3, drift: 0.07 }, true)
     push({ ...base, input: [1, 0], dur: 0.7, drift: 0.07, look: PLAIN }, true)
   })
-  if ((spec.assemblies ?? []).length > 1) {
+  if ((spec.assemblies ?? []).length > 1 && cut.exploded !== false) {
     const shot = { az: 0.9, el: 0.34, dist: 1.42, frame: 0 }, look: ForgeLook = { isolate: false, xray: false, labels: 'all' }
     push({ label: 'Exploded', mode: 'idle', input: [0, 0], explode: [0, 1], dur: 1.3, shot, drift: 0.12, look })
     push({ label: 'Exploded', mode: 'idle', input: [0, 0], explode: [1, 1], dur: 2.4, shot, drift: 0.2, look }, true)
     push({ label: 'Exploded', mode: 'idle', input: [0, 0], explode: [1, 0], dur: 0.9, shot, drift: 0.2, look: PLAIN }, true)
   }
+  // why, close and low with the gremlin on the other side, before the last look at it
+  if (card?.motive) push({ label: 'Motive', mode: 'idle', input: [0, 0], explode: [0, 0], dur: Math.min(5.5, 2.6 + card.motive.length / 45), shot: { az: -0.6, el: 0.1, dist: 1.12, frame: 0, side: -0.2 }, drift: 0.05, look: PLAIN, card: 'motive', lines: [card.motive] })
   push({ label: 'Hero', mode: 'idle', input: [0, 0], explode: [0, 0], dur: 2.4, shot: { ...HERO_SHOT, az: 0.08 }, drift: 0.05, look: PLAIN })
   return beats
 }
@@ -730,13 +769,16 @@ function beatAt(beats: ForgeBeat[], t: number) {
 }
 
 /** The pose and the look at time `t` into the tour (loops). Pure, so a recording can seek to any frame. */
-export function forgeTourAt(beats: ForgeBeat[], t: number): Required<Omit<ForgePoseInput, 'idle'>> & { beat: number; isolate: string | null; xray: boolean; labels: ForgeLook['labels'] } {
+export function forgeTourAt(beats: ForgeBeat[], t: number): Required<Omit<ForgePoseInput, 'idle'>> & { beat: number; isolate: string | null; xray: boolean; labels: ForgeLook['labels']; card: ForgeBeat['card'] | null; cardIn: number; lines: string[] } {
   const { i, tt } = beatAt(beats, t), b = beats[i]
-  if (!b) return { mode: 'idle', input: 0, explode: 0, t, beat: 0, isolate: null, xray: false, labels: 'none' }
+  if (!b) return { mode: 'idle', input: 0, explode: 0, t, beat: 0, isolate: null, xray: false, labels: 'none', card: null, cardIn: 0, lines: [] }
   const k = Math.min(1, Math.max(0, (tt - b.at) / b.dur))
   const input = b.input[0] + (b.input[1] - b.input[0]) * k
-  const isolate = b.look.isolate && b.focus && input > 0.25 ? b.focus : null
-  return { mode: b.mode, input, explode: b.explode[0] + (b.explode[1] - b.explode[0]) * k, t, beat: i, isolate, xray: b.look.xray && input > 0.25, labels: b.look.labels }
+  const isolate = b.look.isolate && b.focus && (b.spot || input > 0.25) ? b.focus : null
+  // a card fades in over its first 0.6 s and out over its last 0.45 s
+  const into = tt - b.at, left = b.at + b.dur - tt
+  const cardIn = b.card ? Math.max(0, Math.min(1, (into - 0.25) / 0.6, left / 0.45)) : 0
+  return { mode: b.mode, input, explode: b.explode[0] + (b.explode[1] - b.explode[0]) * k, t, beat: i, isolate, xray: b.look.xray && input > 0.25, labels: b.look.labels, card: b.card ?? null, cardIn, lines: b.lines ?? [] }
 }
 
 /**
@@ -874,6 +916,7 @@ export function checkForgeSpec(raw: unknown): { spec: ForgeSpec; notes: string[]
     spec: {
       name: String(r.name ?? 'Unnamed gremlin').slice(0, 40),
       tagline: String(r.tagline ?? '').slice(0, 110),
+      ...(checkStory(r.story) ? { story: checkStory(r.story)! } : {}),
       menace: Math.round(num(r.menace, 0, 10, 3)),
       palette: { enamel: en.hex, accent: ac.hex, glow: gl.hex },
       parts,
@@ -883,6 +926,16 @@ export function checkForgeSpec(raw: unknown): { spec: ForgeSpec; notes: string[]
     },
     notes,
   }
+}
+
+/** A story as text only, trimmed to the title cards' limits; null when there's nothing usable. */
+export function checkStory(raw: unknown, either = false): ForgeStory | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as { goals?: unknown; motive?: unknown }
+  const clean = (v: unknown, n: number) => String(v ?? '').replace(/[\u0000-\u001f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n)
+  const goals = (Array.isArray(r.goals) ? r.goals : []).map((g) => clean(g, FORGE_STORY_LIMITS.goal)).filter(Boolean).slice(0, FORGE_STORY_LIMITS.goals)
+  const motive = clean(r.motive, FORGE_STORY_LIMITS.motive)
+  return (either ? goals.length || motive : goals.length && motive) ? { goals, motive } : null
 }
 
 /** A checked spec back in the wire format the model writes (eyes use `shape` and a scalar `size`; house parts dropped). */

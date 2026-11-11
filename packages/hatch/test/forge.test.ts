@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FORGE_EXAMPLES, checkForgeSpec, curlPoints, forgePose, forgeShotAt, forgeSpecToWire, forgeTour, forgeTourAt, type Vec3 } from '../src/forge.js'
+import { FORGE_EXAMPLES, checkForgeSpec, checkStory, curlPoints, forgePose, forgeShotAt, forgeSpecToWire, forgeTour, forgeTourAt, type Vec3 } from '../src/forge.js'
 
 const dist = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
 
@@ -171,5 +171,61 @@ describe('per-part unwear', () => {
     expect(spec.parts[0]!.unwear).toEqual(['rust', 'oil'])
     expect(spec.parts[1]!.unwear).toBeUndefined()
     expect(checkForgeSpec(forgeSpecToWire(spec)).spec).toEqual(spec)
+  })
+})
+
+describe('the film tells what it lives for', () => {
+  const sp = () => checkForgeSpec(structuredClone(FORGE_EXAMPLES.octopod)).spec
+  it('every example carries a story, and the default film has a goals card and a motive card', () => {
+    for (const ex of Object.values(FORGE_EXAMPLES)) expect(checkForgeSpec(structuredClone(ex)).spec.story?.goals.length).toBeGreaterThan(0)
+    const beats = forgeTour(sp())
+    const cards = beats.filter((b) => b.card)
+    expect(cards.map((b) => b.card)).toEqual(['goals', 'motive'])
+    expect(beats[1]!.card).toBe('goals') // right after the opening shot
+    expect(beats[beats.length - 2]!.card).toBe('motive') // right before the finale
+    expect(cards[0]!.lines).toEqual(sp().story!.goals)
+    expect(cards[0]!.shot.side).toBeGreaterThan(0)
+    expect(cards[1]!.shot.side).toBeLessThan(0)
+  })
+  it('cards fade in and out, and give their words', () => {
+    const beats = forgeTour(sp()), g = beats.find((b) => b.card === 'goals')!
+    expect(forgeTourAt(beats, g.at + 0.05).cardIn).toBe(0)
+    const mid = forgeTourAt(beats, g.at + g.dur / 2)
+    expect(mid).toMatchObject({ card: 'goals', cardIn: 1, lines: sp().story!.goals })
+    expect(forgeTourAt(beats, g.at + g.dur - 0.01).cardIn).toBeLessThan(0.1)
+  })
+  it('a story from outside (its signed config) wins, and a story-less design has no cards', () => {
+    const beats = forgeTour(sp(), { goals: ['Map every wreck in the North Sea'], motive: 'The sea keeps secrets; it does not.' })
+    expect(beats.find((b) => b.card === 'goals')!.lines).toEqual(['Map every wreck in the North Sea'])
+    const { story: _s, ...bare } = sp()
+    expect(forgeTour(bare as typeof bare).some((b) => b.card)).toBe(false)
+  })
+  it('checks stories: trims, drops markup, needs both unless told otherwise', () => {
+    expect(checkStory({ goals: ['  a <b>goal</b>  '], motive: 'why' })).toEqual({ goals: ['a b goal /b'], motive: 'why' })
+    expect(checkStory({ goals: ['x'] })).toBeNull()
+    expect(checkStory({ goals: ['x'] }, true)).toEqual({ goals: ['x'], motive: '' })
+    expect(checkStory({ goals: ['1', '2', '3', '4'], motive: 'm' })!.goals).toHaveLength(3)
+  })
+})
+
+describe('cutting the film', () => {
+  const sp = () => checkForgeSpec(structuredClone(FORGE_EXAMPLES.octopod)).spec
+  it('plays only the chosen modes, goals and extras', () => {
+    const s = sp(), [first] = s.modes!.filter((m) => m.id !== 'idle')
+    const beats = forgeTour(s, s.story, { modes: [first!.id], goals: [s.story!.goals[1]!], motive: false, exploded: false })
+    expect(new Set(beats.filter((b) => b.mode !== 'idle').map((b) => b.mode))).toEqual(new Set([first!.id]))
+    expect(beats.find((b) => b.card === 'goals')!.lines).toEqual([s.story!.goals[1]])
+    expect(beats.some((b) => b.card === 'motive' || b.label === 'Exploded')).toBe(false)
+  })
+  it('spotlights an assembly alone, at rest, with its label', () => {
+    const s = sp(), a = s.assemblies!.find((x) => x.id !== 'body')!
+    const beats = forgeTour(s, s.story, { spotlight: [a.id] })
+    const b = beats.find((x) => x.label === `Spotlight: ${a.name}`)!
+    expect(b).toMatchObject({ focus: a.id, spot: true, look: { isolate: true, labels: 'focus' } })
+    expect(forgeTourAt(beats, b.at + 1).isolate).toBe(a.id)
+  })
+  it('no goals and no motive: no cards', () => {
+    const s = sp()
+    expect(forgeTour(s, s.story, { goals: [], motive: false }).some((b) => b.card)).toBe(false)
   })
 })

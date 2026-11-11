@@ -14,14 +14,23 @@ const EXPLODE_SECONDS = 0.9
 /** Viewer state. `input` and `explode` move toward their targets each frame, so every change animates. */
 export const view = {
   mode: 'idle', input: 0, inputTo: 0, explode: 0, explodeTo: 0,
-  isolate: null, labels: false, xray: false, tourT: 0, tourXray: false, tourLabels: 'none', tourFocus: null, clean: (() => { try { return localStorage.getItem('gremlins.forge.clean') === '1' } catch { return false } })(), tour: false, tourStart: 0, beats: [], beat: -1,
+  isolate: null, labels: false, xray: false, tourT: 0, tourXray: false, tourLabels: 'none', tourFocus: null, tourCard: null, tourCardIn: 0, clean: (() => { try { return localStorage.getItem('gremlins.forge.clean') === '1' } catch { return false } })(), tour: false, tourStart: 0, beats: [], beat: -1,
   pose: {},
+}
+
+/** Its goals and motive for the tour's title cards, when they come from outside the design (its signed config, the hatch). */
+let storyOverride = null
+export function setTourStory(story, spec) { storyOverride = story; if (spec) view.beats = forgeTour(spec, tourStory(spec)) }
+export function tourStory(spec) {
+  const own = spec?.story
+  if (!storyOverride) return own ?? null
+  return { goals: storyOverride.goals?.length ? storyOverride.goals : own?.goals ?? [], motive: storyOverride.motive || own?.motive || '' }
 }
 
 /** After a rebuild: back to rest, keeping the display toggles; isolate survives if its assembly still exists. */
 export function resetView(spec) {
   const keep = (spec.assemblies || []).some((a) => a.id === view.isolate) ? view.isolate : null
-  Object.assign(view, { mode: 'idle', input: 0, inputTo: 0, isolate: keep, beat: -1, beats: forgeTour(spec) })
+  Object.assign(view, { mode: 'idle', input: 0, inputTo: 0, isolate: keep, beat: -1, beats: forgeTour(spec, tourStory(spec)) })
   // one assembly: nothing to explode, label or tour, and the console is hidden, so nothing may be left switched on
   if ((spec.assemblies || []).length < 2) Object.assign(view, { explode: 0, explodeTo: 0, labels: false, tour: false })
 }
@@ -47,7 +56,7 @@ function tourTime(now) {
 /** Hands control back: whatever the tour was showing settles to rest. */
 export function stopTour() {
   if (!view.tour) return
-  Object.assign(view, { tour: false, inputTo: 0, explodeTo: 0, isolate: null })
+  Object.assign(view, { tour: false, inputTo: 0, explodeTo: 0, isolate: null, tourCard: null, tourCardIn: 0 })
 }
 
 /**
@@ -60,7 +69,7 @@ export function step(spec, dt, t, still, reduceMotion) {
     const tt = tourTime(t), s = forgeTourAt(view.beats, tt), b = view.beats[s.beat]
     // the beat's look rides on tour-only fields, so the visitor's own toggles come back untouched afterwards
     Object.assign(view, { mode: s.mode, input: s.input, inputTo: s.input, explode: s.explode, explodeTo: s.explode, beat: s.beat,
-      tourT: tt, isolate: s.isolate, tourXray: s.xray, tourLabels: s.labels, tourFocus: b?.focus ?? null })
+      tourT: tt, isolate: s.isolate, tourXray: s.xray, tourLabels: s.labels, tourFocus: b?.focus ?? null, tourCard: s.card, tourCardIn: s.cardIn })
     return { mode: s.mode, input: s.input, explode: s.explode, t, idle: !reduceMotion }
   }
   const toward = (v, to, secs) => (v < to ? Math.min(to, v + dt / secs) : Math.max(to, v - dt / secs))

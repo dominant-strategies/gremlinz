@@ -95,6 +95,7 @@ export function paintOverlay(ctx, o) {
     ctx.fillStyle = l.active ? signal : muted; ctx.font = `${17 * k}px ${mono}`; ctx.fillText(l.status, tx, by + 50 * k)
     ctx.textAlign = 'left'
   }
+  if (o.card) paintCard(ctx, o.card, w, h, k, { mono, display, signal, ink })
   // the operating mode, big, bottom left
   if (o.mode) {
     ctx.fillStyle = signal
@@ -104,5 +105,46 @@ export function paintOverlay(ctx, o) {
   // credit
   ctx.textAlign = 'right'; ctx.fillStyle = muted; ctx.font = `${16 * k}px ${mono}`
   ctx.fillText('GREMLINZ.AI · GREMLIN FORGE', w - pad, h - pad)
+  ctx.restore()
+}
+
+/** Words wrapped to `max` pixels wide in the current font. */
+function wrap(ctx, text, max) {
+  const out = []
+  let line = ''
+  for (const word of String(text).split(/\s+/)) {
+    const next = line ? `${line} ${word}` : word
+    if (line && ctx.measureText(next).width > max) { out.push(line); line = word } else line = next
+  }
+  if (line) out.push(line)
+  return out
+}
+
+/**
+ * A title card: its life goals (numbered) or its motive, in a pale panel with an accent rule, on the side the camera
+ * left free, faded by `card.alpha`. Type is large enough to read on a phone at 1080p.
+ */
+function paintCard(ctx, card, w, h, k, f) {
+  ctx.save()
+  ctx.globalAlpha = Math.max(0, Math.min(1, card.alpha))
+  const bw = Math.min(w * 0.42, 820 * k), x = card.left ? w * 0.06 : w - w * 0.06 - bw, padX = 40 * k, inner = bw - padX * 2
+  const motive = card.kind === 'motive'
+  const size = motive ? 54 * k : 46 * k, lh = size * 1.18
+  ctx.font = `800 ${size}px ${f.display}`
+  const blocks = motive ? [wrap(ctx, card.lines[0] || '', inner)] : card.lines.map((g) => wrap(ctx, g, inner - 64 * k))
+  const textH = blocks.reduce((a, b) => a + b.length * lh, 0) + (blocks.length - 1) * 22 * k
+  const bh = textH + 112 * k, y = (h - bh) / 2
+  ctx.fillStyle = 'rgba(251,250,247,.9)'; ctx.fillRect(x, y, bw, bh)
+  ctx.fillStyle = f.signal; ctx.fillRect(x, y, 6 * k, bh)
+  ctx.font = `600 ${20 * k}px ${f.mono}`; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left'
+  ctx.fillText((motive ? 'WHY IT EXISTS' : 'LIFE GOALS').split('').join(String.fromCharCode(8202)), x + padX, y + 52 * k)
+  let ty = y + 84 * k + size * 0.85
+  ctx.font = `800 ${size}px ${f.display}`
+  blocks.forEach((lines, i) => {
+    if (!motive) { ctx.fillStyle = f.signal; ctx.font = `600 ${22 * k}px ${f.mono}`; ctx.fillText(String(i + 1).padStart(2, '0'), x + padX, ty - 6 * k); ctx.font = `800 ${size}px ${f.display}` }
+    ctx.fillStyle = f.ink
+    for (const line of lines) { ctx.fillText(line, x + padX + (motive ? 0 : 64 * k), ty); ty += lh }
+    ty += 22 * k
+  })
   ctx.restore()
 }

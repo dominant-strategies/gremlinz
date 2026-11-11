@@ -17,7 +17,7 @@ import { FORGE_CRITIQUE_MAX_STILLS, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_
 import { encodeVideo, paintOverlay, videoSupport } from './forge-record.js'
 import { fitName, hideCursor, liveHud, modelCode, mountHud, renderHud, tickHud } from './forge-hud.js'
 import { modeFor, quai, watchGremlin } from './forge-live.js'
-import { applySkins, applyPose, drawLabels, layoutLabels, forgetIsolate, mountLabels, resetView, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, view } from './forge-motion.js'
+import { applySkins, applyPose, drawLabels, layoutLabels, forgetIsolate, mountLabels, resetView, setTourStory, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, tourStory, view } from './forge-motion.js'
 import { addDecals, artReady, wearFor, wearFrame, wearMaterial } from './forge-surfaces.js'
 import { creatureSvg } from '@gremlins/hatch/creature'
 import { account, hasSessionKey, mountAuth, onAccountChange, sessionPostJson, signIn, signOut, walletErrorMessage } from './auth.ts'
@@ -208,7 +208,8 @@ function initStudio() {
         const turn = Math.round(robot.rotation.y / (Math.PI * 2)) * Math.PI * 2
         robot.rotation.y += (turn - robot.rotation.y) * Math.min(1, dt * 2.5)
         controls.target.copy(placeShot(forgeShotAt(view.beats, view.tourT), rig).target)
-      } else focusCamera(dt)
+      } else { centreCamera(); focusCamera(dt) }
+      showTourCard()
       syncConsole()
       tickHud(now)
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')
@@ -255,6 +256,24 @@ const HERO_DIR = new T.Vector3(0.36, 0.17, 0.92).normalize()
  * Puts the camera where a tour shot (forgeShotAt) says, around the hero framing: azimuth, elevation and distance blend
  * from the last shot to this one, and the aim slides between their focus parts. Shared by the stage and the recorder.
  */
+/** The tour's title card on the stage: its goals or its motive, on the side the camera left free, fading in and out. */
+let cardShown = ''
+function showTourCard() {
+  const el = $('tourCard'); if (!el) return
+  const b = view.tour && view.tourCard ? view.beats[view.beat] : null
+  if (!b) { if (!el.hidden) { el.hidden = true; cardShown = '' } return }
+  const key = `${view.beat}|${b.card}`
+  if (key !== cardShown) {
+    cardShown = key
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+    el.className = `tourcard ${b.card} ${(b.shot.side ?? 0) > 0 ? 'left' : 'right'}`
+    el.innerHTML = b.card === 'goals'
+      ? `<small>Life goals</small><ol>${(b.lines || []).map((g) => `<li>${esc(g)}</li>`).join('')}</ol>`
+      : `<small>Why it exists</small><blockquote>${esc(b.lines?.[0] || '')}</blockquote>`
+    el.hidden = false
+  }
+  el.style.opacity = String(view.tourCardIn)
+}
 function placeShot(sh, rig0) {
   const heroAz = Math.atan2(HERO_DIR.x, HERO_DIR.z), k = sh.k, L = (a, b) => a + (b - a) * k
   const aimOf = (x) => {
@@ -264,9 +283,14 @@ function placeShot(sh, rig0) {
   const target = aimOf(sh.from).lerp(aimOf(sh.to), k)
   const az = heroAz + L(sh.from.az, sh.to.az), el = L(sh.from.el, sh.to.el), dist = hero.dist * L(sh.from.dist, sh.to.dist)
   camera.position.copy(target).add(new T.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).multiplyScalar(dist))
-  camera.lookAt(target); camera.updateMatrixWorld()
+  camera.lookAt(target)
+  // a title card's shot slides the gremlin sideways (a film offset, so the framing and perspective stay the same)
+  const side = L(sh.from.side ?? 0, sh.to.side ?? 0)
+  if (camera.filmOffset !== -side * camera.getFilmWidth()) { camera.filmOffset = -side * camera.getFilmWidth(); camera.updateProjectionMatrix() }
+  camera.updateMatrixWorld()
   return { target, az }
 }
+function centreCamera() { if (camera.filmOffset) { camera.filmOffset = 0; camera.updateProjectionMatrix() } }
 // Isolating an assembly glides the camera in on it; clearing glides back to the hero framing. Orbiting stays free.
 let hero = null, focusId = null, camAnim = null
 function focusCamera(dt) {
@@ -1057,10 +1081,10 @@ const REC = { w: 1920, h: 1080, fps: 30 }
  * a scripted path (a slow orbit, gliding in on the part a mode works, stepping back when exploded), and the console's
  * name, labels and mode are painted on. Frame-exact however slow the GPU; then it downloads.
  */
-async function recordTour() {
+async function recordTour(cut = {}) {
   if (!glOK || !inner || ctl || !hero) return
-  const sp = spec(), beats = forgeTour(sp), lastBeat = beats[beats.length - 1]
-  const len = Math.min(40, Math.max(8, lastBeat ? lastBeat.at + lastBeat.dur : 8)), frames = Math.round(len * REC.fps)
+  const sp = spec(), beats = forgeTour(sp, tourStory(sp), cut), lastBeat = beats[beats.length - 1]
+  const len = Math.min(75, Math.max(8, lastBeat ? lastBeat.at + lastBeat.dur : 8)), frames = Math.round(len * REC.fps)
   if (!(await videoSupport(REC.w, REC.h, REC.fps))) return setStatus('This browser can’t encode video. Try Chrome, Edge or Safari 17 or newer.', true)
   ctl = new AbortController(); busy(true, 'Recording the tour… this takes about a minute.')
   recording = true
@@ -1093,7 +1117,8 @@ async function recordTour() {
         composer.render()
         ctx.drawImage(renderer.domElement, 0, 0, REC.w, REC.h)
         const word = s.input > 0.05 && m ? m.name : s.explode > 0.05 ? 'Exploded' : ''
-        paintOverlay(ctx, { w: REC.w, h: REC.h, code, kicker, name: sp.name, tagline: sp.tagline, mode: word, labels: layoutLabels(rig0, camera, REC.w, REC.h, 78) })
+        const card = s.card && s.cardIn > 0 ? { kind: s.card, lines: s.lines, alpha: s.cardIn, left: (b.shot.side ?? 0) > 0, name: sp.name } : null
+        paintOverlay(ctx, { w: REC.w, h: REC.h, code, kicker, name: sp.name, tagline: sp.tagline, mode: s.card ? '' : word, labels: s.card ? [] : layoutLabels(rig0, camera, REC.w, REC.h, 78), card })
       },
     })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${slug}-tour.mp4`
@@ -1105,14 +1130,51 @@ async function recordTour() {
     recording = false
     Object.assign(view, saved.view)
     renderer.setPixelRatio(saved.ratio); composer.setPixelRatio(saved.ratio); resize()
-    camera.position.copy(saved.pos); controls.target.copy(saved.target); camera.lookAt(controls.target); robot.rotation.y = saved.turn
+    centreCamera(); camera.position.copy(saved.pos); controls.target.copy(saved.target); camera.lookAt(controls.target); robot.rotation.y = saved.turn
     forgetIsolate(); busy(false)
   }
 }
 
+/**
+ * Before a film is cut: what it features. Its goals card (goal by goal) and motive card, assemblies to spotlight, the
+ * modes it plays, the exploded view. Shows the running length as you choose; remembered per design for this visit.
+ */
+const cuts = new Map()
+function openCut() {
+  const sp = spec(); if (!sp || !glOK || ctl) return
+  const dlg = $('cutDlg'), form = $('cutForm'), esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+  const story = tourStory(sp), asms = sp.assemblies || [], modes = (sp.modes || []).filter((m) => m.id !== 'idle')
+  const was = cuts.get(sp.name) || {}
+  const box = (name, value, label, on, extra = '') => `<label><input type="checkbox" name="${name}" value="${esc(value)}" ${on ? 'checked' : ''} ${extra}> ${esc(label)}</label>`
+  const opts = (id) => form.querySelector(`#${id} .cut-opts`)
+  opts('cutGoals').className = 'cut-opts goals'
+  opts('cutGoals').innerHTML = story?.goals?.length ? story.goals.map((g) => box('goal', g, g, !was.goals || was.goals.includes(g))).join('') : '<p class="none">No goals yet. Describe them and Claude adds them to the design.</p>'
+  opts('cutSpots').innerHTML = asms.filter((a) => !a.house || asms.length > 1).map((a) => box('spot', a.id, a.name, (was.spotlight || []).includes(a.id))).join('')
+  $('cutSpots').hidden = asms.length < 2
+  opts('cutModes').innerHTML = modes.length ? modes.map((m, i) => box('mode', m.id, m.name, was.modes ? was.modes.includes(m.id) : i < 5)).join('') : '<p class="none">This design has no modes.</p>'
+  opts('cutMore').innerHTML = [story?.motive ? box('motive', '1', `Why it exists: “${story.motive.length > 70 ? story.motive.slice(0, 68) + '…' : story.motive}”`, was.motive !== false) : '',
+    asms.length > 1 ? box('exploded', '1', 'Exploded view', was.exploded !== false) : ''].join('') || '<p class="none">Nothing else to add.</p>'
+  const read = () => {
+    const fd = new FormData(form)
+    return { goals: fd.getAll('goal').map(String), spotlight: fd.getAll('spot').map(String), modes: fd.getAll('mode').map(String), motive: fd.has('motive'), exploded: fd.has('exploded') }
+  }
+  const sync = () => {
+    const cut = read()
+    // the tour gives each mode its own camera; it has five
+    for (const b of form.querySelectorAll('input[name=mode]')) b.disabled = !b.checked && cut.modes.length >= 5
+    const beats = forgeTour(sp, story, cut), last = beats[beats.length - 1]
+    $('cutLen').textContent = `${Math.round(last ? last.at + last.dur : 0)} s · ${new Set(beats.map((b) => b.take)).size} shots`
+  }
+  form.onchange = sync
+  sync()
+  $('cutCancel').onclick = () => dlg.close()
+  form.onsubmit = (e) => { e.preventDefault(); const cut = read(); cuts.set(sp.name, cut); dlg.close(); recordTour(cut) }
+  dlg.showModal()
+}
+
 // ---------------------------------------------------------------------------------------------------- live mode
 const liveQueue = []
-let liveNow = null, liveLast = null, liveQuietSince = 0, liveDead = false
+let liveNow = null, liveLast = null, liveQuietSince = 0, liveDead = false, liveStoryOn = false
 const ACT_WORD = { thinking: 'Thinking', posting: 'Posting', earning: 'Earning', paying: 'Paying' }
 /** Plays queued activities one at a time: the mode rises, holds three and a half seconds, settles, then the next. */
 function stepLive(now) {
@@ -1141,6 +1203,12 @@ async function startLiveMode() {
   watchGremlin(LIVE, {
     onState: (g) => {
       const lp = g.pulse
+      // its film's title cards tell what it signed up for: its real goals, and the first line of who it is
+      if (g.goals?.length && !liveStoryOn) {
+        liveStoryOn = true
+        const motive = (String(g.persona).match(/^[^.!?]{8,170}[.!?]/)?.[0] || String(g.persona).slice(0, 167) + (String(g.persona).length > 167 ? '…' : '')).trim()
+        setTourStory({ goals: g.goals.slice(0, 3), motive }, spec())
+      }
       liveDead = g.liveness === 'dead'
       $('stage').classList.toggle('departed', liveDead)
       liveHud.operator = g.maker ? `Maker ${g.maker.slice(0, 6)}…${g.maker.slice(-4)}` : '—'
@@ -1600,7 +1668,7 @@ function wire() {
   ask.addEventListener('drop', (e) => { const f = [...e.dataTransfer.files].find((x) => x.type.startsWith('image/')); if (f) { e.preventDefault(); loadReference(f) } ask.classList.remove('dragover') })
   $('prompt').addEventListener('paste', (e) => { const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/')); if (f) { e.preventDefault(); loadReference(f) } })
   $('checkBtn').addEventListener('click', () => review(false))
-  $('recBtn').addEventListener('click', recordTour)
+  $('recBtn').addEventListener('click', openCut)
   $('attachBtn').addEventListener('click', attachToGremlin)
   $('refineForm').addEventListener('submit', (e) => {
     e.preventDefault(); const t = $('refine').value.trim()
@@ -1678,6 +1746,9 @@ else {
   if (q.has('hatch')) {
     document.body.classList.add('embedded', 'hatching')
     if (q.get('brief') && !$('prompt').value) $('prompt').value = q.get('brief').slice(0, 1500)
+    // the goals the maker wrote are the ones its film shows, whatever the design says
+    const goals = (q.get('goals') || '').split('\n').map((g) => g.trim()).filter(Boolean)
+    if (goals.length) setTourStory({ goals: goals.slice(0, 3), motive: '' })
   }
   if (!step()) { const r = checkForgeSpec(structuredClone(FORGE_EXAMPLES.octopod)); state.steps = [{ spec: r.spec, house: r.notes, label: 'Example: Octopod', parent: -1, t: Date.now() }]; state.cur = 0 }
   render(true)

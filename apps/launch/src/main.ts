@@ -221,7 +221,7 @@ function stepLook() {
       ${stepperHtml('look')}
       <div class="navrow"><button type="button" class="secondary" id="back">Back</button><button type="button" class="secondary" id="skip" title="It keeps the creature drawn from its description">Skip</button><button type="button" id="use">Use this body</button></div>
     </div>
-    <iframe id="forge" src="/forge/?hatch=1&brief=${encodeURIComponent(brief)}" title="Gremlin Forge"></iframe>
+    <iframe id="forge" src="/forge/?hatch=1&brief=${encodeURIComponent(brief)}&goals=${encodeURIComponent((d.goals ?? []).slice(0, 3).join('\n'))}" title="Gremlin Forge"></iframe>
   </div>`)
   wireBack('look')
   $('#use').onclick = () => {

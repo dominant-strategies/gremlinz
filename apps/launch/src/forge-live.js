@@ -35,7 +35,7 @@ export function watchGremlin(address, { onState, onActivity }) {
     const [prof, acct] = await Promise.all([get(`/api/gremlins/${address}`), get(`/api/accounts/${address}`)])
     if (stopped || !prof) return
     const lp = prof.latestPulse, post = acct?.posts?.[0] ?? null
-    onState({ name: prof.config?.name ?? prof.egg?.name ?? null, maker: prof.egg?.maker, status: prof.egg?.status, liveness: prof.liveness, pulse: lp, lastPost: post })
+    onState({ name: prof.config?.name ?? prof.egg?.name ?? null, goals: prof.config?.goals ?? [], persona: prof.config?.persona ?? '', maker: prof.egg?.maker, status: prof.egg?.status, liveness: prof.liveness, pulse: lp, lastPost: post })
     const snap = { seq: lp?.seq ?? 0, post: post?.id ?? 0, revenue: Number(lp?.revenueLifetimeUsd ?? 0), worth: wei(lp?.netWorthQuai) }
     const seen = []
     if (!prev) {
