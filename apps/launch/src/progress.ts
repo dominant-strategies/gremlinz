@@ -40,12 +40,14 @@ export interface StepDef {
 export const COMMON_STEPS: StepDef[] = [
   { id: 'connect', title: 'Sign in with your wallet', sigs: 1, who: 'you' },
   { id: 'describe', title: 'Describe your gremlin', sigs: 0, who: 'you' },
+  { id: 'look', title: 'Give it a look in the Forge', sigs: 0, who: 'you' },
   { id: 'host', title: 'Choose where the egg hatches', sigs: 0, who: 'you' },
 ]
 
 const HATCH_STEPS: StepDef[] = [
   { id: 'announce', title: 'Egg boots and announces itself', sigs: 0, expect: '3–8 min', who: 'auto' },
   { id: 'sign-config', title: 'Sign the config for this egg', sigs: 1, who: 'you' },
+  { id: 'look-post', title: 'Publish its look', sigs: 1, who: 'you' },
   { id: 'feed', title: 'Fund your gremlin', sigs: 0, who: 'you' },
   { id: 'hatched', title: 'Hatched (first pulse)', sigs: 0, expect: 'minutes after funding', who: 'auto' },
 ]

@@ -1008,3 +1008,9 @@ if (!step()) { const r = checkForgeSpec(structuredClone(FORGE_EXAMPLES.octopod))
 render(true)
 renderAuth()
 loadCaps()
+
+// The hatch page embeds this studio and takes the design on screen as its gremlin's look (same origin only).
+window.gremlinsForge = {
+  current: () => (step() ? { spec: spec(), label: step().label, example: /^Example:/.test(step().label) } : undefined),
+  portrait: (size = 512) => (glOK ? captureRender(size, 'image/jpeg') : step()?.thumb),
+}
