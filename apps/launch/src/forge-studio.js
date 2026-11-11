@@ -13,7 +13,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
-import { FORGE_CRITIQUE_MAX_STILLS, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints, forgeEase, forgeTour, forgeTourAt } from '@gremlins/hatch'
+import { FORGE_CRITIQUE_MAX_STILLS, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints, forgeShotAt, forgeTour, forgeTourAt } from '@gremlins/hatch'
 import { encodeVideo, paintOverlay, videoSupport } from './forge-record.js'
 import { fitName, hideCursor, liveHud, modelCode, mountHud, renderHud, tickHud } from './forge-hud.js'
 import { modeFor, quai, watchGremlin } from './forge-live.js'
@@ -196,15 +196,19 @@ function initStudio() {
       else if (renderer.getPixelRatio() > 1) { renderer.setPixelRatio(1); composer.setPixelRatio(1); resize() }
     } else if (avg <= 1 / 32) slow = 0
     // AO reads the ghosts and glass of isolate and x-ray as solid, so it rests while they're on
-    aoPass.enabled = quality.ao && !view.isolate && !view.xray
-    // during the tour the camera drifts round the gremlin instead of the turntable spinning it
-    controls.autoRotate = view.tour && !reduceMotion; controls.autoRotateSpeed = 0.7
+    aoPass.enabled = quality.ao && !view.isolate && !view.xray && !(view.tour && view.tourXray)
     if (spin && robot && !placing && !selected.size && !view.tour) robot.rotation.y += 0.004
     if (inner && spec()) {
       const still = !!placing || selected.size > 0, rig = inner.userData.rig
       applyPose(rig, spec(), stepView(spec(), dt, now, still, reduceMotion || liveDead))
-      applySkins(rig, still ? null : view.isolate, !still && view.xray)
-      focusCamera(dt)
+      const xray = !still && (view.xray || (view.tour && view.tourXray))
+      applySkins(rig, still ? null : view.isolate, xray)
+      if (view.tour && hero) {
+        // the tour films itself: the shot list drives the camera, and the gremlin turns back to face it
+        const turn = Math.round(robot.rotation.y / (Math.PI * 2)) * Math.PI * 2
+        robot.rotation.y += (turn - robot.rotation.y) * Math.min(1, dt * 2.5)
+        controls.target.copy(placeShot(forgeShotAt(view.beats, view.tourT), rig).target)
+      } else focusCamera(dt)
       syncConsole()
       tickHud(now)
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')
@@ -245,6 +249,23 @@ function frame(fresh) {
   controls.update()
   hero = { target: controls.target.clone(), dist }
   focusId = `${view.isolate || ''}|${view.explodeTo > 0}`; camAnim = null
+}
+const HERO_DIR = new T.Vector3(0.36, 0.17, 0.92).normalize()
+/**
+ * Puts the camera where a tour shot (forgeShotAt) says, around the hero framing: azimuth, elevation and distance blend
+ * from the last shot to this one, and the aim slides between their focus parts. Shared by the stage and the recorder.
+ */
+function placeShot(sh, rig0) {
+  const heroAz = Math.atan2(HERO_DIR.x, HERO_DIR.z), k = sh.k, L = (a, b) => a + (b - a) * k
+  const aimOf = (x) => {
+    const r = x.focus && rig0[x.focus], a = r?.anchor ? r.anchor.getWorldPosition(new T.Vector3()) : hero.target
+    return hero.target.clone().lerp(a, x.focus ? x.frame : 0)
+  }
+  const target = aimOf(sh.from).lerp(aimOf(sh.to), k)
+  const az = heroAz + L(sh.from.az, sh.to.az), el = L(sh.from.el, sh.to.el), dist = hero.dist * L(sh.from.dist, sh.to.dist)
+  camera.position.copy(target).add(new T.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).multiplyScalar(dist))
+  camera.lookAt(target); camera.updateMatrixWorld()
+  return { target, az }
 }
 // Isolating an assembly glides the camera in on it; clearing glides back to the hero framing. Orbiting stays free.
 let hero = null, focusId = null, camAnim = null
@@ -1046,10 +1067,9 @@ async function recordTour() {
   recording = true
   const out = document.createElement('canvas'); out.width = REC.w; out.height = REC.h
   const ctx = out.getContext('2d')
-  const keep = ['labels', 'isolate', 'mode', 'input', 'inputTo', 'explode', 'explodeTo']
+  const keep = ['labels', 'isolate', 'mode', 'input', 'inputTo', 'explode', 'explodeTo', 'tour', 'tourT', 'tourXray', 'tourLabels', 'tourFocus', 'beat']
   const saved = { pos: camera.position.clone(), target: controls.target.clone(), ratio: renderer.getPixelRatio(), turn: robot.rotation.y, view: Object.fromEntries(keep.map((k) => [k, view[k]])) }
-  const rig0 = inner.userData.rig, heroDir = new T.Vector3(0.36, 0.17, 0.92).normalize()
-  const az0 = Math.atan2(heroDir.x, heroDir.z), el = Math.asin(heroDir.y)
+  const rig0 = inner.userData.rig
   const code = modelCode(sp), kicker = $('hudKicker').textContent
   const slug = (sp.name || 'gremlin').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'gremlin'
   try {
@@ -1063,19 +1083,13 @@ async function recordTour() {
       draw: (i) => {
         const t = i / REC.fps, s = forgeTourAt(beats, t), b = beats[s.beat]
         const m = sp.modes?.find((x) => x.id === s.mode)
-        const focus = m?.focus && s.input > 0.25 ? m.focus : null
-        Object.assign(view, { isolate: focus, labels: b?.label === 'Exploded', mode: s.mode, input: s.input, explode: s.explode })
+        // the same film as the stage's tour: the beat's pose, look and camera at this exact time
+        Object.assign(view, { tour: true, tourT: t, beat: s.beat, isolate: s.isolate, tourXray: s.xray, tourLabels: s.labels, tourFocus: b?.focus ?? null, labels: false, mode: s.mode, input: s.input, explode: s.explode })
         applyPose(rig0, sp, { mode: s.mode, input: s.input, explode: s.explode, t, idle: true })
-        applySkins(rig0, focus, false)
-        const kz = focus ? forgeEase(Math.min(1, s.input * 1.6)) : 0
-        const anchor = focus && rig0[focus]?.anchor ? rig0[focus].anchor.getWorldPosition(new T.Vector3()) : hero.target
-        const target = hero.target.clone().lerp(anchor, kz * 0.8)
-        const dist = hero.dist * (1 - 0.28 * kz) * (1 + 0.4 * forgeEase(s.explode)), az = az0 + t * 0.16
-        camera.position.copy(target).add(new T.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).multiplyScalar(dist))
-        camera.lookAt(target); camera.updateMatrixWorld()
-        rig.rotation.y = az
+        applySkins(rig0, s.isolate, s.xray)
+        rig.rotation.y = placeShot(forgeShotAt(beats, t), rig0).az
         robot.updateMatrixWorld(); wearFrame.value.copy(robot.matrixWorld).invert()
-        aoPass.enabled = quality.ao && !focus
+        aoPass.enabled = quality.ao && !s.isolate && !s.xray
         aoCamera.copy(camera, false); aoCamera.layers.set(0)
         composer.render()
         ctx.drawImage(renderer.domElement, 0, 0, REC.w, REC.h)

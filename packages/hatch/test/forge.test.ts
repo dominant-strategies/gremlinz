@@ -1,22 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { FORGE_EXAMPLES, checkForgeSpec, curlPoints, forgePose, forgeSpecToWire, forgeTour, forgeTourAt, type Vec3 } from '../src/forge.js'
+import { FORGE_EXAMPLES, checkForgeSpec, curlPoints, forgePose, forgeShotAt, forgeSpecToWire, forgeTour, forgeTourAt, type Vec3 } from '../src/forge.js'
 
 const dist = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
 
 describe('forge spec v4: assemblies and modes', () => {
   it('puts a v3 design into one body assembly with an idle mode', () => {
-    const { spec, notes } = checkForgeSpec(FORGE_EXAMPLES.toaster)
+    const { spec, notes } = checkForgeSpec(FORGE_EXAMPLES.foreman)
     expect(spec.assemblies?.map((a) => a.id)).toEqual(['body'])
     expect(spec.modes?.map((m) => m.id)).toEqual(['idle'])
     expect(spec.parts.every((p) => p.asm === 'body')).toBe(true)
     expect(notes.join(' ')).not.toMatch(/assembl/)
   })
 
-  it('keeps the octopod example whole: five assemblies, two modes, chains and rivets', () => {
+  it('keeps the octopod example whole: five assemblies, three modes, chains and rivets', () => {
     const { spec, notes } = checkForgeSpec(FORGE_EXAMPLES.octopod)
     expect(notes).toEqual([])
     expect(spec.assemblies?.map((a) => a.id)).toEqual(['mantle', 'optics', 'jaw', 'arms', 'stacks'])
-    expect(spec.modes?.map((m) => m.id)).toEqual(['idle', 'strike', 'vent'])
+    expect(spec.modes?.map((m) => m.id)).toEqual(['idle', 'strike', 'vent', 'jet'])
+    expect(spec.modes?.map((m) => m.when)).toEqual([undefined, 'posting', 'thinking', 'earning'])
     const arm = spec.parts.find((p) => p.kind === 'chain' && p.asm === 'arms')!
     expect(arm).toMatchObject({ link: 'drum', count: 22, radius: [0.09, 0.022] })
     expect(spec.parts[0]!.rivets).toEqual([{ y: 1.25, count: 36, mat: 'brass' }, { y: 1.85, count: 24, mat: 'steel' }])
@@ -102,19 +103,38 @@ describe('curlPoints', () => {
 describe('forgeTour', () => {
   const { spec } = checkForgeSpec(FORGE_EXAMPLES.octopod)
   const beats = forgeTour(spec)
+  const total = beats.at(-1)!.at + beats.at(-1)!.dur
 
-  it('plays hero, each mode, then the exploded view, back to back', () => {
+  it('opens on the hero, gives each mode its own take, explodes, and ends on the hero', () => {
     expect(beats[0]).toMatchObject({ at: 0, mode: 'idle', label: 'Hero' })
-    expect(beats.map((b) => b.label)).toContain('Strike')
-    expect(beats.at(-1)!.label).toBe('Exploded')
+    expect(beats.at(-1)!.label).toBe('Hero')
+    expect(beats.map((b) => b.label)).toEqual(expect.arrayContaining(['Strike', 'Vent', 'Jet', 'Exploded']))
     for (let i = 1; i < beats.length; i++) expect(beats[i]!.at).toBeCloseTo(beats[i - 1]!.at + beats[i - 1]!.dur)
   })
 
-  it('seeks to any time and loops', () => {
-    const total = beats.at(-1)!.at + beats.at(-1)!.dur
-    const mid = beats[2]! // Strike, holding at full
-    expect(forgeTourAt(beats, mid.at + 0.5)).toMatchObject({ mode: 'strike', input: 1, explode: 0, beat: 2 })
-    expect(forgeTourAt(beats, mid.at + 0.5 + total)).toMatchObject({ mode: 'strike', input: 1, beat: 2 })
+  it('never shows the same thing twice: each mode from its own angle with its own treatment', () => {
+    const modeTakes = ['strike', 'vent', 'jet'].map((id) => beats.find((b) => b.mode === id && b.input[1] === 1 && b.input[0] === 1)!)
+    const angles = modeTakes.map((b) => `${b.shot.az},${b.shot.el}`)
+    expect(new Set(angles).size).toBe(3)
+    expect(modeTakes.map((b) => [b.look.isolate, b.look.xray, b.look.labels])).toEqual([[true, false, 'focus'], [false, true, 'none'], [false, false, 'all']])
+  })
+
+  it('moves the camera without jumps, across beats and round the loop', () => {
+    const aim = (t: number) => { const s = forgeShotAt(beats, t); const k = s.k; return { az: s.from.az + (s.to.az - s.from.az) * k, el: s.from.el + (s.to.el - s.from.el) * k, dist: s.from.dist + (s.to.dist - s.from.dist) * k } }
+    for (const b of [...beats.slice(1), { at: total }]) {
+      const a = aim(b.at - 1e-4), c = aim(b.at + 1e-4)
+      expect(Math.abs(a.az - c.az)).toBeLessThan(0.01)
+      expect(Math.abs(a.el - c.el)).toBeLessThan(0.01)
+      expect(Math.abs(a.dist - c.dist)).toBeLessThan(0.01)
+    }
+  })
+
+  it('seeks to any time and loops, with the beat\'s look', () => {
+    const hold = beats.find((b) => b.mode === 'strike' && b.input[0] === 1 && b.input[1] === 1)!
+    expect(forgeTourAt(beats, hold.at + 0.5)).toMatchObject({ mode: 'strike', input: 1, explode: 0, isolate: 'jaw', labels: 'focus' })
+    expect(forgeTourAt(beats, hold.at + 0.5 + total)).toMatchObject({ mode: 'strike', input: 1 })
+    const xr = beats.find((b) => b.mode === 'vent' && b.input[0] === 1)!
+    expect(forgeTourAt(beats, xr.at + 0.5)).toMatchObject({ xray: true, isolate: null })
     expect(forgeTourAt([], 5)).toMatchObject({ mode: 'idle', input: 0 })
   })
 })

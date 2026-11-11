@@ -14,7 +14,7 @@ const EXPLODE_SECONDS = 0.9
 /** Viewer state. `input` and `explode` move toward their targets each frame, so every change animates. */
 export const view = {
   mode: 'idle', input: 0, inputTo: 0, explode: 0, explodeTo: 0,
-  isolate: null, labels: false, xray: false, clean: (() => { try { return localStorage.getItem('gremlins.forge.clean') === '1' } catch { return false } })(), tour: false, tourStart: 0, beats: [], beat: -1,
+  isolate: null, labels: false, xray: false, tourT: 0, tourXray: false, tourLabels: 'none', tourFocus: null, clean: (() => { try { return localStorage.getItem('gremlins.forge.clean') === '1' } catch { return false } })(), tour: false, tourStart: 0, beats: [], beat: -1,
   pose: {},
 }
 
@@ -57,10 +57,10 @@ export function stopTour() {
 export function step(spec, dt, t, still, reduceMotion) {
   if (still) return { mode: 'idle', input: 0, explode: 0, t: 0, idle: false }
   if (view.tour) {
-    const s = forgeTourAt(view.beats, tourTime(t))
-    Object.assign(view, { mode: s.mode, input: s.input, inputTo: s.input, explode: s.explode, explodeTo: s.explode, beat: s.beat })
-    const m = spec.modes?.find((x) => x.id === s.mode)
-    view.isolate = m?.focus && s.input > 0.25 ? m.focus : null
+    const tt = tourTime(t), s = forgeTourAt(view.beats, tt), b = view.beats[s.beat]
+    // the beat's look rides on tour-only fields, so the visitor's own toggles come back untouched afterwards
+    Object.assign(view, { mode: s.mode, input: s.input, inputTo: s.input, explode: s.explode, explodeTo: s.explode, beat: s.beat,
+      tourT: tt, isolate: s.isolate, tourXray: s.xray, tourLabels: s.labels, tourFocus: b?.focus ?? null })
     return { mode: s.mode, input: s.input, explode: s.explode, t, idle: !reduceMotion }
   }
   const toward = (v, to, secs) => (v < to ? Math.min(to, v + dt / secs) : Math.max(to, v - dt / secs))
@@ -144,7 +144,8 @@ const v3 = new T.Vector3()
  * and a slot stacked down that side so none overlap. Shared by the stage's labels and the recorded video's.
  */
 export function layoutLabels(rig, camera, w, h, gap = 46) {
-  const show = Object.values(rig).filter((r) => (view.labels || view.isolate === r.a.id) && r.anchor && (view.isolate == null || view.isolate === r.a.id))
+  const tourShows = (id) => view.tour && (view.tourLabels === 'all' || (view.tourLabels === 'focus' && view.tourFocus === id))
+  const show = Object.values(rig).filter((r) => (view.labels || view.isolate === r.a.id || tourShows(r.a.id)) && r.anchor && (view.isolate == null || view.isolate === r.a.id))
   const items = show.map((r) => {
     r.anchor.getWorldPosition(v3).project(camera)
     const x = (v3.x * 0.5 + 0.5) * w, y = (-v3.y * 0.5 + 0.5) * h

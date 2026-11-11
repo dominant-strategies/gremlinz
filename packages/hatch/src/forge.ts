@@ -170,7 +170,7 @@ SURFACES (optional; use them when the description asks for age, damage, dirt, ma
 ASSEMBLIES AND MODES (the gremlin is shown on a console where each assembly is a button that isolates, explodes and moves it):
 - "assemblies":[{"id":"arms","name":"Arm chains","role":"8 drum-link arms, 22 links each","states":["READY","CURLING"],"explode":[dx,dy,dz],"joint":{"move":m,"pivot":[x,y,z],"axis":[x,y,z],"range":r}}]. 3 to 8 of them, each a real subsystem (head, optics, shell, arms, legs, jaw, engine, tail). Every part names its assembly with "asm":"id"; parts without one join "body". "explode" is where the assembly flies to in an exploded view (about 0.4 to 0.9 away from the body, outward). "states" are short console status words at rest and when driven.
 - Joint moves: swing (rotates by up to "range" degrees about "axis" through "pivot": a jaw, a lid, an arm), open (like swing, and mirrored copies open the opposite way: shell halves, clamshells, beaks), curl (bends the assembly's tubes and chains progressively along their length by up to "range" degrees in total: tentacles, tails, trunks), spin (rotation: rotors, turrets, wheels), slide ("range" in model units along "axis": pistons, drawers, antennas), pulse ("range" 0-0.5 fractional swell: hearts, lamps, bellows). Put "pivot" where the hinge really is, so nothing passes through anything when it moves.
-- "modes":[{"id":"jaw-open","name":"Jaw open","drive":{"jaw":1,"head":0.3},"focus":"jaw"}] are 2 to 5 operating modes. Each drives one or more assemblies from -1 to 1 by a single input, so a mode moves the whole mechanism together. "focus" names the assembly the camera should study. The renderer adds idle motion on its own. "when" ties a mode to what the live agent is doing, and its public page plays that mode as it happens: "thinking" (it checks in, decides, runs inference), "posting" (it writes on the board), "earning" (money comes in), "paying" (it spends). Tag each of your modes with the one it fits best, each at most once.
+- "modes":[{"id":"jaw-open","name":"Jaw open","drive":{"jaw":1,"head":0.3},"focus":"jaw"}] are 3 to 5 operating modes (at least 3: the tour gives each its own camera, and a gremlin with fewer has little to show). Each drives one or more assemblies from -1 to 1 by a single input, so a mode moves the whole mechanism together. "focus" names the assembly the camera should study. The renderer adds idle motion on its own. "when" ties a mode to what the live agent is doing, and its public page plays that mode as it happens: "thinking" (it checks in, decides, runs inference), "posting" (it writes on the board), "earning" (money comes in), "paying" (it spends). Tag each of your modes with the one it fits best, each at most once.
 
 BEFORE YOU ANSWER, check the design the way a reviewer will check renders of it, at rest and at every mode's full drive:
 - Nothing passes through anything: a jaw opening into the body, an arm swinging through a leg, a lid lifting into an antenna. Move the pivot, the part or the range until it clears.
@@ -184,25 +184,35 @@ Reply with only JSON: {"name":"1-3 words","tagline":"wry, at most 12 words","men
 export const FORGE_EXAMPLES: Record<'toaster' | 'octopod' | 'foreman', unknown> = {
   toaster: { name: 'Toaster', tagline: 'Pops up, says hi, asks for nothing.', menace: 0,
     palette: { enamel: '#efe3c8', accent: '#c9302c', glow: '#ffb347' },
+    assemblies: [
+      { id: 'head', name: 'Pop-up head', role: 'Enamel capsule with a visor and a smile', states: ['DOWN', 'POPPED'], explode: [0, 0.6, 0.1], joint: { move: 'slide', pivot: [0, 1.6, 0], axis: [0, 1, 0], range: 0.28 } },
+      { id: 'arms', name: 'Spring arms', role: 'Chrome coil arms with round mitts', states: ['AT EASE', 'CHEERING'], explode: [0, 0.1, 0.5], joint: { move: 'open', pivot: [0.46, 1.27, 0], axis: [0, 0, 1], range: 70 } },
+      { id: 'body', name: 'Toaster body', role: 'Cream drum, crumb tray and dial', states: ['READY', 'TOASTING'], explode: [0, 0, 0], joint: { move: 'pulse', pivot: [0, 1.1, 0], axis: [0, 1, 0], range: 0.04 } },
+    ],
+    modes: [
+      { id: 'pop', name: 'Pop', drive: { head: 1, arms: 0.25 }, focus: 'head', when: 'thinking' },
+      { id: 'cheer', name: 'Cheer', drive: { arms: 1, head: 0.4 }, focus: 'arms', when: 'earning' },
+      { id: 'toast', name: 'Toast', drive: { body: 1, head: -0.15 }, focus: 'body', when: 'posting' },
+    ],
     parts: [
-      { kind: 'lathe', mat: 'enamel', profile: [[0, 0.62], [0.36, 0.63], [0.48, 0.7], [0.52, 0.85], [0.53, 1.1], [0.51, 1.35], [0.44, 1.48], [0.3, 1.53], [0, 1.54]] },
-      { kind: 'torus', mat: 'chrome', size: [0.535, 0.028], pos: [0, 1.1, 0], rot: [90, 0, 0] },
-      { kind: 'cylinder', mat: 'chrome', size: [0.3, 0.33, 0.06], pos: [0, 0.63, 0] },
-      { kind: 'cylinder', mat: 'chrome', size: [0.1, 0.1, 0.18], pos: [0, 1.6, 0] },
-      { kind: 'capsule', mat: 'enamel', size: [0.36, 0.46], pos: [0, 1.98, 0], rot: [0, 0, 90] },
-      { kind: 'sphere', mat: 'chrome', size: [0.085], pos: [0.6, 1.98, 0], mirror: 'x' },
-      { kind: 'visor', w: 0.8, h: 0.44, pos: [0, 2.0, 0.3] },
-      { kind: 'eye', shape: 'pill', size: 0.055, pos: [0.12, 2.02, 0.375], mirror: 'x' },
-      { kind: 'eye', shape: 'smile', size: 0.075, pos: [0, 1.96, 0.372] },
-      { kind: 'tube', mat: 'chrome', points: [[0, 2.3, 0], [0, 2.64, 0]], radius: 0.016 },
-      { kind: 'sphere', mat: 'accent', size: [0.06], pos: [0, 2.67, 0] },
-      { kind: 'tube', mat: 'chrome', points: [[0.46, 1.27, 0], [0.74, 1.19, 0.06], [0.82, 0.88, 0.14]], radius: 0.045, rings: 16, mirror: 'x' },
-      { kind: 'sphere', mat: 'enamel', size: [0.1], pos: [0.82, 0.84, 0.14], mirror: 'x' },
-      { kind: 'tube', mat: 'chrome', points: [[0.2, 0.66, 0], [0.33, 0.04, 0.02]], radius: [0.05, 0.03], mirror: 'x' },
-      { kind: 'cylinder', mat: 'rubber', size: [0.075, 0.085, 0.04], pos: [0.33, 0.02, 0.02], mirror: 'x' },
-      { kind: 'box', mat: 'steel', size: [0.34, 0.018, 0.06], pos: [0, 1.24, 0.49], array: { type: 'linear', count: 3, step: [0, 0.06, 0] } },
-      { kind: 'cylinder', mat: 'chrome', size: [0.085, 0.09, 0.07], pos: [0, 0.86, 0.49], rot: [90, 0, 0] },
-      { kind: 'eye', shape: 'dot', size: 0.03, pos: [0.22, 0.86, 0.47] },
+      { asm: 'body', kind: 'lathe', mat: 'enamel', profile: [[0, 0.62], [0.36, 0.63], [0.48, 0.7], [0.52, 0.85], [0.53, 1.1], [0.51, 1.35], [0.44, 1.48], [0.3, 1.53], [0, 1.54]] },
+      { asm: 'body', kind: 'torus', mat: 'chrome', size: [0.535, 0.028], pos: [0, 1.1, 0], rot: [90, 0, 0] },
+      { asm: 'body', kind: 'cylinder', mat: 'chrome', size: [0.3, 0.33, 0.06], pos: [0, 0.63, 0] },
+      { asm: 'body', kind: 'cylinder', mat: 'chrome', size: [0.1, 0.1, 0.18], pos: [0, 1.6, 0] },
+      { asm: 'head', kind: 'capsule', mat: 'enamel', size: [0.36, 0.46], pos: [0, 1.98, 0], rot: [0, 0, 90] },
+      { asm: 'head', kind: 'sphere', mat: 'chrome', size: [0.085], pos: [0.6, 1.98, 0], mirror: 'x' },
+      { asm: 'head', kind: 'visor', w: 0.8, h: 0.44, pos: [0, 2.0, 0.3] },
+      { asm: 'head', kind: 'eye', shape: 'pill', size: 0.055, pos: [0.12, 2.02, 0.375], mirror: 'x' },
+      { asm: 'head', kind: 'eye', shape: 'smile', size: 0.075, pos: [0, 1.96, 0.372] },
+      { asm: 'head', kind: 'tube', mat: 'chrome', points: [[0, 2.3, 0], [0, 2.64, 0]], radius: 0.016 },
+      { asm: 'head', kind: 'sphere', mat: 'accent', size: [0.06], pos: [0, 2.67, 0] },
+      { asm: 'arms', kind: 'tube', mat: 'chrome', points: [[0.46, 1.27, 0], [0.74, 1.19, 0.06], [0.82, 0.88, 0.14]], radius: 0.045, rings: 16, mirror: 'x' },
+      { asm: 'arms', kind: 'sphere', mat: 'enamel', size: [0.1], pos: [0.82, 0.84, 0.14], mirror: 'x' },
+      { asm: 'body', kind: 'tube', mat: 'chrome', points: [[0.2, 0.66, 0], [0.33, 0.04, 0.02]], radius: [0.05, 0.03], mirror: 'x' },
+      { asm: 'body', kind: 'cylinder', mat: 'rubber', size: [0.075, 0.085, 0.04], pos: [0.33, 0.02, 0.02], mirror: 'x' },
+      { asm: 'body', kind: 'box', mat: 'steel', size: [0.34, 0.018, 0.06], pos: [0, 1.24, 0.49], array: { type: 'linear', count: 3, step: [0, 0.06, 0] } },
+      { asm: 'body', kind: 'cylinder', mat: 'chrome', size: [0.085, 0.09, 0.07], pos: [0, 0.86, 0.49], rot: [90, 0, 0] },
+      { asm: 'body', kind: 'eye', shape: 'dot', size: 0.03, pos: [0.22, 0.86, 0.47] },
     ],
     art: { starburst: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-50 -50 100 100"><g fill="#c9302c"><polygon points="0,-48 6,-10 0,-6 -6,-10"/><polygon points="0,48 6,10 0,6 -6,10"/><polygon points="-48,0 -10,6 -6,0 -10,-6"/><polygon points="48,0 10,6 6,0 10,-6"/></g><g fill="#e0ad55"><polygon points="30,-30 8,-3 3,-8"/><polygon points="-30,30 -8,3 -3,8"/><polygon points="-30,-30 -3,-8 -8,-3"/><polygon points="30,30 3,8 8,3"/></g><circle r="7" fill="#c9302c"/></svg>' },
     decals: [{ art: 'starburst', at: [0.37, 1.0, 0.37], dir: [0.7, 0, 0.7], size: 0.26, finish: 'paint', mirror: 'x' }] },
@@ -216,8 +226,9 @@ export const FORGE_EXAMPLES: Record<'toaster' | 'octopod' | 'foreman', unknown> 
       { id: 'stacks', name: 'Exhaust stacks', role: 'Twin brass stacks on chrome hoses', states: ['IDLE', 'VENTING'], explode: [0, 0.6, -0.6], joint: { move: 'slide', pivot: [0, 2.0, -0.3], axis: [0, 1, 0], range: 0.18 } },
     ],
     modes: [
-      { id: 'strike', name: 'Strike', drive: { arms: 1, jaw: 1, optics: 0.6 }, focus: 'jaw' },
-      { id: 'vent', name: 'Vent', drive: { stacks: 1, mantle: 1 }, focus: 'stacks' },
+      { id: 'strike', name: 'Strike', drive: { arms: 1, jaw: 1, optics: 0.6 }, focus: 'jaw', when: 'posting' },
+      { id: 'vent', name: 'Vent', drive: { stacks: 1, mantle: 1 }, focus: 'stacks', when: 'thinking' },
+      { id: 'jet', name: 'Jet', drive: { arms: -0.7, mantle: 1, optics: -0.5 }, focus: 'arms', when: 'earning' },
     ],
     parts: [
       { kind: 'lathe', mat: 'enamel', asm: 'mantle', profile: [[0, 0.55], [0.5, 0.57], [0.7, 0.7], [0.78, 0.95], [0.78, 1.2], [0.74, 1.5], [0.62, 1.82], [0.42, 2.05], [0, 2.16]], seams: [1.2, 1.62], rivets: [{ y: 1.25, count: 36, mat: 'brass' }, { y: 1.85, count: 24, mat: 'steel' }] },
@@ -649,36 +660,104 @@ export function curlPoints(points: Vec3[], axis: Vec3, deg: number): Vec3[] {
   return out
 }
 
-/** The self-running tour: each mode in turn rises, holds and falls, with an exploded look at the end. Times in seconds. */
-export interface ForgeBeat { at: number; mode: string; input: [number, number]; explode: [number, number]; dur: number; label: string }
+/**
+ * A camera position for the tour, relative to the hero framing: `az` and `el` in radians (azimuth from the hero angle,
+ * elevation), `dist` a multiple of the hero distance, `frame` how far the camera's aim moves from the body's centre
+ * toward the beat's focus assembly (0 to 1).
+ */
+export interface ForgeShot { az: number; el: number; dist: number; frame: number }
+/** How a beat looks: the focus isolated (the rest ghosted), x-ray, and which labels show. */
+export interface ForgeLook { isolate: boolean; xray: boolean; labels: 'none' | 'focus' | 'all' }
+export interface ForgeBeat {
+  at: number; dur: number; label: string
+  mode: string; input: [number, number]; explode: [number, number]
+  /** Where the camera settles early in the beat, and how fast it then drifts round (radians a second). */
+  shot: ForgeShot; drift: number
+  /** Beats in one take share a shot: the camera keeps drifting through them without a new move. */
+  take: number
+  focus?: string
+  look: ForgeLook
+}
+const HERO_SHOT: ForgeShot = { az: 0, el: 0.17, dist: 1, frame: 0 }
+/** Each mode gets its own camera and treatment, so the tour never shows the same thing twice in a row. */
+const MODE_TREATMENTS: { shot: ForgeShot; look: ForgeLook }[] = [
+  { shot: { az: 0.55, el: 0.06, dist: 0.78, frame: 0.7 }, look: { isolate: true, xray: false, labels: 'focus' } }, // low, the working part alone
+  { shot: { az: -0.65, el: 0.72, dist: 0.92, frame: 0.35 }, look: { isolate: false, xray: true, labels: 'none' } }, // from above, see-through
+  { shot: { az: 1.4, el: 0.1, dist: 0.86, frame: 0.3 }, look: { isolate: false, xray: false, labels: 'all' } }, // side profile, every part named
+  { shot: { az: -0.25, el: 0.24, dist: 0.62, frame: 0.85 }, look: { isolate: false, xray: false, labels: 'focus' } }, // close on the part
+  { shot: { az: 2.5, el: 0.3, dist: 0.95, frame: 0.2 }, look: { isolate: false, xray: false, labels: 'none' } }, // from behind
+]
+const PLAIN: ForgeLook = { isolate: false, xray: false, labels: 'none' }
+
+/**
+ * The self-running tour, as a shot list: a slow push-in on the hero, each mode from its own angle with its own
+ * treatment (isolated from below, x-rayed from above, labelled in profile, close up, from behind), the gremlin exploded
+ * on a wide orbit with every part named, then back to the hero. Times in seconds; pure, so a recording can seek to any
+ * frame and the stage and the video play exactly the same film.
+ */
 export function forgeTour(spec: ForgeSpec): ForgeBeat[] {
   const beats: ForgeBeat[] = []
   let at = 0
-  const push = (b: Omit<ForgeBeat, 'at'>) => { beats.push({ at: Math.round(at * 100) / 100, ...b }); at += b.dur }
-  push({ mode: 'idle', input: [0, 0], explode: [0, 0], dur: 2.5, label: 'Hero' })
-  for (const m of (spec.modes ?? []).filter((x) => x.id !== 'idle')) {
-    push({ mode: m.id, input: [0, 1], explode: [0, 0], dur: 1.2, label: m.name })
-    push({ mode: m.id, input: [1, 1], explode: [0, 0], dur: 1.6, label: m.name })
-    push({ mode: m.id, input: [1, 0], explode: [0, 0], dur: 0.8, label: m.name })
-  }
+  let take = 0
+  const push = (b: Omit<ForgeBeat, 'at' | 'take'>, same = false) => { if (!same) take++; beats.push({ at: Math.round(at * 100) / 100, take, ...b }); at += b.dur }
+  push({ label: 'Hero', mode: 'idle', input: [0, 0], explode: [0, 0], dur: 3, shot: { ...HERO_SHOT, az: -0.18, dist: 1.1 }, drift: 0.1, look: PLAIN })
+  const modes = (spec.modes ?? []).filter((x) => x.id !== 'idle').slice(0, MODE_TREATMENTS.length)
+  modes.forEach((m, i) => {
+    const t = MODE_TREATMENTS[i]!, focus = m.focus
+    const look = focus ? t.look : { ...t.look, isolate: false, labels: t.look.labels === 'focus' ? 'none' as const : t.look.labels }
+    const shot = focus ? t.shot : { ...t.shot, frame: 0 }
+    const base = { label: m.name, mode: m.id, explode: [0, 0] as [number, number], shot, look, ...(focus ? { focus } : {}) }
+    push({ ...base, input: [0, 1], dur: 1.3, drift: 0.04 })
+    push({ ...base, input: [1, 1], dur: 2.3, drift: 0.07 }, true)
+    push({ ...base, input: [1, 0], dur: 0.7, drift: 0.07, look: PLAIN }, true)
+  })
   if ((spec.assemblies ?? []).length > 1) {
-    push({ mode: 'idle', input: [0, 0], explode: [0, 1], dur: 1.2, label: 'Exploded' })
-    push({ mode: 'idle', input: [0, 0], explode: [1, 1], dur: 2, label: 'Exploded' })
-    push({ mode: 'idle', input: [0, 0], explode: [1, 0], dur: 0.8, label: 'Exploded' })
+    const shot = { az: 0.9, el: 0.34, dist: 1.42, frame: 0 }, look: ForgeLook = { isolate: false, xray: false, labels: 'all' }
+    push({ label: 'Exploded', mode: 'idle', input: [0, 0], explode: [0, 1], dur: 1.3, shot, drift: 0.12, look })
+    push({ label: 'Exploded', mode: 'idle', input: [0, 0], explode: [1, 1], dur: 2.4, shot, drift: 0.2, look }, true)
+    push({ label: 'Exploded', mode: 'idle', input: [0, 0], explode: [1, 0], dur: 0.9, shot, drift: 0.2, look: PLAIN }, true)
   }
+  push({ label: 'Hero', mode: 'idle', input: [0, 0], explode: [0, 0], dur: 2.4, shot: { ...HERO_SHOT, az: 0.08 }, drift: 0.05, look: PLAIN })
   return beats
 }
-/** The pose input at time `t` into the tour (loops). Pure, so a recording can seek to any frame. */
-export function forgeTourAt(beats: ForgeBeat[], t: number): Required<Omit<ForgePoseInput, 'idle'>> & { beat: number } {
-  const last = beats[beats.length - 1]
-  const total = last ? last.at + last.dur : 0
-  const tt = total ? ((t % total) + total) % total : 0
+
+const tourLen = (beats: ForgeBeat[]) => { const b = beats[beats.length - 1]; return b ? b.at + b.dur : 0 }
+function beatAt(beats: ForgeBeat[], t: number) {
+  const total = tourLen(beats), tt = total ? ((t % total) + total) % total : 0
   let i = beats.findIndex((b) => tt < b.at + b.dur)
   if (i < 0) i = Math.max(0, beats.length - 1)
-  const b = beats[i]
-  if (!b) return { mode: 'idle', input: 0, explode: 0, t, beat: 0 }
+  return { i, tt }
+}
+
+/** The pose and the look at time `t` into the tour (loops). Pure, so a recording can seek to any frame. */
+export function forgeTourAt(beats: ForgeBeat[], t: number): Required<Omit<ForgePoseInput, 'idle'>> & { beat: number; isolate: string | null; xray: boolean; labels: ForgeLook['labels'] } {
+  const { i, tt } = beatAt(beats, t), b = beats[i]
+  if (!b) return { mode: 'idle', input: 0, explode: 0, t, beat: 0, isolate: null, xray: false, labels: 'none' }
   const k = Math.min(1, Math.max(0, (tt - b.at) / b.dur))
-  return { mode: b.mode, input: b.input[0] + (b.input[1] - b.input[0]) * k, explode: b.explode[0] + (b.explode[1] - b.explode[0]) * k, t, beat: i }
+  const input = b.input[0] + (b.input[1] - b.input[0]) * k
+  const isolate = b.look.isolate && b.focus && input > 0.25 ? b.focus : null
+  return { mode: b.mode, input, explode: b.explode[0] + (b.explode[1] - b.explode[0]) * k, t, beat: i, isolate, xray: b.look.xray && input > 0.25, labels: b.look.labels }
+}
+
+/**
+ * The camera at time `t`: easing from where the previous beat left it to this beat's shot over the first second or so,
+ * then drifting round. Returns both ends of the move (with their focus) and how far along it is, so the renderer can
+ * blend the aim between two different parts without a jump.
+ */
+export function forgeShotAt(beats: ForgeBeat[], t: number): { from: ForgeShot & { focus?: string }; to: ForgeShot & { focus?: string }; k: number } {
+  const { i, tt } = beatAt(beats, t), b = beats[i]
+  if (!b) return { from: HERO_SHOT, to: HERO_SHOT, k: 1 }
+  // drift accumulated by the take's earlier beats
+  const drifted = (j: number) => { let sum = 0; for (let x = j - 1; x >= 0 && beats[x]!.take === beats[j]!.take; x--) sum += beats[x]!.drift * beats[x]!.dur; return sum }
+  let first = i
+  while (first > 0 && beats[first - 1]!.take === b.take) first--
+  const sinceTake = tt - beats[first]!.at
+  const to = { ...b.shot, az: b.shot.az + drifted(i) + b.drift * (tt - b.at), focus: b.focus }
+  // where the previous take left the camera (the last beat's, for the first take: the tour loops)
+  const p = (first - 1 + beats.length) % beats.length, prev = beats[p]!
+  const from = { ...prev.shot, az: prev.shot.az + drifted(p) + prev.drift * prev.dur, focus: prev.focus }
+  const move = Math.min(1.1, (beats.filter((x) => x.take === b.take).reduce((s2, x) => s2 + x.dur, 0)) * 0.6)
+  return { from, to, k: forgeEase(Math.min(1, sinceTake / move)) }
 }
 
 /**
