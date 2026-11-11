@@ -54,7 +54,7 @@ test "$(git rev-parse HEAD)" = "$CBMPC_COMMIT"
 for p in "$HERE"/patches/*.patch; do patch -p1 < "$p"; done
 
 # The upstream CMake refuses non-64-bit targets; build the sources it would build, with its flags.
-CXXFLAGS=(-std=c++17 -O2 -fvisibility=hidden -fno-operator-names -DNDEBUG -DNO_DEPRECATED_OPENSSL
+CXXFLAGS=(-std=c++17 -O2 -fexceptions -fvisibility=hidden -fno-operator-names -DNDEBUG -DNO_DEPRECATED_OPENSSL
   -Wno-attributes -Wno-parentheses -Wno-reorder -Wno-missing-braces -Wno-switch -Wno-sign-compare -Wno-unused
   -Wno-shorten-64-to-32 -Wno-tautological-undefined-compare -Wno-#pragma-messages -Wno-vla-extension
   -Wno-deprecated-declarations -Wno-null-dereference
@@ -67,7 +67,7 @@ xargs -P "$JOBS" -I{} sh -c 'em++ "$@" -c {} -o obj/$(echo {} | tr / _).o' _ "${
 em++ "${CXXFLAGS[@]}" -c "$HERE/shim.cpp" -o obj/shim.o
 
 # ---------------------------------------------------------------- link
-em++ -O2 obj/*.o "$W/openssl-out/lib/libcrypto.a" -o "$OUT/cbmpc.mjs" \
+em++ -O2 -fexceptions obj/*.o "$W/openssl-out/lib/libcrypto.a" -o "$OUT/cbmpc.mjs" \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createCbmpc -sENVIRONMENT=web,node \
   -sASYNCIFY=1 -sASYNCIFY_STACK_SIZE=1048576 -sSTACK_SIZE=1048576 \
   -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=33554432 -sFILESYSTEM=0 -sDISABLE_EXCEPTION_CATCHING=0 \
