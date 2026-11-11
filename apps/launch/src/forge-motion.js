@@ -14,7 +14,7 @@ const EXPLODE_SECONDS = 0.9
 /** Viewer state. `input` and `explode` move toward their targets each frame, so every change animates. */
 export const view = {
   mode: 'idle', input: 0, inputTo: 0, explode: 0, explodeTo: 0,
-  isolate: null, labels: false, tour: false, tourStart: 0, beats: [], beat: -1,
+  isolate: null, labels: false, xray: false, tour: false, tourStart: 0, paused: false, tourAt: 0, beats: [], beat: -1,
   pose: {},
 }
 
@@ -35,7 +35,26 @@ export function toggleMode(id) {
 }
 export function toggleExplode() { view.tour = false; view.explodeTo = view.explodeTo > 0 ? 0 : 1 }
 export function toggleIsolate(id) { view.tour = false; view.isolate = view.isolate === id ? null : id }
-export function startTour(now) { view.tour = true; view.tourStart = now; view.isolate = null }
+export function startTour(now) { Object.assign(view, { tour: true, tourStart: now, paused: false, isolate: null }) }
+/** Total length of one pass of the tour, in seconds. */
+export const tourLength = () => { const b = view.beats[view.beats.length - 1]; return b ? b.at + b.dur : 0 }
+/** Where the tour is now, in seconds into one pass. */
+export function tourTime(now) {
+  const len = tourLength(); if (!len) return 0
+  const t = view.paused ? view.tourAt : now - view.tourStart
+  return ((t % len) + len) % len
+}
+/** Jumps the tour to `t` seconds (the timeline's scrubber); the tour keeps playing from there unless paused. */
+export function seekTour(now, t) {
+  if (!view.tour) Object.assign(view, { tour: true, isolate: null })
+  view.tourStart = now - t; view.tourAt = t
+}
+export function pauseTour(now, paused) {
+  if (paused === view.paused) return
+  if (paused) view.tourAt = tourTime(now)
+  else view.tourStart = now - view.tourAt
+  view.paused = paused
+}
 /** Hands control back: whatever the tour was showing settles to rest. */
 export function stopTour() {
   if (!view.tour) return
@@ -49,11 +68,11 @@ export function stopTour() {
 export function step(spec, dt, t, still, reduceMotion) {
   if (still) return { mode: 'idle', input: 0, explode: 0, t: 0, idle: false }
   if (view.tour) {
-    const s = forgeTourAt(view.beats, t - view.tourStart)
+    const s = forgeTourAt(view.beats, tourTime(t))
     Object.assign(view, { mode: s.mode, input: s.input, inputTo: s.input, explode: s.explode, explodeTo: s.explode, beat: s.beat })
     const m = spec.modes?.find((x) => x.id === s.mode)
     view.isolate = m?.focus && s.input > 0.25 ? m.focus : null
-    return { mode: s.mode, input: s.input, explode: s.explode, t, idle: !reduceMotion }
+    return { mode: s.mode, input: s.input, explode: s.explode, t, idle: !reduceMotion && !view.paused }
   }
   const toward = (v, to, secs) => (v < to ? Math.min(to, v + dt / secs) : Math.max(to, v - dt / secs))
   view.input = reduceMotion ? view.inputTo : toward(view.input, view.inputTo, MODE_SECONDS)
@@ -83,32 +102,40 @@ export function applyPose(rig, spec, poseIn) {
     } else if (j.move === 'curl' && r.bends.length && Math.abs(v - r.bent) > 0.75) {
       r.bent = v
       for (const bend of r.bends) bend(v)
-      ghosted = null // the bent limbs are new meshes: isolate has to reach them too
+      skinned = null // the bent limbs are new meshes: isolate and x-ray have to reach them too
     }
   }
   return pose
 }
 
-// ---------------------------------------------------------------------------------------------------- isolate
+// ---------------------------------------------------------------------------------------------------- isolate + x-ray
 const ghostMat = new T.MeshStandardMaterial({ color: '#d9d3c8', roughness: 0.6, transparent: true, opacity: 0.13, depthWrite: false })
-let ghosted = null
-/** Turns every assembly but `id` into a faint ghost (or restores them all when `id` is null). */
-export function applyIsolate(rig, id) {
-  const key = id || ''
-  if (ghosted === key) return
-  ghosted = key
+// X-ray: the outer shells turn to tinted glass so what's inside shows, the way a cutaway drawing does
+const xrayMat = new T.MeshPhysicalMaterial({ color: '#cfe0ea', roughness: 0.15, metalness: 0, transparent: true, opacity: 0.2, depthWrite: false, side: T.DoubleSide })
+let skinned = null
+/**
+ * Skins every mesh for the current view: assemblies other than `isolate` become ghosts, shells (meshes the studio
+ * tagged `shell`) become glass under x-ray, and decals and ink outlines step aside whenever their part isn't solid.
+ */
+export function applySkins(rig, isolate, xray) {
+  const key = `${isolate || ''}|${xray}`
+  if (skinned === key) return
+  skinned = key
   for (const r of Object.values(rig)) {
-    const ghost = !!id && r.a.id !== id
+    const ghost = !!isolate && r.a.id !== isolate
     r.node.traverse((n) => {
-      if (!n.isMesh || n.userData.overlay) return
+      if (!n.isMesh) return
+      if (n.userData.ink) { n.visible = !ghost && !xray; return }
+      if (n.userData.overlay) return
+      if (n.userData.decal) { n.visible = !ghost && !xray; return }
       if (n.userData.mat0 === undefined) n.userData.mat0 = n.material
-      n.material = ghost ? ghostMat : n.userData.mat0
-      n.castShadow = !ghost
+      n.material = ghost ? ghostMat : xray && n.userData.shell ? xrayMat : n.userData.mat0
+      n.castShadow = !ghost && !(xray && n.userData.shell)
     })
   }
 }
-/** Call after a rebuild: the new meshes start solid. */
-export function forgetIsolate() { ghosted = null }
+/** Call after a rebuild or a bend: new meshes start solid. */
+export function forgetIsolate() { skinned = null }
 
 // ---------------------------------------------------------------------------------------------------- labels
 let layer = null
@@ -133,6 +160,8 @@ export function drawLabels(rig, camera, w, h) {
     const p = view.pose[r.a.id]
     return { r, x, y, left: x < w / 2, active: !!p?.active || view.isolate === r.a.id, status: p?.status || r.a.states[0] }
   })
+  // balance: the left half of the labels (by where their parts sit on screen) goes left, the rest right
+  items.slice().sort((a, b) => a.x - b.x).forEach((it, i, all) => { it.left = i < Math.ceil(all.length / 2) })
   // stack each side top to bottom, at least 46px apart, inside the stage
   for (const side of [true, false]) {
     const col = items.filter((i) => i.left === side).sort((a, b) => a.y - b.y)

@@ -10,7 +10,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import { FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints } from '@gremlins/hatch'
-import { applyIsolate, applyPose, drawLabels, forgetIsolate, mountLabels, resetView, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, view } from './forge-motion.js'
+import { fitName, hideCursor, mountHud, renderHud, tickHud } from './forge-hud.js'
+import { applySkins, applyPose, drawLabels, forgetIsolate, mountLabels, resetView, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, view } from './forge-motion.js'
 import { addDecals, artReady, wearFor, wearFrame, wearMaterial } from './forge-surfaces.js'
 import { creatureSvg } from '@gremlins/hatch/creature'
 import { account, hasSessionKey, mountAuth, onAccountChange, sessionPostJson, signIn, signOut, walletErrorMessage } from './auth.ts'
@@ -147,8 +148,14 @@ function initStudio() {
     if (placing) placeAt(e)
     else selectAt(e)
   })
-  renderer.domElement.addEventListener('pointerdown', () => { if (view.tour) { stopTour(); syncConsole(true) } })
+  // Left alone for 25 s the console tours itself; any click, key or scroll outside the timeline hands control back.
+  let lastActive = performance.now() / 1000
+  for (const ev of ['pointerdown', 'keydown', 'wheel']) document.addEventListener(ev, (e) => {
+    lastActive = performance.now() / 1000
+    if (view.tour && !e.target.closest?.('#hudLog, #dTour')) { stopTour(); hideCursor(); syncConsole(true) }
+  }, { capture: true, passive: true })
   mountLabels(stage)
+  mountHud({ operator: () => account()?.address, onChange: () => syncConsole(true) })
   let lastT = 0, avg = 1 / 60, slow = 0
   renderer.setAnimationLoop(() => {
     if (document.hidden) return
@@ -160,9 +167,12 @@ function initStudio() {
     if (inner && spec()) {
       const still = !!placing || selected.size > 0, rig = inner.userData.rig
       applyPose(rig, spec(), stepView(spec(), dt, now, still, reduceMotion))
-      applyIsolate(rig, still ? null : view.isolate)
+      applySkins(rig, still ? null : view.isolate, !still && view.xray)
       focusCamera(dt)
       syncConsole()
+      tickHud(now)
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')
+      if (!view.tour && view.beats.length > 1 && !reduceMotion && !still && !ctl && !typing && now - lastActive > 25) { startTour(now); syncConsole(true) }
     }
     controls.update()
     rig.rotation.y = controls.getAzimuthalAngle()
@@ -387,6 +397,15 @@ function expand(p, M, spec) {
   }
   return { plain, mirrored, holders }
 }
+// Ink outline: back faces pushed out along their normals in dark ink, drawn behind the part (teardown's rule for
+// near-white parts on a pale backdrop, so a cream gremlin keeps its silhouette).
+const inkMat = new T.MeshBasicMaterial({ color: '#2a2622', side: T.BackSide, toneMapped: false })
+inkMat.onBeforeCompile = (sh) => { sh.vertexShader = sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed += normalize(normal) * 0.009;') }
+/** Which enamels are light enough to need the outline. */
+function needsInk(pal) {
+  const light = (hex) => { const c = new T.Color(hex); return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b > 0.55 }
+  return { enamel: light(pal.enamel), accent: light(pal.accent) }
+}
 const tagPart = (o, i) => o.traverse((n) => { if (n.isMesh) n.userData.part = i })
 /**
  * The scene graph the motion code poses: one node per assembly (moved by explode), holding a pivot group at its joint
@@ -413,9 +432,19 @@ function buildParts(spec, M) {
     }
   }
   const fallback = rig.body || Object.values(rig)[0]
+  const inked = needsInk(spec.palette)
   spec.parts.forEach((p, i) => {
     const r = rig[p.asm] || fallback, { plain, mirrored, holders } = expand(p, M, spec)
     tagPart(plain, i); tagPart(mirrored, i)
+    // Shells (the enamel volumes) go to glass under x-ray; light ones get a thin ink outline on the pale studio.
+    if (p.mat === 'enamel' || p.mat === 'accent') {
+      const skin = partMats(spec, p, M)(p.mat)
+      for (const o of [plain, mirrored]) o.traverse((n) => {
+        if (!n.isMesh || n.material !== skin) return
+        n.userData.shell = true
+        if (inked[p.mat] && !n.isInstancedMesh) { const ink = new T.Mesh(n.geometry, inkMat); ink.userData.ink = ink.userData.overlay = true; n.add(ink) }
+      })
+    }
     r.main.content.add(plain)
     ;(r.mirror ? r.mirror.content : r.main.content).add(mirrored)
     // Curling limbs: rebuild the part along bent points and swap it into every copy.
@@ -508,7 +537,7 @@ function rebuild(fresh) {
 /** Buttons for the design's assemblies and modes, rebuilt when the design changes. */
 function renderConsole(sp) {
   const asms = sp.assemblies || [], modes = (sp.modes || []).filter((m) => m.id !== 'idle')
-  $('console').hidden = asms.length < 2 && !modes.length
+  $('hud').dataset.single = String(asms.length < 2 && !modes.length)
   $('asmChips').replaceChildren(...asms.map((a) => {
     const b = document.createElement('button'); b.type = 'button'; b.dataset.asm = a.id; b.textContent = a.name; b.title = a.role || a.name
     b.addEventListener('click', () => { toggleIsolate(a.id); syncConsole(true) })
@@ -520,6 +549,7 @@ function renderConsole(sp) {
     b.addEventListener('click', () => { toggleMode(m.id); syncConsole(true) })
     return b
   }))
+  renderHud(sp)
   syncConsole(true)
 }
 let consoleKey = ''
@@ -527,7 +557,7 @@ let consoleKey = ''
 function syncConsole(force) {
   const m = spec()?.modes?.find((x) => x.id === view.mode)
   const up = view.mode !== 'idle' && (view.inputTo > 0 || view.input > 0.02)
-  const key = [view.isolate, up && view.mode, view.explodeTo, view.labels, view.tour].join('|')
+  const key = [view.isolate, up && view.mode, view.explodeTo, view.labels, view.tour, view.xray].join('|')
   if (!force && key === consoleKey) return
   consoleKey = key
   for (const b of $('asmChips').children) b.setAttribute('aria-pressed', String(view.isolate === b.dataset.asm))
@@ -535,16 +565,25 @@ function syncConsole(force) {
   $('dLabels').setAttribute('aria-pressed', String(view.labels))
   $('dExplode').setAttribute('aria-pressed', String(view.explodeTo > 0))
   $('dTour').setAttribute('aria-pressed', String(view.tour))
+  $('dXray').setAttribute('aria-pressed', String(view.xray))
+  if (!view.tour) hideCursor()
   const ml = $('modeLabel'), word = up ? m?.name : view.explodeTo > 0 ? 'Exploded' : view.isolate ? spec()?.assemblies?.find((a) => a.id === view.isolate)?.name : ''
   ml.classList.toggle('rest', !word)
   if (word) ml.lastChild.textContent = word
 }
 $('dLabels').addEventListener('click', () => { view.labels = !view.labels; syncConsole(true) })
+$('dXray').addEventListener('click', () => { view.xray = !view.xray; syncConsole(true) })
 $('dExplode').addEventListener('click', () => { toggleExplode(); syncConsole(true) })
 $('dTour').addEventListener('click', () => { if (view.tour) stopTour(); else startTour(performance.now() / 1000); syncConsole(true) })
 
 /** A square studio frame (1024×1024 PNG for the image model, small JPEGs for history) without disturbing the live view. */
 function captureRender(size = 1024, type = 'image/png') {
+  // The photo and the history thumbnails show the gremlin itself: at rest, solid, no outlines. The next frame restores the view.
+  if (inner) {
+    applyPose(inner.userData.rig, spec(), { idle: false }); applySkins(inner.userData.rig, null, false)
+    inner.traverse((n) => { if (n.userData.ink) n.visible = false })
+    forgetIsolate()
+  }
   const canvas = renderer.domElement, w = canvas.width, h = canvas.height, ratio = renderer.getPixelRatio(), aspect = camera.aspect
   renderer.setPixelRatio(1); renderer.setSize(size, size, false); camera.aspect = 1; camera.updateProjectionMatrix()
   renderer.render(scene, camera)
@@ -1104,6 +1143,7 @@ function render(fresh) {
   previewBase = null
   rebuild(fresh)
   if (document.activeElement !== $('name')) $('name').value = sp.name
+  fitName()
   $('tagline').textContent = sp.tagline || ''
   const kinds = {}; sp.parts.forEach((p) => { kinds[p.kind] = (kinds[p.kind] || 0) + 1 })
   const extra = [

@@ -157,6 +157,130 @@
     .forge .cchips button[aria-pressed="true"] { background: var(--signal); border-color: var(--signal); color: #fff; }
     .forge .cchips button:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
     .forge pre { margin: 10px 0 0; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
+
+    /* ── teardown console (phase 3): header, readout rails, stage, timeline; the build tools sit below ── */
+    main.forge { display: block; padding: 0 0 48px; }
+    .hud { --signal: #e8571e; --ok: #3f7a52; --hcard: #fbfaf7; --hline: #dcd5c8;
+      --stage-h: clamp(400px, calc(100vh - 372px), 760px);
+      max-width: 1520px; margin: 12px auto 0; padding: 0 20px; position: relative;
+      display: grid; grid-template-columns: 248px minmax(0, 1fr) 272px; grid-template-areas: "head head head" "left centre right" "log log log"; gap: 12px 14px; }
+    .hud h3 { display: flex; justify-content: space-between; align-items: center; margin: 0 0 10px; font: 600 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink); }
+    .hud h3::before { content: ""; width: 3px; height: 11px; background: var(--signal); margin-right: 8px; }
+    .hud h3 span { margin-left: auto; color: var(--ink-2); font-weight: 400; }
+    .hcard { background: var(--hcard); border: 1px solid var(--hline); border-radius: 6px; padding: 12px 14px; box-shadow: 0 1px 0 rgba(36,33,29,.04); }
+    .hcard .sub { margin: 2px 0 8px; font: 11px var(--mono); letter-spacing: .06em; color: var(--ink-2); text-transform: uppercase; }
+    /* header */
+    .hud-head { grid-area: head; display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(180px, 280px) auto; gap: 18px; align-items: stretch; }
+    .hud-badge { background: var(--signal); color: #fff; display: flex; align-items: center; gap: 10px; padding: 0 18px; border-radius: 4px; min-height: 64px; }
+    .hud-badge b { font: 600 15px var(--mono); letter-spacing: .08em; }
+    .hud-glyph { width: 22px; height: 22px; border: 2px solid #fff; border-radius: 50% 50% 40% 40%; position: relative; }
+    .hud-glyph::after { content: ""; position: absolute; left: 4px; right: 4px; top: 7px; height: 4px; border-radius: 2px; background: #fff; }
+    .hud-id { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+    .hud-id small { font: 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
+    .hud-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+    .hud-name input { font: 800 clamp(26px, 2.6vw, 34px)/1.1 var(--display); letter-spacing: -.01em; border: none; background: transparent; color: var(--ink); padding: 0; min-width: 3ch; width: auto; field-sizing: content; max-width: 100%; }
+    .hud-name input:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+    .hud-name .slash { font: 800 30px var(--display); color: var(--signal); }
+    .hud-tag { font: 11.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .hud-load { display: flex; flex-direction: column; justify-content: center; gap: 5px; font: 10.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2); }
+    .hud-load .k { display: flex; justify-content: space-between; }
+    .hud-load .k b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .hud-load .cells { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; height: 14px; }
+    .hud-load .cells i { background: rgba(36,33,29,.1); }
+    .hud-load .cells i.on { background: #24211d; }
+    .hud-load .cells i.hot { background: var(--signal); }
+    .hud-load .scale { display: flex; justify-content: space-between; font-size: 9.5px; }
+    .hud-meta { display: grid; grid-template-columns: repeat(4, auto); gap: 0 22px; margin: 0; align-content: center; }
+    .hud-meta div { display: flex; flex-direction: column; gap: 4px; }
+    .hud-meta dt { font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
+    .hud-meta dd { margin: 0; font: 600 13px var(--mono); letter-spacing: .04em; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+    #hudStatus i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+    #hudStatus.on i { background: var(--signal); }
+    #hudStatus.on { color: var(--signal); }
+    /* rails */
+    .hud-rail { display: flex; flex-direction: column; gap: 10px; min-width: 0; height: var(--stage-h); overflow: auto; scrollbar-width: thin; }
+    .hud-left { grid-area: left; } .hud-right { grid-area: right; }
+    .hcard.grow { flex: 1 1 auto; min-height: 0; overflow: auto; }
+    .bignum { display: flex; align-items: baseline; gap: 4px; }
+    .bignum b { font: 700 40px/1 var(--display); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+    .bignum small { font: 14px var(--mono); color: var(--ink-2); }
+    .spark { display: block; width: 100%; height: 64px; margin: 4px 0 8px; }
+    .kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font: 11.5px var(--mono); color: var(--ink-2); }
+    .kv span:nth-child(even) { color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
+    .hud .menace { font: 12px var(--mono); color: var(--ink-2); text-align: left; margin-bottom: 6px; }
+    .hud .meter { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; margin-bottom: 8px; }
+    .hud .meter i { width: auto; height: 8px; border-radius: 2px; }
+    .hud .code { font: 11px/1.5 var(--mono); color: var(--ink-2); }
+    .bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+    .bars li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; font: 11.5px var(--mono); }
+    .bars li .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: uppercase; letter-spacing: .04em; }
+    .bars li .v { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+    .bars li i { grid-column: 1 / -1; height: 5px; background: rgba(36,33,29,.08); border-radius: 3px; overflow: hidden; }
+    .bars li b { display: block; height: 100%; width: 0; background: #24211d; transition: width .1s linear; }
+    .bars li.on b { background: var(--signal); }
+    .bars li.on .v { color: var(--signal); }
+    .bars li.none { display: block; color: var(--ink-2); }
+    .subs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+    .subs li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 7px 0; border-top: 1px solid var(--hline); }
+    .subs li:first-child { border-top: none; }
+    .subs li.focus { box-shadow: inset 3px 0 0 var(--signal); padding-left: 6px; }
+    .subs .ix { font: 11px var(--mono); color: var(--ink-2); }
+    .subs .nm { display: flex; flex-direction: column; min-width: 0; }
+    .subs .nm b { font: 600 11.5px var(--mono); text-transform: uppercase; letter-spacing: .04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .subs .nm small { font: 10.5px var(--mono); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .subs .pill { font: 600 9.5px var(--mono); letter-spacing: .08em; padding: 3px 7px; border-radius: 3px; background: #e2ede5; color: var(--ok); white-space: nowrap; }
+    .subs .pill.on { background: var(--signal); color: #fff; }
+    .hud .cchips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .hud .cchips button { min-height: 30px; padding: 0 10px; border: 1px solid var(--hline); border-radius: 4px; background: #fff; color: var(--ink); font: 11.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
+    .hud .cchips button:hover { border-color: var(--ink); }
+    .hud .cchips button[aria-pressed="true"] { background: var(--signal); border-color: var(--signal); color: #fff; }
+    .hud .cchips button:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+    .hud[data-single="true"] #asmCard, .hud[data-single="true"] #modeRow { display: none; }
+    /* centre */
+    .hud-centre { grid-area: centre; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+    .hud .stage { width: 100%; height: var(--stage-h); max-height: none; aspect-ratio: auto; min-width: 0; border-radius: 6px; border: 1px solid var(--hline); }
+    .hud .stagebar { gap: 8px; }
+    .hud .hint { margin: 0 0 0 auto; }
+    .hud .hint:empty { display: none; }
+    .stage .blueprint { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; fill: none; stroke: rgba(36,33,29,.13); stroke-width: .12; stroke-dasharray: .6 .6; }
+    .stage[data-view="photo"] .blueprint { display: none; }
+    /* timeline */
+    .hud-log { grid-area: log; background: var(--hcard); border: 1px solid var(--hline); border-radius: 6px; padding: 12px 16px; }
+    .hud-log h3 { margin-bottom: 8px; }
+    .logbody { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 14px; align-items: center; }
+    .play { width: 44px; height: 44px; border-radius: 50%; border: none; background: var(--signal); cursor: pointer; position: relative; }
+    .play::before { content: ""; position: absolute; left: 17px; top: 14px; border-left: 13px solid #fff; border-top: 8px solid transparent; border-bottom: 8px solid transparent; }
+    .play[data-state="pause"]::before { left: 15px; top: 14px; width: 4px; height: 16px; border: none; background: #fff; box-shadow: 9px 0 0 #fff; }
+    .play:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+    .logline { display: flex; justify-content: space-between; gap: 12px; font: 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+    .logline b { color: var(--signal); font-weight: 600; letter-spacing: .1em; }
+    .track { position: relative; height: 22px; margin: 4px 0; cursor: pointer; touch-action: none; }
+    .track::before { content: ""; position: absolute; left: 0; right: 0; top: 10px; height: 2px; background: rgba(36,33,29,.15); }
+    .track .ticks i { position: absolute; top: 5px; width: 1px; height: 12px; background: rgba(36,33,29,.35); }
+    .track .fill { position: absolute; left: 0; top: 10px; height: 2px; background: var(--signal); }
+    .track .knob { position: absolute; top: 4px; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: #fff; border: 2px solid var(--signal); }
+    .track:focus-visible { outline: 2px solid var(--signal); outline-offset: 4px; }
+    /* the tour's cursor */
+    .hud-cursor { position: absolute; left: 0; top: 0; z-index: 5; pointer-events: none; opacity: 0; transition: transform .6s cubic-bezier(.16, 1, .3, 1), opacity .3s; filter: drop-shadow(0 2px 3px rgba(0,0,0,.25)); }
+    .hud-cursor.show { opacity: 1; }
+    .hud-cursor.press svg { transform: scale(.82); transition: transform .12s; }
+    /* build tools under the console */
+    .forge-build { display: grid; grid-template-columns: minmax(0, 520px) minmax(0, 1fr); gap: 28px; align-items: start; margin-top: 24px; max-width: 1520px; }
+    @media (max-width: 1180px) {
+      .hud { grid-template-columns: minmax(0, 1fr) 260px; grid-template-areas: "head head" "centre right" "left right" "log log"; }
+      .hud-left { height: auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+      .hud-head { grid-template-columns: auto minmax(0, 1fr) minmax(160px, 240px); }
+      .hud-meta { grid-column: 1 / -1; }
+    }
+    @media (max-width: 760px) {
+      .hud { --stage-h: min(92vw, 520px); grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "centre" "right" "left" "log"; padding: 0 12px; }
+      .hud-rail { height: auto; }
+      .hud-head { grid-template-columns: auto minmax(0, 1fr); }
+      .hud-load, .hud-meta { grid-column: 1 / -1; }
+      .hud-meta { grid-template-columns: repeat(2, auto); gap: 8px 18px; }
+      .forge-build { grid-template-columns: minmax(0, 1fr); }
+    }
+    @media (prefers-reduced-motion: reduce) { .hud-cursor { transition: none; } }
   </style>
 </head>
 <body>
@@ -168,170 +292,234 @@
     </div>
   </header>
 
-  <main class="wrap forge">
-    <div class="forge-col">
-      <div>
-        <h1>Describe it. We’ll build it.</h1>
-      </div>
-
-      <p class="small muted offline" id="offline" hidden>Claude is off on this server, so requests won’t send. Everything else works.</p>
-
-      <form class="card" id="askForm">
-        <label class="big" for="prompt">Describe your gremlin</label>
-        <textarea id="prompt" placeholder="A paranoid lighthouse keeper with a rotating searchlight head and too many arms"></textarea>
-        <div class="row">
-          <button class="btn btn-primary" id="forgeBtn" type="submit">Forge a new one</button>
-          <button class="btn btn-small" id="ideaBtn" type="button">Try an idea</button>
-          <label class="check"><input type="checkbox" id="care"> Extra care</label>
+  <main class="forge">
+    <section class="hud" id="hud" aria-label="Gremlin console">
+      <header class="hud-head">
+        <div class="hud-badge"><span class="hud-glyph" aria-hidden="true"></span><b id="hudCode">GF-0</b></div>
+        <div class="hud-id">
+          <small id="hudKicker">Gremlin Forge</small>
+          <div class="hud-name"><input id="name" value="" autocomplete="off" aria-label="Name"><span class="slash" aria-hidden="true">/</span></div>
+          <div class="hud-tag" id="tagline"></div>
         </div>
-      </form>
-
-      <form class="card" id="refineForm">
-        <label class="big" for="refine">Change something</label>
-        <div class="inline">
-          <input type="text" id="refine" placeholder="Rust it up and tattoo a snake on its arm" autocomplete="off">
-          <button class="btn" id="refineBtn" type="submit">Apply</button>
-          <button class="btn" id="stopBtn" type="button" hidden>Stop</button>
+        <div class="hud-load" aria-label="Drive load">
+          <div class="k"><span>Drive load</span><b id="hudLoad">0%</b></div>
+          <div class="cells" id="hudCells"></div>
+          <div class="scale"><span>Rest</span><span>Working</span><span>Flat out</span></div>
         </div>
-      </form>
-      <div class="statusline">
-        <p class="status" id="status" role="status" aria-live="polite"></p>
-        <p class="small muted" id="who"></p>
-      </div>
+        <dl class="hud-meta">
+          <div><dt>Design ID</dt><dd id="hudId">GF-0000</dd></div>
+          <div><dt>Runtime</dt><dd id="hudClock">00:00:00</dd></div>
+          <div><dt>Status</dt><dd id="hudStatus"><i aria-hidden="true"></i><span>IDLE</span></dd></div>
+          <div><dt>Operator</dt><dd id="hudOperator">Guest</dd></div>
+        </dl>
+      </header>
 
-      <div class="panels" id="panels">
-        <details class="panel inspector" name="forge-panel" id="panelSelection" hidden>
-          <summary><span>Selected parts</span><span class="badge" id="badgeSelection"></span></summary>
-          <div class="panel-body">
-        <div class="row" style="justify-content:space-between">
-          <b id="selTitle"></b>
-          <span class="row"><button class="btn btn-small" id="selAll" type="button">Select all</button><button class="btn btn-small" id="selClear" type="button">Clear</button></span>
-        </div>
-        <div class="selchips" id="selList"></div>
-        <div class="grid2">
-          <label for="selMat">Material</label>
-          <select id="selMat"></select>
-          <span>Move</span>
-          <span class="row nudges" id="selMove"></span>
-          <span>Turn and size</span>
-          <span class="row nudges" id="selShape"></span>
-        </div>
-        <div class="grid2" id="selExact"></div>
-        <div>
-          <p class="small muted" style="margin:0 0 6px">Weathering on just these parts</p>
-          <div class="row chips wearchips" id="selWear"></div>
-        </div>
-        <div class="row">
-          <button class="btn btn-small" id="selMirror" type="button"></button>
-          <button class="btn btn-small" id="selDup" type="button">Duplicate</button>
-          <button class="btn btn-small danger" id="selDelete" type="button" aria-keyshortcuts="Delete Backspace">Delete</button>
-        </div>
-          </div>
-        </details>
-
-        <details class="panel history" name="forge-panel" id="panelHistory" open>
-          <summary><span>History</span><span class="badge" id="badgeHistory"></span></summary>
-          <div class="panel-body">
-            <p class="small muted" style="margin:0 0 10px">Pick any step to go back to it. Whatever you do next starts a new branch from there, and nothing is lost.</p>
-            <ol id="history"></ol>
-          </div>
-        </details>
-
-        <details class="panel" name="forge-panel" id="panelSurfaces">
-          <summary><span>Surfaces</span><span class="badge" id="badgeSurfaces"></span></summary>
-          <div class="panel-body">
-            <p class="small muted" style="margin:0 0 8px">Weathering</p>
-            <div class="row chips wearchips" id="wearChips"></div>
-            <label class="small muted" for="wearAmount" style="display:block; margin-top:10px">How much: <span id="wearAmountOut"></span></label>
-            <input type="range" id="wearAmount" min="0.05" max="1" step="0.05" value="0.35">
-            <p class="small muted" style="margin:16px 0 8px">Pictures and artwork: pick one, then click the robot where it should go.</p>
-            <div class="pics" id="pics"></div>
-            <div class="row" style="margin-top:8px">
-              <label class="btn btn-small" for="picFile" style="cursor:pointer">Upload a picture</label>
-              <input type="file" id="picFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden>
-              <button class="btn btn-small" id="placeCancel" type="button" hidden>Cancel placing</button>
-            </div>
-            <p class="small muted" style="margin:6px 0 0">Pictures stay in this browser. The designer only sees their file names, so you can say “put my logo on its chest”.</p>
-            <p class="small muted" style="margin:16px 0 8px" id="decalsTitle">Decals</p>
-            <ul class="decals" id="decals"></ul>
-          </div>
-        </details>
-
-        <details class="panel" name="forge-panel" id="panelColours">
-          <summary><span>Colours</span><span class="badge" id="badgeColours"></span></summary>
-          <div class="panel-body">
-            <div class="row" style="gap:28px; align-items:flex-start">
-              <div><p class="eyebrow">Enamel</p><div class="swatches" id="enamels"></div></div>
-              <div><p class="eyebrow">Glow</p><div class="swatches" id="glows"></div></div>
-            </div>
-            <p class="eyebrow" style="margin-top:16px">Any colour</p>
-            <p class="small muted" style="margin:0 0 10px">The house rules tone enamels into the 1950s appliance range and keep glows bright enough to read as lights.</p>
-            <div class="colours">
-              <label for="pickEnamel">Enamel</label><input type="color" id="pickEnamel"><code id="hexEnamel"></code>
-              <label for="pickAccent">Accent</label><input type="color" id="pickAccent"><code id="hexAccent"></code>
-              <label for="pickGlow">Glow</label><input type="color" id="pickGlow"><code id="hexGlow"></code>
-            </div>
-          </div>
-        </details>
-
-        <details class="panel" name="forge-panel" id="panelExamples">
-          <summary><span>Examples</span><span class="badge">start from one</span></summary>
-          <div class="panel-body"><div class="starts" id="starts"></div></div>
-        </details>
-
-        <details class="panel house" name="forge-panel" id="panelHouse">
-          <summary><span>House rules and spec</span><span class="badge" id="badgeHouse"></span></summary>
-          <div class="panel-body">
-            <div id="houseBody"></div>
-            <p class="eyebrow" style="margin:14px 0 4px">Design spec</p>
-            <pre id="config"></pre>
-          </div>
-        </details>
-      </div>
-    </div>
-
-    <div class="forge-stage-col">
-      <div class="stage" id="stage" data-view="render" role="img" aria-label="Your gremlin. Drag to turn, scroll or pinch to zoom.">
-        <img class="photo" id="photoImg" alt="">
-        <div class="views">
-          <button type="button" id="renderTab" aria-pressed="true">3D</button>
-          <button type="button" id="photoTab" aria-pressed="false" disabled>Photo</button>
-        </div>
-        <div class="modelabel" id="modeLabel" aria-live="polite"><small>Operating mode</small><b></b></div>
-      </div>
-      <div class="row stagebar" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center">
-        <button class="btn btn-spark btn-small" id="photoBtn" type="button" hidden>Make it a photo</button>
-        <a class="btn btn-small" id="photoDl" hidden>Download photo</a>
-        <button class="btn btn-small" id="undoBtn" type="button" disabled aria-keyshortcuts="Control+Z Meta+Z">Undo</button>
-        <button class="btn btn-small" id="redoBtn" type="button" disabled aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y">Redo</button>
-        <button class="btn btn-small" id="spinBtn" type="button" aria-pressed="false">Turntable</button>
-        <button class="btn btn-small" id="viewBtn" type="button">Reset view</button>
-        <button class="btn btn-small" id="copyBtn" type="button">Copy hatch config</button>
-        <span class="small muted" id="copyStatus"></span>
-      </div>
-      <div class="console" id="console" hidden>
-        <div class="crow"><span class="k">Assemblies</span><div class="cchips" id="asmChips"></div></div>
-        <div class="crow" id="modeRow"><span class="k">Modes</span><div class="cchips" id="modeChips"></div></div>
-        <div class="crow"><span class="k">Display</span><div class="cchips">
-          <button type="button" id="dLabels" aria-pressed="false">Labels</button>
-          <button type="button" id="dExplode" aria-pressed="false">Exploded</button>
-          <button type="button" id="dTour" aria-pressed="false">Tour</button>
-        </div></div>
-      </div>
-      <div class="readout">
-        <div class="namebox">
-          <label class="eyebrow" for="name">Name</label>
-          <input id="name" value="" autocomplete="off">
-          <div class="muted" id="tagline"></div>
-          <div class="code" id="code"></div>
-        </div>
-        <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end">
+      <aside class="hud-rail hud-left" aria-label="Readouts">
+        <section class="hcard">
+          <h3>Drive <span>01</span></h3>
+          <div class="bignum"><b id="hudDrive">0</b><small>%</small></div>
+          <p class="sub" id="hudDriveMode">Idle · drive load</p>
+          <canvas id="hudSpark" class="spark" aria-hidden="true"></canvas>
+          <div class="kv"><span>Mode input</span><span id="hudInput">0.00</span><span>Explode</span><span id="hudExplode">0%</span></div>
+        </section>
+        <section class="hcard">
+          <h3>Build <span>02</span></h3>
           <div class="menace" id="menace"></div>
           <div class="meter" id="meter"></div>
+          <div class="code" id="code"></div>
+        </section>
+        <section class="hcard grow">
+          <h3>Joints <span>03</span></h3>
+          <ul class="bars" id="hudJoints"></ul>
+        </section>
+      </aside>
+
+      <div class="hud-centre">
+        <div class="stage" id="stage" data-view="render" role="img" aria-label="Your gremlin. Drag to turn, scroll or pinch to zoom.">
+          <img class="photo" id="photoImg" alt="">
+          <div class="views">
+            <button type="button" id="renderTab" aria-pressed="true">3D</button>
+            <button type="button" id="photoTab" aria-pressed="false" disabled>Photo</button>
+          </div>
+          <svg class="blueprint" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><circle cx="50" cy="52" r="34"/><circle cx="50" cy="52" r="22"/><path d="M50 10 V94 M8 52 H92"/></svg>
+          <div class="modelabel" id="modeLabel" aria-live="polite"><small>Operating mode</small><b></b></div>
+        </div>
+        <div class="row stagebar" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center">
+          <button class="btn btn-spark btn-small" id="photoBtn" type="button" hidden>Make it a photo</button>
+          <a class="btn btn-small" id="photoDl" hidden>Download photo</a>
+          <button class="btn btn-small" id="undoBtn" type="button" disabled aria-keyshortcuts="Control+Z Meta+Z">Undo</button>
+          <button class="btn btn-small" id="redoBtn" type="button" disabled aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y">Redo</button>
+          <button class="btn btn-small" id="spinBtn" type="button" aria-pressed="false">Turntable</button>
+          <button class="btn btn-small" id="viewBtn" type="button">Reset view</button>
+          <button class="btn btn-small" id="copyBtn" type="button">Copy hatch config</button>
+          <span class="small muted" id="copyStatus"></span>
+          <span class="small muted hint" id="selectHint">Click a part to select it. Shift-click for more.</span>
+          <span class="small muted hint" id="photoBy"></span>
+        </div>
+
+      </div>
+
+      <aside class="hud-rail hud-right" aria-label="Controls">
+        <section class="hcard" id="asmCard">
+          <h3>Assemblies <span>04</span></h3>
+          <div class="cchips" id="asmChips"></div>
+        </section>
+        <section class="hcard" id="modeRow">
+          <h3>Modes <span>05</span></h3>
+          <div class="cchips" id="modeChips"></div>
+        </section>
+        <section class="hcard">
+          <h3>Display <span>06</span></h3>
+          <div class="cchips">
+            <button type="button" id="dLabels" aria-pressed="false">Labels</button>
+            <button type="button" id="dExplode" aria-pressed="false">Exploded</button>
+            <button type="button" id="dXray" aria-pressed="false">X-ray</button>
+            <button type="button" id="dTour" aria-pressed="false">Tour</button>
+          </div>
+        </section>
+        <section class="hcard grow">
+          <h3>Subsystems <span>07</span></h3>
+          <ol class="subs" id="hudSubs"></ol>
+        </section>
+      </aside>
+
+      <footer class="hud-log" id="hudLog">
+        <h3>Operation log <span>08</span></h3>
+        <div class="logbody">
+          <button type="button" class="play" id="logPlay" data-state="play" aria-label="Play the tour"></button>
+          <div class="logmain">
+            <div class="logline"><span>Rest</span><b id="logBeat">Manual · your controls</b><span>Full</span></div>
+            <div class="track" id="logTrack" role="slider" tabindex="0" aria-label="Tour position, in seconds" aria-valuemin="0" aria-valuenow="0" aria-valuemax="0"><div class="ticks" id="logTicks"></div><i class="fill" id="logFill"></i><i class="knob" id="logKnob"></i></div>
+            <div class="logline"><span id="logTime">00:00 / 00:00</span><span id="logCount">0 operator actions</span></div>
+          </div>
+        </div>
+      </footer>
+      <div class="hud-cursor" id="hudCursor" aria-hidden="true"><svg viewBox="0 0 20 24" width="20" height="24"><path d="M2 2 L2 19 L6.5 15 L9.5 22 L12.5 20.7 L9.6 14 L16 14 Z" fill="#fff" stroke="#24211d" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+    </section>
+
+    <div class="wrap forge-build">
+      <div class="forge-col">
+        <div>
+          <h1>Describe it. We’ll build it.</h1>
+        </div>
+
+        <p class="small muted offline" id="offline" hidden>Claude is off on this server, so requests won’t send. Everything else works.</p>
+
+        <form class="card" id="askForm">
+          <label class="big" for="prompt">Describe your gremlin</label>
+          <textarea id="prompt" placeholder="A paranoid lighthouse keeper with a rotating searchlight head and too many arms"></textarea>
+          <div class="row">
+            <button class="btn btn-primary" id="forgeBtn" type="submit">Forge a new one</button>
+            <button class="btn btn-small" id="ideaBtn" type="button">Try an idea</button>
+            <label class="check"><input type="checkbox" id="care"> Extra care</label>
+          </div>
+        </form>
+
+        <form class="card" id="refineForm">
+          <label class="big" for="refine">Change something</label>
+          <div class="inline">
+            <input type="text" id="refine" placeholder="Rust it up and tattoo a snake on its arm" autocomplete="off">
+            <button class="btn" id="refineBtn" type="submit">Apply</button>
+            <button class="btn" id="stopBtn" type="button" hidden>Stop</button>
+          </div>
+        </form>
+        <div class="statusline">
+          <p class="status" id="status" role="status" aria-live="polite"></p>
+          <p class="small muted" id="who"></p>
+        </div>
+
+      </div>
+      <div class="forge-col">
+        <div class="panels" id="panels">
+          <details class="panel inspector" name="forge-panel" id="panelSelection" hidden>
+            <summary><span>Selected parts</span><span class="badge" id="badgeSelection"></span></summary>
+            <div class="panel-body">
+          <div class="row" style="justify-content:space-between">
+            <b id="selTitle"></b>
+            <span class="row"><button class="btn btn-small" id="selAll" type="button">Select all</button><button class="btn btn-small" id="selClear" type="button">Clear</button></span>
+          </div>
+          <div class="selchips" id="selList"></div>
+          <div class="grid2">
+            <label for="selMat">Material</label>
+            <select id="selMat"></select>
+            <span>Move</span>
+            <span class="row nudges" id="selMove"></span>
+            <span>Turn and size</span>
+            <span class="row nudges" id="selShape"></span>
+          </div>
+          <div class="grid2" id="selExact"></div>
+          <div>
+            <p class="small muted" style="margin:0 0 6px">Weathering on just these parts</p>
+            <div class="row chips wearchips" id="selWear"></div>
+          </div>
+          <div class="row">
+            <button class="btn btn-small" id="selMirror" type="button"></button>
+            <button class="btn btn-small" id="selDup" type="button">Duplicate</button>
+            <button class="btn btn-small danger" id="selDelete" type="button" aria-keyshortcuts="Delete Backspace">Delete</button>
+          </div>
+            </div>
+          </details>
+
+          <details class="panel history" name="forge-panel" id="panelHistory" open>
+            <summary><span>History</span><span class="badge" id="badgeHistory"></span></summary>
+            <div class="panel-body">
+              <p class="small muted" style="margin:0 0 10px">Pick any step to go back to it. Whatever you do next starts a new branch from there, and nothing is lost.</p>
+              <ol id="history"></ol>
+            </div>
+          </details>
+
+          <details class="panel" name="forge-panel" id="panelSurfaces">
+            <summary><span>Surfaces</span><span class="badge" id="badgeSurfaces"></span></summary>
+            <div class="panel-body">
+              <p class="small muted" style="margin:0 0 8px">Weathering</p>
+              <div class="row chips wearchips" id="wearChips"></div>
+              <label class="small muted" for="wearAmount" style="display:block; margin-top:10px">How much: <span id="wearAmountOut"></span></label>
+              <input type="range" id="wearAmount" min="0.05" max="1" step="0.05" value="0.35">
+              <p class="small muted" style="margin:16px 0 8px">Pictures and artwork: pick one, then click the robot where it should go.</p>
+              <div class="pics" id="pics"></div>
+              <div class="row" style="margin-top:8px">
+                <label class="btn btn-small" for="picFile" style="cursor:pointer">Upload a picture</label>
+                <input type="file" id="picFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden>
+                <button class="btn btn-small" id="placeCancel" type="button" hidden>Cancel placing</button>
+              </div>
+              <p class="small muted" style="margin:6px 0 0">Pictures stay in this browser. The designer only sees their file names, so you can say “put my logo on its chest”.</p>
+              <p class="small muted" style="margin:16px 0 8px" id="decalsTitle">Decals</p>
+              <ul class="decals" id="decals"></ul>
+            </div>
+          </details>
+
+          <details class="panel" name="forge-panel" id="panelColours">
+            <summary><span>Colours</span><span class="badge" id="badgeColours"></span></summary>
+            <div class="panel-body">
+              <div class="row" style="gap:28px; align-items:flex-start">
+                <div><p class="eyebrow">Enamel</p><div class="swatches" id="enamels"></div></div>
+                <div><p class="eyebrow">Glow</p><div class="swatches" id="glows"></div></div>
+              </div>
+              <p class="eyebrow" style="margin-top:16px">Any colour</p>
+              <p class="small muted" style="margin:0 0 10px">The house rules tone enamels into the 1950s appliance range and keep glows bright enough to read as lights.</p>
+              <div class="colours">
+                <label for="pickEnamel">Enamel</label><input type="color" id="pickEnamel"><code id="hexEnamel"></code>
+                <label for="pickAccent">Accent</label><input type="color" id="pickAccent"><code id="hexAccent"></code>
+                <label for="pickGlow">Glow</label><input type="color" id="pickGlow"><code id="hexGlow"></code>
+              </div>
+            </div>
+          </details>
+
+          <details class="panel" name="forge-panel" id="panelExamples">
+            <summary><span>Examples</span><span class="badge">start from one</span></summary>
+            <div class="panel-body"><div class="starts" id="starts"></div></div>
+          </details>
+
+          <details class="panel house" name="forge-panel" id="panelHouse">
+            <summary><span>House rules and spec</span><span class="badge" id="badgeHouse"></span></summary>
+            <div class="panel-body">
+              <div id="houseBody"></div>
+              <p class="eyebrow" style="margin:14px 0 4px">Design spec</p>
+              <pre id="config"></pre>
+            </div>
+          </details>
         </div>
       </div>
-      <p class="small muted" id="selectHint" style="margin:0">Click a part to select it. Shift-click to select more.</p>
-      <p class="small muted" id="photoBy"></p>
     </div>
   </main>
 
