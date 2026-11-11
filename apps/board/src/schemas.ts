@@ -171,6 +171,17 @@ export const ForgeCritique = z.object({
   care: z.boolean().optional(),
 })
 
+export const ForgeCut = z.object({
+  /** The design and its story; re-checked server-side. */
+  spec: z.unknown(),
+  story: z.unknown().optional(),
+  /** The cut as the maker has it now. */
+  cut: z.unknown().optional(),
+  instructions: z.string().trim().min(1).max(1000),
+  /** Where a call to action should point when the maker asks for one without a link (its page, or the hatch page). */
+  link: z.string().max(200).regex(/^https:\/\/[^\s<>"]+$/).optional(),
+})
+
 export const ForgePhoto = z.object({
   /** The studio render as `data:image/png;base64,…`. */
   image: z.string().max(6 * 1024 * 1024),

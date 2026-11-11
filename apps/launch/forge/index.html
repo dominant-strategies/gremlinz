@@ -342,6 +342,15 @@
     .cut-opts.closer input.ct, .cut-opts.closer input.cc { font: inherit; font-size: 13.5px; padding: 7px 9px; border: 1px solid #dcd5c8; border-radius: 6px; background: #fff; min-width: 0; }
     .cut-opts.closer input.ct { font-weight: 700; }
     .cut-opts.closer:has(input[name=closer]:not(:checked)) input { opacity: .55; }
+    .cut-dlg textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13.5px; padding: 8px 10px; border: 1px solid #dcd5c8; border-radius: 6px; background: #fff; resize: vertical; }
+    .cut-ask-row { display: flex; gap: 10px; align-items: flex-start; margin-top: 6px; }
+    .cut-dlg .spin { width: 13px; height: 13px; border: 2px solid #dcd5c8; border-top-color: #e8571e; border-radius: 50%; animation: forge-spin .8s linear infinite; }
+    .cut-ask-row .btn { flex: none; display: inline-flex; gap: 6px; align-items: center; }
+    .cut-note { margin: 0; font-size: 13px; color: #24211d; background: #f3efe7; border-left: 3px solid #e8571e; padding: 6px 9px; }
+    .cut-note.bad { color: #a3361a; }
+    .cut-plan { margin: 0; font-family: var(--mono); font-size: 12px; color: #66625b; }
+    .cut-plan span { color: #24211d; }
+    .cut-plan .link { background: none; border: 0; padding: 0; margin-left: 6px; color: #e8571e; text-decoration: underline; cursor: pointer; font: inherit; }
     .cut-opts .none { font-size: 13px; color: #66625b; margin: 0; }
     .cut-foot { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
     .cut-foot .mono { margin-right: auto; font-size: 12.5px; color: #66625b; }
@@ -367,7 +376,12 @@
   <dialog class="attach-dlg cut-dlg" id="cutDlg" aria-labelledby="cutTitle">
     <form method="dialog" id="cutForm">
       <h2 id="cutTitle">Cut your video</h2>
-      <p class="small muted" style="margin:0">Choose what the film features. It plays them in this order: its goals, spotlights, modes, the exploded view, then why it exists.</p>
+      <p class="small muted" style="margin:0">Choose what the film features, or tell Claude what you want and it fills these in for you.</p>
+      <fieldset id="cutAskBox"><legend>Special instructions <span>optional</span></legend>
+        <textarea id="cutAsk" rows="2" maxlength="1000" placeholder="e.g. Open on the jaw, skip the exploded view, make it punchy, and end with a link to its page."></textarea>
+        <div class="cut-ask-row"><button class="btn btn-small" type="button" id="cutApply">Apply with Claude</button><p class="cut-note" id="cutNote" hidden role="status"></p></div>
+      </fieldset>
+      <p class="cut-plan small" id="cutPlan" hidden>Plays: <span></span> <button type="button" class="link" id="cutPlanReset">Reset order and pace</button></p>
       <fieldset id="cutGoals"><legend>Life goals card</legend><div class="cut-opts"></div></fieldset>
       <fieldset id="cutSpots"><legend>Spotlight assemblies <span>each shown alone, close up</span></legend><div class="cut-opts"></div></fieldset>
       <fieldset id="cutModes"><legend>Modes <span>up to 5</span></legend><div class="cut-opts"></div></fieldset>

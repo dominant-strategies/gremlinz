@@ -3,7 +3,7 @@
  * Both are optional; each is enabled by its API key in the environment and reported by GET /api/forge.
  */
 import Anthropic from '@anthropic-ai/sdk'
-import { FORGE_CRITIQUE_MAX_STILLS, FORGE_PHOTO_PROMPT, checkForgeSpec, forgeCritiquePrompt, forgeDesignPrompt, parseModelJson, type ForgeSpec } from '@gremlins/hatch'
+import { FORGE_CRITIQUE_MAX_STILLS, FORGE_PHOTO_PROMPT, checkForgeCut, checkForgeSpec, checkStory, forgeCritiquePrompt, forgeCutPrompt, forgeDesignPrompt, parseModelJson, type ForgeCut, type ForgeSpec } from '@gremlins/hatch'
 
 export class ForgeError extends Error {
   readonly status: 400 | 502 | 503
@@ -111,6 +111,29 @@ export async function critiqueGremlin(
   } catch (e) {
     throw new ForgeError((e as Error).message)
   }
+}
+
+/**
+ * A film's special instructions: Claude turns the maker's words into a cut (what to feature, in what order, at what
+ * pace, in whose words, the closer), checked against the design like any cut. Nothing is filmed here.
+ */
+export async function cutWithInstructions(
+  designer: ForgeDesigner,
+  req: { spec: unknown; story?: unknown; cut?: unknown; instructions: string; link?: string },
+  signal?: AbortSignal,
+): Promise<{ cut: ForgeCut; note: string }> {
+  let spec: ForgeSpec
+  try { spec = checkForgeSpec(req.spec).spec } catch (e) { throw new ForgeError((e as Error).message, 400) }
+  const story = checkStory(req.story, true) ?? spec.story ?? null
+  const current = checkForgeCut(req.cut, spec, story)
+  // a short reply; one more try if it doesn't come back as JSON
+  let reply: { cut?: unknown; note?: unknown } | undefined, lastError: unknown
+  for (let i = 0; i < 2 && !reply; i++) {
+    const text = await ask(designer, forgeCutPrompt(spec, story, current, req.instructions, req.link), { care: false, signal })
+    try { reply = parseModelJson(text) as typeof reply } catch (e) { lastError = e }
+  }
+  if (!reply) throw new ForgeError((lastError as Error).message)
+  return { cut: checkForgeCut(reply.cut ?? reply, spec, story), note: String(reply.note ?? '').replace(/\s+/g, ' ').trim().slice(0, 400) }
 }
 
 // ------------------------------------------------------------------------------------------------ photo (image model)

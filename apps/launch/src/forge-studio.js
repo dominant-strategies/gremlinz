@@ -13,7 +13,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
-import { FORGE_CRITIQUE_MAX_STILLS, FORGE_CUT_LIMITS, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints, forgeShotAt, forgeTour, forgeTourAt } from '@gremlins/hatch'
+import { FORGE_CRITIQUE_MAX_STILLS, FORGE_CUT_LIMITS, forgeCutOrder, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints, forgeShotAt, forgeTour, forgeTourAt } from '@gremlins/hatch'
 import { drawQr, encodeVideo, paintOverlay, videoSupport } from './forge-record.js'
 import { fitName, hideCursor, liveHud, modelCode, mountHud, renderHud, tickHud } from './forge-hud.js'
 import { modeFor, quai, watchGremlin } from './forge-live.js'
@@ -1167,33 +1167,52 @@ function openCut() {
   const sp = spec(); if (!sp || !glOK || ctl) return
   const dlg = $('cutDlg'), form = $('cutForm'), esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
   const story = tourStory(sp), asms = sp.assemblies || [], modes = (sp.modes || []).filter((m) => m.id !== 'idle')
-  const was = cuts.get(sp.name) || {}
   const box = (name, value, label, on, extra = '') => `<label><input type="checkbox" name="${name}" value="${esc(value)}" ${on ? 'checked' : ''} ${extra}> ${esc(label)}</label>`
   const opts = (id) => form.querySelector(`#${id} .cut-opts`)
-  opts('cutGoals').className = 'cut-opts goals'
-  opts('cutGoals').innerHTML = story?.goals?.length ? story.goals.map((g) => box('goal', g, g, !was.goals || was.goals.includes(g))).join('') : '<p class="none">No goals yet. Describe them and Claude adds them to the design.</p>'
-  // each assembly and mode: on or off, what the film calls it, and an optional sentence about it
-  const words = (key, name) => { const t = was.text?.[key] || {}; return `<input class="ct" data-key="${key}" data-f="title" value="${esc(t.title || name)}" maxlength="${FORGE_CUT_LIMITS.title}" aria-label="Title for ${esc(name)}"><input class="cc" data-key="${key}" data-f="caption" value="${esc(t.caption || '')}" maxlength="${FORGE_CUT_LIMITS.caption}" placeholder="Optional: a sentence about it" aria-label="Sentence for ${esc(name)}">` }
-  const row = (name, value, label, on, key) => `<div class="cut-row"><label title="${esc(label)}"><input type="checkbox" name="${name}" value="${esc(value)}" ${on ? 'checked' : ''}></label>${words(key, label)}</div>`
-  opts('cutSpots').className = 'cut-opts rows'; opts('cutModes').className = 'cut-opts rows'
-  opts('cutSpots').innerHTML = asms.map((a) => row('spot', a.id, a.name, (was.spotlight || []).includes(a.id), `asm:${a.id}`)).join('')
-  $('cutSpots').hidden = asms.length < 2
-  opts('cutModes').innerHTML = modes.length ? modes.map((m, i) => row('mode', m.id, m.name, was.modes ? was.modes.includes(m.id) : i < 5, `mode:${m.id}`)).join('') : '<p class="none">This design has no modes.</p>'
-  opts('cutMore').innerHTML = [story?.motive ? box('motive', '1', `Why it exists: “${story.motive.length > 70 ? story.motive.slice(0, 68) + '…' : story.motive}”`, was.motive !== false) : '',
-    asms.length > 1 ? box('exploded', '1', 'Exploded view', was.exploded !== false) : ''].join('') || '<p class="none">Nothing else to add.</p>'
-  // the closer: off unless chosen; its page when it's a live gremlin, else where to hatch one
-  const defUrl = LIVE ? `${location.origin}/g/${LIVE}` : `${location.origin}/hatch/`
-  const defHead = LIVE ? `Watch ${sp.name} live on gremlinz` : 'Hatch your own gremlin'
-  opts('cutCloser').className = 'cut-opts closer'
-  opts('cutCloser').innerHTML = `<label><input type="checkbox" name="closer" ${was.closer ? 'checked' : ''}> End on a call to action with a QR code</label>
-    <input class="ct" name="closerHead" maxlength="60" value="${esc(was.closer?.headline ?? defHead)}" aria-label="Closer headline">
-    <input class="cc" name="closerUrl" type="url" maxlength="200" value="${esc(was.closer?.url ?? defUrl)}" aria-label="Closer link">`
+  const SECTION_NAME = { goals: 'Goals', spotlights: 'Spotlights', modes: 'Modes', exploded: 'Exploded', motive: 'Why it exists' }
+  let plan = {} // order and pace: set by special instructions, shown as a line, reset with a click
+  /** The dialog filled in from a cut (rows in the cut's order: chosen ones first). */
+  const fill = (was) => {
+    plan = { ...(was.order ? { order: was.order } : {}), ...(was.pace ? { pace: was.pace } : {}) }
+    opts('cutGoals').className = 'cut-opts goals'
+    opts('cutGoals').innerHTML = story?.goals?.length ? story.goals.map((g) => box('goal', g, g, !was.goals || was.goals.includes(g))).join('') : '<p class="none">No goals yet. Describe them and Claude adds them to the design.</p>'
+    // each assembly and mode: on or off, what the film calls it, and an optional sentence about it
+    const words = (key, name) => { const t = was.text?.[key] || {}; return `<input class="ct" data-key="${key}" data-f="title" value="${esc(t.title || name)}" maxlength="${FORGE_CUT_LIMITS.title}" aria-label="Title for ${esc(name)}"><input class="cc" data-key="${key}" data-f="caption" value="${esc(t.caption || '')}" maxlength="${FORGE_CUT_LIMITS.caption}" placeholder="Optional: a sentence about it" aria-label="Sentence for ${esc(name)}">` }
+    const row = (name, value, label, on, key) => `<div class="cut-row"><label title="${esc(label)}"><input type="checkbox" name="${name}" value="${esc(value)}" ${on ? 'checked' : ''}></label>${words(key, label)}</div>`
+    const ordered = (items, chosen) => chosen ? [...chosen.map((id) => items.find((x) => x.id === id)).filter(Boolean), ...items.filter((x) => !chosen.includes(x.id))] : items
+    opts('cutSpots').className = 'cut-opts rows'; opts('cutModes').className = 'cut-opts rows'
+    opts('cutSpots').innerHTML = ordered(asms, was.spotlight).map((a) => row('spot', a.id, a.name, (was.spotlight || []).includes(a.id), `asm:${a.id}`)).join('')
+    $('cutSpots').hidden = asms.length < 2
+    opts('cutModes').innerHTML = modes.length ? ordered(modes, was.modes).map((m, i) => row('mode', m.id, m.name, was.modes ? was.modes.includes(m.id) : i < 5, `mode:${m.id}`)).join('') : '<p class="none">This design has no modes.</p>'
+    opts('cutMore').innerHTML = [story?.motive ? box('motive', '1', `Why it exists: “${story.motive.length > 70 ? story.motive.slice(0, 68) + '…' : story.motive}”`, was.motive !== false) : '',
+      asms.length > 1 ? box('exploded', '1', 'Exploded view', was.exploded !== false) : ''].join('') || '<p class="none">Nothing else to add.</p>'
+    // the closer: off unless chosen; its page when it's a live gremlin, else where to hatch one
+    const defUrl = LIVE ? `${location.origin}/g/${LIVE}` : `${location.origin}/hatch/`
+    const defHead = LIVE ? `Watch ${sp.name} live on gremlinz` : 'Hatch your own gremlin'
+    opts('cutCloser').className = 'cut-opts closer'
+    opts('cutCloser').innerHTML = `<label><input type="checkbox" name="closer" ${was.closer ? 'checked' : ''}> End on a call to action with a QR code</label>
+      <input class="ct" name="closerHead" maxlength="60" value="${esc(was.closer?.headline ?? defHead)}" aria-label="Closer headline">
+      <input class="cc" name="closerUrl" type="url" maxlength="200" value="${esc(was.closer?.url ?? defUrl)}" aria-label="Closer link">`
+    if (was.instructions !== undefined) $('cutAsk').value = was.instructions
+  }
   const read = () => {
     const fd = new FormData(form)
     const text = {}
     for (const i of form.querySelectorAll('input[data-key]')) if (i.value.trim()) (text[i.dataset.key] ??= {})[i.dataset.f] = i.value.trim()
     const closer = fd.has('closer') ? { headline: String(fd.get('closerHead') || '').trim(), url: String(fd.get('closerUrl') || '').trim() } : undefined
-    return { goals: fd.getAll('goal').map(String), spotlight: fd.getAll('spot').map(String), modes: fd.getAll('mode').map(String), motive: fd.has('motive'), exploded: fd.has('exploded'), text, ...(closer ? { closer } : {}) }
+    return { goals: fd.getAll('goal').map(String), spotlight: fd.getAll('spot').map(String), modes: fd.getAll('mode').map(String), motive: fd.has('motive'), exploded: fd.has('exploded'), text, ...(closer ? { closer } : {}), ...plan }
+  }
+  const showPlan = () => {
+    const bits = []
+    if (plan.order) {
+      // only the sections that will actually play
+      const cut = read(), beats = forgeTour(sp, story, cut)
+      const plays = { goals: beats.some((b) => b.card === 'goals'), spotlights: beats.some((b) => b.spot), modes: beats.some((b) => b.mode !== 'idle'), exploded: beats.some((b) => b.label === 'Exploded'), motive: beats.some((b) => b.card === 'motive') }
+      bits.push(forgeCutOrder(plan.order).filter((x) => plays[x]).map((x) => SECTION_NAME[x]).join(' → '))
+    }
+    if (plan.pace && plan.pace !== 1) bits.push(`pace ${plan.pace < 1 ? 'slower' : 'faster'} (${plan.pace}×)`)
+    $('cutPlan').hidden = !bits.length
+    $('cutPlan').querySelector('span').textContent = bits.join(' · ')
   }
   const sync = () => {
     const cut = read()
@@ -1201,14 +1220,42 @@ function openCut() {
     for (const b of form.querySelectorAll('input[name=mode]')) b.disabled = !b.checked && cut.modes.length >= 5
     const beats = forgeTour(sp, story, cut), last = beats[beats.length - 1]
     $('cutLen').textContent = `${Math.round(last ? last.at + last.dur : 0)} s · ${new Set(beats.map((b) => b.take)).size} shots`
+    showPlan()
   }
+  fill(cuts.get(sp.name) || {})
+  $('cutNote').hidden = true
+  $('cutAskBox').hidden = !caps.design
   form.onchange = sync
-  form.oninput = sync
+  form.oninput = (e) => { if (e.target.id !== 'cutAsk') sync() }
   sync()
-  $('cutCancel').onclick = () => dlg.close()
+  $('cutPlanReset').onclick = () => { plan = {}; sync() }
+  // special instructions: Claude turns them into the choices above, which you see (and can change) before cutting
+  let asking = null
+  $('cutApply').onclick = async () => {
+    const instructions = $('cutAsk').value.trim()
+    if (!instructions || asking) return
+    asking = new AbortController()
+    const btn = $('cutApply'), note = $('cutNote')
+    btn.disabled = true; btn.innerHTML = '<span class="spin" aria-hidden="true"></span> Claude is cutting…'
+    note.hidden = true
+    try {
+      const link = String(form.querySelector('input[name=closerUrl]')?.value || '').trim()
+      const res = await sessionPostJson('/api/forge/cut', { spec: sp, story, cut: read(), instructions, ...(/^https:\/\//.test(link) ? { link } : {}) }, { scope: 'forge', signal: asking.signal })
+      const next = { ...read(), ...res.cut, instructions }
+      if (res.cut.closer === null) delete next.closer
+      if (res.cut.text) next.text = { ...read().text, ...res.cut.text }
+      fill(next); sync()
+      note.textContent = res.note || 'Done: the choices above now follow your instructions.'
+      note.className = 'cut-note'; note.hidden = false
+    } catch (e) {
+      if (e.name !== 'AbortError') { note.textContent = e.message; note.className = 'cut-note bad'; note.hidden = false }
+    } finally { asking = null; btn.disabled = false; btn.textContent = 'Apply with Claude' }
+  }
+  $('cutCancel').onclick = () => { asking?.abort(); dlg.close() }
   form.onsubmit = (e) => {
     e.preventDefault()
-    const cut = read()
+    if (asking) return
+    const cut = { ...read(), instructions: $('cutAsk').value.trim() }
     cuts.set(sp.name, cut)
     try { localStorage.setItem('gremlins.forge.cuts', JSON.stringify(Object.fromEntries(cuts))) } catch { /* private mode: kept for this visit */ }
     setTourCut(cut, sp) // the stage's tour plays the same film from now on

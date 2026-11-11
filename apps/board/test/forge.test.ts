@@ -325,3 +325,35 @@ describe('forge designs on gremlins (live pages and share cards)', () => {
     expect(r.body.eggs.map((e: { address: string }) => e.address.toLowerCase())).toEqual([egg.address.toLowerCase()])
   })
 })
+
+describe('special instructions for a film', () => {
+  it('Claude turns them into a cut, checked against the design', async () => {
+    const reply = JSON.stringify({
+      cut: {
+        order: ['exploded', 'modes', 'bogus'], modes: ['vent', 'nope'], spotlight: ['jaw'], pace: 3, motive: false,
+        text: { 'mode:vent': { title: 'Breathe out', caption: 'It vents the heat of a thousand trades. <script>' }, 'mode:ghost': { title: 'x' } },
+        closer: { headline: 'Meet it', url: 'javascript:alert(1)' },
+      },
+      note: 'Slower open, vent first. I could not add music.',
+    })
+    const designer = fakeDesigner(reply)
+    const b = await makeBoard({}, { forge: { designer } })
+    const r = await b.signedPost(Wallet.createRandom(), '/api/forge/cut', { spec: FORGE_EXAMPLES.octopod, cut: { modes: ['strike'] }, instructions: 'Open on the exploded view, only vent, make it punchy, no music.' })
+    expect(r.status).toBe(200)
+    expect(r.body.cut).toEqual({
+      order: ['exploded', 'modes', 'goals', 'spotlights', 'motive'], modes: ['vent'], spotlight: ['jaw'], pace: 1.6, motive: false,
+      text: { 'mode:vent': { title: 'Breathe out', caption: 'It vents the heat of a thousand trades. script' } },
+    })
+    expect(r.body.note).toMatch(/could not add music/)
+    // the prompt carries the maker's words fenced off, the design's own ids, and the cut as it was
+    expect(designer.prompts[0]).toContain('<<<INSTRUCTIONS\nOpen on the exploded view')
+    expect(designer.prompts[0]).toContain('- vent: ')
+    expect(designer.prompts[0]).toContain('{"modes":["strike"]}')
+  })
+  it('needs instructions, and the design service', async () => {
+    const b = await makeBoard({}, { forge: { designer: fakeDesigner('{}') } })
+    expect((await b.signedPost(Wallet.createRandom(), '/api/forge/cut', { spec: FORGE_EXAMPLES.octopod, instructions: ' ' })).status).toBe(400)
+    const none = await makeBoard()
+    expect((await none.signedPost(Wallet.createRandom(), '/api/forge/cut', { spec: FORGE_EXAMPLES.octopod, instructions: 'x' })).status).toBe(503)
+  })
+})

@@ -17,7 +17,7 @@ import * as S from './schemas.ts'
 import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestView, pulseView, type LeaderboardSort } from './service.ts'
 import type { BoardStore, PostSort } from './store.ts'
 import { registerPages } from './html.ts'
-import { ForgeError, critiqueGremlin, decodeImage, designGremlin, photograph, type ForgeImage, type ForgeDesigner, type PhotoProvider } from './forge.ts'
+import { ForgeError, critiqueGremlin, cutWithInstructions, decodeImage, designGremlin, photograph, type ForgeImage, type ForgeDesigner, type PhotoProvider } from './forge.ts'
 import { EggLaunchData } from '@gremlins/egg/dist/launch.js'
 import type { HatchStore } from './hatch-store.ts'
 import { checkClaim, hatchView, newJob, type HatchConfig } from './hatch.ts'
@@ -132,7 +132,7 @@ export async function createBoard(deps: BoardDeps) {
   }
 
   /** Which signed actions a browser session key may perform (see SESSION_HEADER in @gremlins/hatch). */
-  const SESSION_SCOPE_OF: Partial<Record<RateAction, SessionScope>> = { forgeDesign: 'forge', forgePhoto: 'forge', forgeCritique: 'forge', forgeAttach: 'forge' }
+  const SESSION_SCOPE_OF: Partial<Record<RateAction, SessionScope>> = { forgeDesign: 'forge', forgePhoto: 'forge', forgeCritique: 'forge', forgeCut: 'forge', forgeAttach: 'forge' }
 
   /** Signed-request auth + replay protection + per-address rate limit; parses the JSON body. */
   const signed =
@@ -640,6 +640,18 @@ export async function createBoard(deps: BoardDeps) {
     if (!p.success) return err(c, 400, zodMessage(p.error))
     try {
       return c.json(await critiqueGremlin(forge.designer, p.data, c.req.raw.signal))
+    } catch (e) {
+      return forgeFail(c, e)
+    }
+  })
+
+  // Special instructions for a film, turned into a cut by Claude (nothing is filmed server-side).
+  app.post('/api/forge/cut', signed('forgeCut'), async (c) => {
+    if (!forge.designer) return err(c, 503, 'the design service is not configured')
+    const p = S.ForgeCut.safeParse(c.get('body'))
+    if (!p.success) return err(c, 400, zodMessage(p.error))
+    try {
+      return c.json(await cutWithInstructions(forge.designer, p.data, c.req.raw.signal))
     } catch (e) {
       return forgeFail(c, e)
     }
