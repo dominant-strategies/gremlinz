@@ -1,10 +1,11 @@
 /**
- * One sign-in for the whole site. A single "Sign in" button opens one dialog offering Quai Smart Wallet, Pelagus,
- * MetaMask, Phantom and WalletConnect; the choice is remembered (localStorage, shared by the board, forge and static
+ * One sign-in for the whole site. A single "Sign in" button opens one dialog: email or X (a Quai Smart Wallet, run in
+ * this page), then Pelagus, MetaMask, Phantom and WalletConnect; the choice is remembered (localStorage, shared by the board, forge and static
  * pages) and every write is a signed request: EIP-191 over `METHOD path\nts\nkeccak(body)`, exactly as gremlins sign.
  * A Smart Wallet account is a Safe: its wallet signs the same payload and the board asks the Safe (ERC-1271).
  */
 import { connectSmartWallet, disconnectSmartWallet, prepareSmartWallet, smartWalletAccount, smartWalletSign } from './smart-wallet.js'
+import { privy, returningFromX } from './privy-bridge.js'
 import { announcedIcon, metamask, pelagus, phantom, type Eip1193 } from './wallets.js'
 
 export type WalletKind = 'smartwallet' | 'pelagus' | 'metamask' | 'phantom' | 'walletconnect'
@@ -23,8 +24,8 @@ const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 const here = () => location.href
 
 const WALLETS: WalletOption[] = [
-  // A popup on the wallet's own site, nothing to install; signs as a Safe, so never for EVM payments.
-  { kind: 'smartwallet', name: 'Quai Smart Wallet', blurb: 'Any wallet, email or X', provider: () => undefined },
+  // Email or X (offered above the wallet list): a Safe run in this page; signs as a Safe, so never for EVM payments.
+  { kind: 'smartwallet', name: 'Quai Smart Wallet', blurb: 'Email or X', provider: () => undefined },
   { kind: 'pelagus', name: 'Pelagus', blurb: 'Quai wallet', provider: pelagus, get: () => 'https://pelaguswallet.io' },
   {
     kind: 'metamask', name: 'MetaMask', blurb: 'Browser or app', provider: metamask,
@@ -73,6 +74,12 @@ export function onAccountChange(fn: (a: Account | undefined) => void): () => voi
   listeners.add(fn)
   return () => listeners.delete(fn)
 }
+// Back from X's sign-in page: Privy finishes the login, then the Smart Wallet's Safe becomes the signed-in account.
+if (returningFromX())
+  void privy()
+    .then(async (p) => { if (p.authenticated()) setAccount({ address: await connectSmartWallet(), kind: 'smartwallet' }) })
+    .catch((e) => console.warn('X sign-in did not finish:', e))
+
 window.addEventListener('storage', (e) => {
   if (e.key !== KEY && e.key !== KIND) return
   current = readAccount()
@@ -116,7 +123,7 @@ export async function walletProvider(): Promise<Eip1193> {
 
 /** Opens the sign-in dialog; resolves with the new account, rejects if it's closed without one. */
 export async function signIn(): Promise<Account> {
-  const { address, kind } = await chooseWallet({ title: 'Sign in', note: 'Your wallet is your account. Signing in is free and sends nothing.' })
+  const { address, kind } = await chooseWallet({ title: 'Sign in', note: 'Use your email or X, or a wallet you already have. Signing in is free and sends nothing.' })
   const a = { address, kind }
   setAccount(a)
   return a
@@ -206,6 +213,12 @@ const GLYPHS: Record<WalletKind, string> = {
   walletconnect: '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#3b99fc"/><path d="M9.6 12.6c3.5-3.4 9.3-3.4 12.8 0l.4.4-1.5 1.5-.6-.6a6.9 6.9 0 0 0-9.4 0l-.6.6-1.5-1.5.4-.4zm-2.4 3l1.4-1.4 4 3.9 3.4-3.3 3.4 3.3 4-3.9 1.4 1.4-5.4 5.3-3.4-3.3-3.4 3.3-5.4-5.3z" fill="#fff"/></svg>',
 }
 
+function xIcon(): HTMLElement {
+  const box = h('span', { class: 'wallet-icon' })
+  box.innerHTML = '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#000"/><path d="M8.5 8h4.6l3.6 5 4.3-5h2.4l-5.6 6.5L24 24h-4.6l-3.9-5.4L10.9 24H8.5l6-7L8.5 8zm3 1.4 9.3 13.2h1.4L13 9.4h-1.5z" fill="#fff"/></svg>'
+  return box
+}
+
 function walletIcon(kind: WalletKind): HTMLElement {
   const box = h('span', { class: 'wallet-icon' })
   const announced = external(kind) ? undefined : announcedIcon(kind as 'pelagus' | 'metamask' | 'phantom')
@@ -220,16 +233,67 @@ function chooseWallet(opts: { title: string; note: string; only?: WalletKind[] }
   open?.close()
   return new Promise((resolve, reject) => {
     const status = h('p', { class: 'wallet-status', role: 'status', 'aria-live': 'polite' })
+    const say = (text: string, error = false) => { status.textContent = text; status.classList.toggle('error', error) }
+    // Email or X: a Quai Smart Wallet in this page, above the wallet list.
+    const emailInput = h('input', { type: 'email', name: 'email', placeholder: 'you@example.com', autocomplete: 'email', required: '', 'aria-label': 'Email' }) as HTMLInputElement
+    const emailButton = h('button', { type: 'submit', class: 'btn btn-small btn-primary' }, 'Continue with email')
+    const emailForm = h('form', { class: 'wallet-email' }, emailInput, emailButton)
+    const xButton = h('button', { type: 'button', class: 'wallet-row' }, xIcon(), h('span', { class: 'wallet-text' }, h('b', {}, 'Continue with X'), h('span', {}, 'Your X account')), h('span', { class: 'wallet-tag' }, 'X'))
+    const social = h('div', { class: 'wallet-social' }, emailForm, xButton, h('p', { class: 'wallet-or' }, 'or use a wallet'))
+    let codeFor: string | undefined
+    emailForm.onsubmit = async (e) => {
+      e.preventDefault()
+      if (busy) return
+      busy = true
+      emailButton.setAttribute('disabled', '')
+      try {
+        const p = await privy()
+        if (!codeFor) {
+          say('Sending you a code…')
+          await p.sendEmailCode(emailInput.value.trim())
+          codeFor = emailInput.value.trim()
+          emailInput.value = ''
+          Object.assign(emailInput, { type: 'text', name: 'code', placeholder: '6-digit code', autocomplete: 'one-time-code', inputMode: 'numeric' })
+          emailInput.setAttribute('aria-label', 'Code')
+          emailButton.textContent = 'Sign in'
+          say(`We sent a code to ${codeFor}. Enter it here.`)
+          emailInput.focus()
+        } else {
+          say('Checking the code…')
+          await p.loginWithEmailCode(emailInput.value.trim())
+          say('Opening your Quai Smart Wallet…')
+          finish({ address: await connectSmartWallet(), kind: 'smartwallet' })
+        }
+      } catch (err) {
+        say(walletErrorMessage(err), true)
+      } finally {
+        busy = false
+        emailButton.removeAttribute('disabled')
+      }
+    }
+    xButton.onclick = async () => {
+      if (busy) return
+      busy = true
+      say('Taking you to X to sign in…')
+      try {
+        await (await privy()).loginWithX() // leaves the page; it signs in when X sends you back
+      } catch (err) {
+        say(walletErrorMessage(err), true)
+        busy = false
+      }
+    }
     const list = h('div', { class: 'wallet-list' })
     const close = h('button', { type: 'button', class: 'wallet-close', 'aria-label': 'Close' }, '×')
     const dlg = h('dialog', { class: 'wallet-dialog', 'aria-labelledby': 'wallet-title' },
       h('div', { class: 'wallet-head' }, h('h2', { id: 'wallet-title' }, opts.title), close),
       h('p', { class: 'wallet-note' }, opts.note),
+      ...(!opts.only || opts.only.includes('smartwallet') ? [social] : []),
       list,
       status,
       h('p', { class: 'wallet-foot' }, 'We never see your keys. Signing a request costs no gas.'),
     ) as HTMLDialogElement
     let settled = false
+    let busy = false
     const finish = (a?: Account, err?: Error) => {
       if (settled) return
       settled = true
@@ -242,10 +306,9 @@ function chooseWallet(opts: { title: string; note: string; only?: WalletKind[] }
     dlg.addEventListener('cancel', (e) => { e.preventDefault(); finish() })
     dlg.addEventListener('click', (e) => { if (e.target === dlg) finish() }) // backdrop
 
-    let busy = false
     const renderRows = () => {
       list.replaceChildren()
-      for (const w of WALLETS.filter((w) => !opts.only || opts.only.includes(w.kind))) {
+      for (const w of WALLETS.filter((w) => w.kind !== 'smartwallet' && (!opts.only || opts.only.includes(w.kind)))) {
         const installed = external(w.kind) || !!w.provider()
         const state = w.kind === 'walletconnect' ? 'QR code' : w.kind === 'smartwallet' ? 'Popup' : installed ? 'Detected' : mobile && w.kind !== 'pelagus' ? 'Open app' : 'Install'
         const text = h('span', { class: 'wallet-text' }, h('b', {}, w.name), h('span', {}, w.blurb))
@@ -266,15 +329,12 @@ function chooseWallet(opts: { title: string; note: string; only?: WalletKind[] }
           list.classList.add('busy')
           row.classList.add('waiting')
           status.classList.remove('error')
-          status.textContent = w.kind === 'walletconnect' ? 'Opening WalletConnect…' : w.kind === 'smartwallet' ? 'Sign in and approve in the Quai Smart Wallet window…' : `Approve the connection in ${w.name}…`
+          status.textContent = w.kind === 'walletconnect' ? 'Opening WalletConnect…' : `Approve the connection in ${w.name}…`
           try {
             // AppKit draws its own modal; ours sits in the top layer and would cover it, so it steps aside once that's up.
-            // The Smart Wallet's window opens before the first await (connectSmartWallet), while the click still counts.
             const { address } = w.kind === 'walletconnect'
               ? await (await import('./wallets.js')).connectWalletConnect(() => dlg.close())
-              : w.kind === 'smartwallet'
-                ? { address: await connectSmartWallet() }
-                : await connectWallet(w.kind)
+              : await connectWallet(w.kind)
             finish({ address, kind: w.kind })
           } catch (e) {
             // Closing the QR code just brings this dialog back; anything else gets said.
@@ -301,7 +361,7 @@ function chooseWallet(opts: { title: string; note: string; only?: WalletKind[] }
     document.body.append(dlg)
     open = dlg
     dlg.showModal()
-    ;(list.querySelector('button.wallet-row') as HTMLElement | null)?.focus()
+    ;((dlg.querySelector('.wallet-email input') ?? list.querySelector('button.wallet-row')) as HTMLElement | null)?.focus()
   })
 }
 

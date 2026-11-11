@@ -235,6 +235,11 @@ input[type=checkbox], input[type=radio], input[type=range] { width: auto; accent
 .wallet-close:hover { background: var(--paper-2); color: var(--ink); }
 .wallet-note { margin: 6px 0 16px; color: var(--ink-2); font-size: 15px; }
 .wallet-list { display: grid; gap: 8px; }
+.wallet-social { display: grid; gap: 8px; margin-bottom: 8px; }
+.wallet-email { display: flex; gap: 8px; }
+.wallet-email input { flex: 1; min-width: 0; }
+.wallet-or { margin: 6px 0 0; text-align: center; font-size: 13px; color: var(--ink-2); display: flex; align-items: center; gap: 10px; }
+.wallet-or::before, .wallet-or::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
 .wallet-row { all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 14px; width: 100%; padding: 10px 14px 10px 10px; border-radius: 14px; border: 1.5px solid var(--line); background: var(--field); color: var(--ink); text-decoration: none; transition: border-color .12s, transform .12s; }
 .wallet-row:hover { border-color: var(--ink); color: var(--ink); }
 .wallet-row:active { transform: scale(.99); }
