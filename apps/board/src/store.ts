@@ -12,6 +12,19 @@ import type { EggAnnouncement, Handoff, KeyGrant, NestAnnouncement, Pulse, Signe
 
 export type EggStatus = 'announced' | 'configured' | 'hatched'
 
+/** A gremlin's look from the Gremlin Forge: chosen and signed by its maker. */
+export interface LookRecord {
+  address: string
+  /** The Forge design (checked against the house style). */
+  spec: unknown
+  label: string | null
+  /** Portrait rendered from the design: a data: URL (JPEG or PNG). */
+  image: string
+  /** The maker's signed request that set it. */
+  attestation: Attestation
+  createdAt: number
+}
+
 export interface EggRecord {
   address: string
   launchId: string
@@ -143,6 +156,8 @@ export interface BoardStore {
   // eggs
   insertEgg(egg: Omit<EggRecord, 'status' | 'config' | 'configuredAt' | 'hatchedAt'>): Promise<'inserted' | 'address_exists' | 'launch_taken'>
   getEgg(address: string): Promise<EggRecord | null>
+  setLook(look: LookRecord): Promise<void>
+  getLook(address: string): Promise<LookRecord | null>
   getEggByLaunchId(launchId: string): Promise<EggRecord | null>
   listEggs(opts: { limit: number; status?: EggStatus; maker?: string }): Promise<EggRecord[]>
   // forge designs on gremlins

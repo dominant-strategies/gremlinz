@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./mpc": {
+      "types": "./dist/mpc-index.d.ts",
+      "import": "./dist/mpc-index.js"
     }
   },
   "scripts": {

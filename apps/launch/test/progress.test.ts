@@ -9,8 +9,8 @@ const make = () => {
 
 describe('hatch progress', () => {
   it('counts the signatures each plan needs', () => {
-    expect(FLUENCE_STEPS.reduce((a, d) => a + d.sigs, 0)).toBe(5) // connect 1 + wrap/approve/bridge 3 + config 1 (no egg-key signature: the hatch service holds the account)
-    expect(SPORESTACK_STEPS.reduce((a, d) => a + d.sigs, 0)).toBe(2)
+    expect(FLUENCE_STEPS.reduce((a, d) => a + d.sigs, 0)).toBe(6) // connect 1 + wrap/approve/bridge 3 + config 1 + Forge look 1 (no egg-key signature: the hatch service holds the account)
+    expect(SPORESTACK_STEPS.reduce((a, d) => a + d.sigs, 0)).toBe(3) // connect + config + Forge look
   })
 
   it('tracks a payment step through signatures, transactions and confirmation, and persists it', () => {

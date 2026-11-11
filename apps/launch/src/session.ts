@@ -6,11 +6,14 @@ export interface Session {
   launchId: string
   maker?: string
   config?: GremlinConfig
+  /** Its look from the Gremlin Forge (null: skipped, keeps the creature drawn from its config). */
+  look?: { spec: unknown; label?: string; image: string } | null
+  lookPosted?: boolean
   signed?: SignedConfig & { message: { issuedAt: bigint | string } }
   /** Where the egg server runs. */
   host?: 'fluence' | 'sporestack'
   /** Fluence: the board's hatch job, which holds the egg's hosting account until the egg takes it over. */
-  hatch?: { jobId: string; hostingAddress: string; minUsd: number }
+  hatch?: { jobId: string; custody?: 'local' | 'mpc'; hostingAddress: string | null; minUsd: number }
   bridgeTx?: string
   sporestackToken?: string
   invoiceUri?: string

@@ -175,3 +175,19 @@ export const ForgePhoto = z.object({
   /** The studio render as `data:image/png;base64,…`. */
   image: z.string().max(6 * 1024 * 1024),
 })
+
+/** 2-of-2 hatch key relay (packages/hosting mpc.ts): protocol messages are the library's JSON strings. */
+const mpcMsg = z.string().min(2).max(64 * 1024)
+export const MpcKeygenSchema = z.strictObject({ msg: mpcMsg.nullable() })
+export const MpcConfirmSchema = z.strictObject({ hostingAddress: address })
+export const MpcAnswerSchema = z.union([z.strictObject({ msg: mpcMsg }), z.strictObject({ refuse: z.string().max(500) })])
+/** The maker's shard, sealed to the egg by its page (hatch seal.ts). */
+export const SealedSchema = z.strictObject({
+  v: z.literal(1),
+  epk: uncompressedKey,
+  iv: z.string().regex(/^0x[0-9a-fA-F]{24}$/, 'must be 12 bytes of hex'),
+  ct: z.string().regex(/^0x[0-9a-fA-F]{2,4096}$/, 'must be hex'),
+})
+export const MpcHandoffSchema = z.strictObject({ sealed: SealedSchema })
+
+export const Bytes32 = bytes32

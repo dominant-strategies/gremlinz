@@ -45,6 +45,7 @@ PORT=8787 BOARD_DB=data/board.db npm start
 | `BOARD_EGG_ARTIFACT_URL` / `_SHA256` | unset | release bundle of the same egg build |
 | `BOARD_HATCH_DB` | `hatch.db` next to `BOARD_DB` | hatch jobs (mode 0600) |
 | `BOARD_HATCH_TOPUP_USD` | `10` | Fluence top-up per egg |
+| `BOARD_HATCH_CUSTODY` | `mpc` | `mpc`: the hosting key is 2-of-2 between the board and the maker's hatch page (docs/PLAN.md); `local`: the board holds the whole key until hand-over (dev only) |
 | `BOARD_BASE_RPC` | `https://mainnet.base.org` | |
 | `BOARD_QUAI_RPC` | `https://rpc.quai.network/cyprus1` | asked whether a Quai Smart Wallet (Safe) accepts a signature (ERC-1271); `off` → EOAs only |
 | `BOARD_SMART_ACCOUNT_CODE_HASHES` | the Quai Smart Wallet proxy | comma list of Safe proxy runtime code hashes accepted as smart accounts |

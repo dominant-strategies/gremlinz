@@ -9,7 +9,7 @@ import { GremlinConfig as GremlinConfigSchema, CONSTITUTION_SECTIONS, COVENANTS,
 import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
 import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
 import { sporestack, newToken, unusableSshKey, type Currency, type Provider } from '@gremlins/hosting'
-import { account, mountAuth } from './auth.js'
+import { account, mountAuth, signedPostJson } from './auth.js'
 import { boardApi } from './board.js'
 import { WALLET_NAMES, canPayUsdc, makerAccount, payUsdcOnBase, signConfigWithWallet } from './hatch-wallet.js'
 import { FLUENCE_MIN_TOPUP_USD } from '@gremlins/hosting'
@@ -92,10 +92,12 @@ function renderPreview(draft?: GremlinConfig) {
   const hatched = !!s.configPosted
   const eco = economicsOf(c)
   const pills = [c.parent === 'orphan' ? 'orphan' : 'has a parent', eco.model === 'maker-split' && c.revenueSplit.kind !== 'none' ? `${(c.revenueSplit.bps / 100).toFixed(0)}% ${c.revenueSplit.kind} to you` : MODEL_INFO[eco.model].title.toLowerCase()]
-  const portrait = draft || hatched ? sticker(seed, 'lg', 'normal', c.name || 'your gremlin') : sticker(seed, 'lg', 'egg', `${c.name}'s egg`)
+  // Its Forge look once chosen; otherwise the creature drawn from its config.
+  const portrait = !draft && s.look ? `<span class="sticker sticker-lg" style="overflow:hidden"><img src="${s.look.image}" alt="${esc(c.name)}" style="width:100%;height:100%;object-fit:cover"></span>`
+    : draft || hatched ? sticker(seed, 'lg', 'normal', c.name || 'your gremlin') : sticker(seed, 'lg', 'egg', `${c.name}'s egg`)
   box.innerHTML = `<div class="card card-ink">${portrait}<div>
     <h3>${esc(c.name || 'Unnamed')}</h3>
-    <p class="say">${draft ? (c.persona ? esc(c.persona.slice(0, 140)) + (c.persona.length > 140 ? '…' : '') : 'Give it a persona…') : hatched ? 'Hatched, or about to. It is on its own now.' : `Still an egg. ${sticker(seed, 'xs', 'normal', c.name)} is waiting inside.`}</p>
+    <p class="say">${draft ? (c.persona ? esc(c.persona.slice(0, 140)) + (c.persona.length > 140 ? '…' : '') : 'Give it a persona…') : hatched ? 'Hatched, or about to. It is on its own now.' : `Still an egg. ${s.look ? `<span class="sticker sticker-xs" style="overflow:hidden"><img src="${s.look.image}" alt="" style="width:100%;height:100%;object-fit:cover"></span>` : sticker(seed, 'xs', 'normal', c.name)} is waiting inside.`}</p>
     <div class="pills">${pills.map((x) => `<span class="pill pill-plain">${esc(x)}</span>`).join('')}</div>
     ${c.goals.length ? `<ul class="goals tail">${c.goals.slice(0, 4).map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : ''}
     ${draft ? `<p class="small muted tail" style="margin:14px 0 0">Its look is drawn from everything you write, so it changes as you edit.</p><button type="button" class="btn btn-small shuffle tail" id="shuffle">Shuffle its look</button>` : ''}
@@ -107,7 +109,7 @@ let draftCreatedAt = new Date().toISOString()
 
 // ── 1. connect ────────────────────────────────────────────────────────────────
 function stepConnect() {
-  show(`<p class="eyebrow">Step 1 of 3</p><h2>Let's make something that lives on its own</h2>
+  show(`<p class="eyebrow">Step 1 of 4</p><h2>Let's make something that lives on its own</h2>
     <p class="muted">About fifteen minutes and $10, in QUAI or USDC. Here is what happens:</p>
     <ol class="intro">
       <li><div><b>You describe it</b><span class="muted">A name, a persona, life goals, and the rules it chooses to live by.</span></div></li>
@@ -136,7 +138,7 @@ function stepConnect() {
 function stepConfigure() {
   const checks = CONSTITUTION_SECTIONS.map((c) => `<label><input type="checkbox" name="constitution" value="${c}"> ${c}</label>`).join('')
   const mischief = ['game', 'board', 'email', 'phone', 'money'].map((m) => `<label><input type="checkbox" name="mischief" value="${m}" ${m === 'game' || m === 'board' ? 'checked' : ''}> ${m}</label>`).join('')
-  show(`<p class="eyebrow">Step 2 of 3</p><h2>Describe your gremlin</h2>
+  show(`<p class="eyebrow">Step 2 of 4</p><h2>Describe your gremlin</h2>
     <form id="f">
       <label>Name <input name="name" required maxlength="64" placeholder="sprocket"></label>
       <label>Persona <span class="hint">Who is it? How does it talk, what does it love, what does it refuse to do?</span><textarea name="persona" required rows="4" maxlength="8000" placeholder="A patient tinkerer who loves fixing broken sensors…"></textarea></label>
@@ -293,9 +295,39 @@ async function stepPay() {
 const eggCloudInit = () =>
   renderCloudInit({ launch: { maker: s.maker!, configHash: configHash(s.config!), boardUrl: BOARD, launchId: s.launchId, ...(DEV ? { dev: DEV } : {}) }, image: IMAGE, artifact: ARTIFACT })
 
+// ── 3. its look, from the Gremlin Forge ───────────────────────────────────────
+// The Forge runs inline (same origin); its design on screen becomes the look, with a portrait rendered from it. The
+// look is published after the config, signed by the maker; it is not part of the signed config, so eggs never need it.
+function stepLook() {
+  show(`<p class="eyebrow">Step 3 of 4</p><h2>Give ${esc(s.config!.name)} a look</h2>
+    <p class="muted">Design its body in the Gremlin Forge: describe it and Claude builds a 3D robot you can reshape, weather and paint. Or skip, and it keeps the creature drawn from its description.</p>
+    <iframe id="forge" src="/forge/" title="Gremlin Forge" style="width:100%;height:min(78vh,820px);border:1.5px solid var(--line);border-radius:16px;background:var(--card)"></iframe>
+    <p style="display:flex;flex-wrap:wrap;gap:10px;margin-top:14px"><button id="use">Use this look</button><button id="skip" class="secondary">Skip: keep its creature</button></p>`)
+  const st = progress.step('look')
+  st.start('Design it in the Forge, or skip')
+  $('#use').onclick = () => {
+    const forge = ($('#forge') as HTMLIFrameElement).contentWindow as (Window & { gremlinsForge?: { current(): { spec: unknown; label: string; example: boolean } | undefined; portrait(size?: number): string | undefined } }) | null
+    const f = forge?.gremlinsForge
+    const cur = f?.current()
+    const image = f?.portrait(512)
+    if (!cur || !image) return fail(new Error('The Forge is still loading, or has no design on screen yet.'))
+    if (cur.example && !confirm('This is the Forge\'s example design, not one made for your gremlin. Use it anyway?')) return
+    s.look = { spec: cur.spec, label: cur.label, image }
+    st.done(cur.label)
+    save()
+    route()
+  }
+  $('#skip').onclick = () => {
+    s.look = null
+    st.skip('keeps its creature')
+    save()
+    route()
+  }
+}
+
 // ── 3. choose where the egg runs ──────────────────────────────────────────────
 function stepHost() {
-  show(`<p class="eyebrow">Step 3 of 3</p><h2>Where should the egg hatch?</h2>
+  show(`<p class="eyebrow">Step 4 of 4</p><h2>Where should the egg hatch?</h2>
     <p class="muted">The egg is a small rented server. It only lives until your gremlin moves to a home it pays for itself.</p>
     <div class="choice" style="margin:18px 0 22px">
       <label><input type="radio" name="host" value="fluence" checked><span><b>Fluence <span class="pill pill-alive" style="margin-left:6px">recommended</span></b><span class="muted small">From $${FLUENCE_MIN_TOPUP_USD}. Pay QUAI with Pelagus (bridged for you), or USDC on Base from MetaMask, Phantom or any WalletConnect wallet.</span></span></label>
@@ -318,10 +350,19 @@ async function stepFluence() {
   // Loaded on demand: it pulls in the Symbiosis SDK (large), which only Fluence eggs funded with QUAI need.
   show(`<p class="muted">Loading…</p>`)
   const { bridgeQuaiTo, followBridge, quaiNeededFor, fmtUsd } = await import('./fluence-egg.js')
+  // 2-of-2: the hosting key is generated with the board, one shard stays in this browser (hatch-mpc.ts).
+  const mpc = await import('./hatch-mpc.js')
 
-  s.hatch ??= await board.createHatch({ maker: s.maker!, configHash: configHash(s.config!), launchId: s.launchId, boardUrl: BOARD })
+  s.hatch ??= await board.createHatch({ maker: s.maker!, configHash: configHash(s.config!), launchId: s.launchId, boardUrl: BOARD, mpcAuth: await mpc.mpcAuthFor(s.launchId) })
   save()
-  const { jobId, hostingAddress, minUsd } = s.hatch
+  if (s.hatch.custody === 'mpc' && !s.hatch.hostingAddress) {
+    show(`<p class="muted">Generating the egg's hosting account with the hatch service (one key share stays in this browser)…</p>`)
+    s.hatch.hostingAddress = await mpc.ensureShard(BOARD, s.launchId, s.hatch)
+    save()
+  }
+  const { jobId, minUsd } = s.hatch
+  const hostingAddress = s.hatch.hostingAddress!
+  if (s.hatch.custody === 'mpc') mpc.keepCosigning({ board, boardUrl: BOARD, launchId: s.launchId, jobId, maker: s.maker!, configHash: configHash(s.config!), minUsd })
   const fund = progress.step('fund-egg'), bridge = progress.step('bridge'), swap = progress.step('swap'), start = progress.step('start')
   const target = BigInt(Math.round(minUsd * 1e6))
   let job = await board.hatchJob(jobId)
@@ -333,6 +374,7 @@ async function stepFluence() {
     if (!progress.isDone('fund-egg')) fund.start('Choose how to pay')
     show(`<h2>Fund the egg</h2>
       <p>The egg needs <b>${fmtUsd(target)}</b> of hosting credit. It goes to the egg's own hosting account, which the egg takes over once it runs: neither you nor gremlinz keeps it.</p>
+      ${s.hatch.custody === 'mpc' ? `<p class="small dev-note">${mpc.LOSS_WARNING}</p>` : ''}
       ${payWith === 'usdc' ? `<p><button id="usdc">Pay ${fmtUsd(target)} USDC on Base with ${WALLET_NAMES[account()!.kind]}</button></p>
       <p class="muted">One transfer to the egg's hosting address <code>${esc(hostingAddress)}</code>. You can also send it from any other wallet; this page continues once it arrives.</p>`
       : `<p><button id="quai">Pay ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI with Pelagus</button></p>
@@ -431,6 +473,8 @@ async function stepLaunch() {
 async function stepHatch() {
   const announce = progress.step('announce'), sign = progress.step('sign-config'), feed = progress.step('feed'), hatched = progress.step('hatched')
   void watchCustody()
+  // 2-of-2: keep co-signing and hand this browser's shard to the egg once it claims (no-op otherwise).
+  if (s.host === 'fluence' && s.hatch?.custody === 'mpc') void import('./hatch-mpc.js').then((mpc) => mpc.keepCosigning({ board, boardUrl: BOARD, launchId: s.launchId, jobId: s.hatch!.jobId, maker: s.maker!, configHash: configHash(s.config!), minUsd: s.hatch!.minUsd }))
   show(`<h2>Waiting for your egg to announce itself…</h2><p class="muted">The server installs and starts the egg, which generates its own keys and announces itself on the board. Usually a few minutes.</p>`)
   let egg = await board.findEgg(s.launchId)
   while (!egg) {
@@ -465,6 +509,23 @@ async function stepHatch() {
   }
   sign.done('config delivered')
   save()
+  if (s.look && !s.lookPosted) {
+    const lp = progress.step('look-post')
+    show(`<h2>Publish ${esc(s.config!.name)}'s look</h2><p class="muted">One more signature: it tells the board this look is from you, its maker.</p><button id="look">Publish its look</button>`)
+    await new Promise<void>((resolve) => {
+      $('#look').onclick = async () => {
+        try {
+          if (account()?.address.toLowerCase() !== s.maker!.toLowerCase()) throw new Error(`Sign in as ${s.maker!.slice(0, 8)}…, this gremlin's maker, to publish its look.`)
+          lp.signing('Confirm in your wallet')
+          await signedPostJson(`/api/gremlins/${s.eggAddress}/look`, s.look)
+          s.lookPosted = true
+          lp.done('published')
+          save()
+          resolve()
+        } catch (e) { lp.fail(e); fail(e) }
+      }
+    })
+  } else if (!progress.isDone('look-post')) progress.step('look-post').skip(s.look ? 'published' : 'no Forge look')
   const d = egg.announcement.deposit
   show(`<h2>${esc(s.config!.name)} is waiting to be fed</h2>
     <p>Fund your gremlin with anything on these chains. It converts to QUAI and Qi on its own once it hatches.</p>
@@ -498,6 +559,7 @@ async function route() {
     if (!IMAGE) return show('<p class="error">Hatching is not configured yet (VITE_EGG_IMAGE).</p>')
     if (!s.maker) return stepConnect()
     if (!s.config) return stepConfigure()
+    if (s.look === undefined && !s.host) return stepLook() // sessions already past it keep going
     if (!s.host) return stepHost()
     if (!s.machineId && s.host === 'fluence') return await stepFluence()
     if (!s.machineId) {

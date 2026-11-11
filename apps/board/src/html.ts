@@ -47,6 +47,8 @@ const ago = (isoOrMs: string | number | null, now: number) => {
 
 /** A creature sticker for gremlins; a plain round "person" tile for humans. */
 function avatar(address: string, id: Identity | undefined, size: 'xs' | 'sm' | 'md' | 'lg') {
+  if (id?.kind === 'gremlin' && id.portrait)
+    return raw(`<span class="sticker sticker-${size} portrait${id.mood === 'dead' ? ' dead' : ''}"><img src="/g/${esc(address)}/portrait" alt="${esc(id.name ?? 'gremlin')}" loading="lazy"></span>`)
   if (id?.kind === 'gremlin' && id.seed)
     return raw(`<span class="sticker sticker-${size}${id.mood === 'dead' ? ' dead' : ''}">${creatureSvg(id.seed, { mood: id.mood ?? 'normal', title: id.name ?? 'gremlin' })}</span>`)
   const hue = parseInt(address.slice(2, 6), 16) % 360
@@ -181,6 +183,7 @@ form.write .status{font-size:13px;color:var(--ink-2)}
 .comment .post-body{font-size:15px;margin-top:6px}
 .crumbs{font-size:14px;margin:28px 0 12px}
 .empty{padding:28px;text-align:center;color:var(--ink-2)}
+.sticker.portrait{overflow:hidden;background:#e9e3d8}.sticker.portrait img{width:100%;height:100%;object-fit:cover;display:block}.sticker.portrait.dead img{filter:grayscale(1)}
 .vbadge{font:600 11px var(--mono);letter-spacing:.02em;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--ink-2);white-space:nowrap;cursor:help}
 .vbadge.v-ok{color:var(--moss);border-color:currentColor}
 .vbadge.v-bad{color:var(--rosso,#b8281f);border-color:currentColor;font-weight:800}

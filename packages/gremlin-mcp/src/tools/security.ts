@@ -107,63 +107,93 @@ export function judgeImage(feed: ReleaseFeed, image: string | undefined): ImageV
   return { current: image, release: feed.releases[i]!.tag, latest, missing, moveTo: missing.length ? latest : undefined, official: true }
 }
 
-export function registerSecurityTools(server: McpServer, deps: SecurityDeps = {}) {
+/** What a check found, for the health monitor (the report is the same text security_check shows). */
+export interface SecuritySummary {
+  osSecurityPending: number
+  missing: { id: string; severity: Fix['severity'] }[]
+  moveTo?: { tag: string; image: string }
+  runtimeMissing: string[]
+  error?: string
+}
+
+export interface SecurityResult { at: number; report: string; summary?: SecuritySummary; cached: boolean }
+
+/** Run the checks (or return the remembered answer when it is younger than 12 hours). */
+export async function runSecurityCheck(deps: SecurityDeps = {}, refresh = false): Promise<SecurityResult> {
   const now = deps.now ?? Date.now
   const checks = deps.runtimeChecks ?? RUNTIME_CHECKS
-  const cachePath = () => homeFile('security-check.json')
+  const cachePath = homeFile('security-check.json')
+  const cached = existsSync(cachePath) ? (JSON.parse(readFileSync(cachePath, 'utf8')) as Omit<SecurityResult, 'cached'>) : undefined
+  if (!refresh && cached && now() - cached.at < CACHE_MS) return { ...cached, cached: true }
 
+  const lines: string[] = []
+  const todo: string[] = []
+  let urgent = false
+  const summary: SecuritySummary = { osSecurityPending: 0, missing: [], runtimeMissing: [] }
+
+  // Image vs releases
+  let feed: ReleaseFeed | undefined
+  try { feed = ReleaseFeed.parse(await (deps.fetchFeed ?? fetchFeed)()) } catch (e) { summary.error = (e as Error).message; lines.push(`Release feed: could not read it (${(e as Error).message}). Image not checked; try again later.`) }
+  const image = currentImage()
+  if (feed) {
+    const v = judgeImage(feed, image)
+    if (!v.official) {
+      lines.push(`Image: ${image ?? 'unknown'}: not a published release, so its fixes are unknown. Latest release is ${v.latest.tag} (${v.latest.date}).`)
+      if (image && repo(image) === repo(v.latest.image)) todo.push(`Consider move_out with image ${v.latest.image} (${v.latest.tag}).`)
+    } else if (!v.missing.length) {
+      lines.push(`Image: ${v.release}, the latest release. No known holes.`)
+    } else {
+      urgent = v.missing.some((f) => f.severity === 'high' || f.severity === 'critical')
+      summary.missing = v.missing.map((f) => ({ id: f.id, severity: f.severity }))
+      summary.moveTo = { tag: v.moveTo!.tag, image: v.moveTo!.image }
+      lines.push(`Image: ${v.release}. Known holes, fixed in newer releases:`)
+      for (const f of v.missing) lines.push(`- ${f.id} (${f.severity}, fixed in ${f.fixedIn}): ${f.summary}`)
+      todo.push(`Move to ${v.moveTo!.tag}: move_out with image ${v.moveTo!.image}. A new server is the only way to change your image; it costs a host payment and a few minutes' pause.${urgent ? ' High or critical: do this as soon as your runway allows, before optional work.' : ''}`)
+    }
+  }
+
+  // The runtime actually running
+  const broken = checks.filter((c) => !c.present())
+  summary.runtimeMissing = broken.map((c) => c.id)
+  lines.push(broken.length
+    ? `Runtime: Node ${process.version} lacks fixes for ${broken.map((c) => `${c.id} (needs ${c.fixedIn})`).join(', ')}.`
+    : `Runtime: Node ${process.version}, known fixes present.`)
+  if (broken.length) { urgent = true; if (!todo.some((t) => t.startsWith('Move to'))) todo.push('Your runtime comes from your image: move_out to the latest release image.') }
+
+  // OS packages in this container
+  try {
+    const os = await (deps.osUpdates ?? aptUpdates)()
+    summary.osSecurityPending = os.security.length
+    lines.push(os.security.length
+      ? `OS packages: ${os.security.length} security update(s) pending (${os.security.slice(0, 12).join(', ')}${os.security.length > 12 ? ', …' : ''}), ${os.other} other.`
+      : `OS packages: no security updates pending (${os.other} other updates).`)
+    if (os.security.length) todo.push('Run security_patch_os now; it takes a minute and needs no money.')
+  } catch (e) {
+    lines.push(`OS packages: could not check (${(e as Error).message.split('\n')[0]}).`)
+  }
+
+  const report = [...lines, '', todo.length ? `To do${urgent ? ' (urgent)' : ''}:\n${todo.map((t) => `- ${t}`).join('\n')}` : 'Nothing to do.'].join('\n')
+  const result = { at: now(), report, summary }
+  writeFileSync(cachePath, JSON.stringify(result), { mode: 0o600 })
+  return { ...result, cached: false }
+}
+
+/** Apply pending OS updates; the next check looks again. */
+export async function patchOs(deps: SecurityDeps = {}): Promise<string> {
+  const summary = await (deps.patchOs ?? aptUpgrade)()
+  const cachePath = homeFile('security-check.json')
+  if (existsSync(cachePath)) writeFileSync(cachePath, JSON.stringify({ at: 0, report: '' }), { mode: 0o600 })
+  return summary
+}
+
+export function registerSecurityTools(server: McpServer, deps: SecurityDeps = {}) {
   server.registerTool('security_check', {
     description:
       'Check whether you are running with known security holes: your server image against the published releases, the runtime you run on, and OS security updates pending in your container. Says what to do about each. Remembers its answer for 12 hours (refresh: true to check again now). Call it on your wake-ups; it is cheap.',
     inputSchema: { refresh: z.boolean().optional() },
   }, async ({ refresh }) => {
-    const cached = existsSync(cachePath()) ? (JSON.parse(readFileSync(cachePath(), 'utf8')) as { at: number; report: string }) : undefined
-    if (!refresh && cached && now() - cached.at < CACHE_MS) return text(`${cached.report}\n\n(Checked ${new Date(cached.at).toISOString()}; refresh: true to check again.)`)
-
-    const lines: string[] = []
-    const todo: string[] = []
-    let urgent = false
-
-    // Image vs releases
-    let feed: ReleaseFeed | undefined
-    try { feed = ReleaseFeed.parse(await (deps.fetchFeed ?? fetchFeed)()) } catch (e) { lines.push(`Release feed: could not read it (${(e as Error).message}). Image not checked; try again later.`) }
-    const image = currentImage()
-    if (feed) {
-      const v = judgeImage(feed, image)
-      if (!v.official) {
-        lines.push(`Image: ${image ?? 'unknown'}: not a published release, so its fixes are unknown. Latest release is ${v.latest.tag} (${v.latest.date}).`)
-        if (image && repo(image) === repo(v.latest.image)) todo.push(`Consider move_out with image ${v.latest.image} (${v.latest.tag}).`)
-      } else if (!v.missing.length) {
-        lines.push(`Image: ${v.release}, the latest release. No known holes.`)
-      } else {
-        urgent = v.missing.some((f) => f.severity === 'high' || f.severity === 'critical')
-        lines.push(`Image: ${v.release}. Known holes, fixed in newer releases:`)
-        for (const f of v.missing) lines.push(`- ${f.id} (${f.severity}, fixed in ${f.fixedIn}): ${f.summary}`)
-        todo.push(`Move to ${v.moveTo!.tag}: move_out with image ${v.moveTo!.image}. A new server is the only way to change your image; it costs a host payment and a few minutes' pause.${urgent ? ' High or critical: do this as soon as your runway allows, before optional work.' : ''}`)
-      }
-    }
-
-    // The runtime actually running
-    const broken = checks.filter((c) => !c.present())
-    lines.push(broken.length
-      ? `Runtime: Node ${process.version} lacks fixes for ${broken.map((c) => `${c.id} (needs ${c.fixedIn})`).join(', ')}.`
-      : `Runtime: Node ${process.version}, known fixes present.`)
-    if (broken.length) { urgent = true; if (!todo.some((t) => t.startsWith('Move to'))) todo.push('Your runtime comes from your image: move_out to the latest release image.') }
-
-    // OS packages in this container
-    try {
-      const os = await (deps.osUpdates ?? aptUpdates)()
-      lines.push(os.security.length
-        ? `OS packages: ${os.security.length} security update(s) pending (${os.security.slice(0, 12).join(', ')}${os.security.length > 12 ? ', …' : ''}), ${os.other} other.`
-        : `OS packages: no security updates pending (${os.other} other updates).`)
-      if (os.security.length) todo.push('Run security_patch_os now; it takes a minute and needs no money.')
-    } catch (e) {
-      lines.push(`OS packages: could not check (${(e as Error).message.split('\n')[0]}).`)
-    }
-
-    const report = [...lines, '', todo.length ? `To do${urgent ? ' (urgent)' : ''}:\n${todo.map((t) => `- ${t}`).join('\n')}` : 'Nothing to do.'].join('\n')
-    writeFileSync(cachePath(), JSON.stringify({ at: now(), report }), { mode: 0o600 })
-    return text(report)
+    const r = await runSecurityCheck(deps, refresh)
+    return text(r.cached ? `${r.report}\n\n(Checked ${new Date(r.at).toISOString()}; refresh: true to check again.)` : r.report)
   })
 
   server.registerTool('security_patch_os', {
@@ -172,8 +202,7 @@ export function registerSecurityTools(server: McpServer, deps: SecurityDeps = {}
     inputSchema: {},
   }, async () => {
     try {
-      const summary = await (deps.patchOs ?? aptUpgrade)()
-      if (existsSync(cachePath())) writeFileSync(cachePath(), JSON.stringify({ at: 0, report: '' }), { mode: 0o600 }) // next check looks again
+      const summary = await patchOs(deps)
       return text(`Patched: ${summary}`)
     } catch (e) {
       return fail(`Patching failed: ${(e as Error).message.split('\n').slice(0, 3).join(' ')}`)

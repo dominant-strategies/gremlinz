@@ -8,6 +8,8 @@ import { registerRegistryTools } from './tools/registry.js'
 import { registerWalletTools } from './tools/wallet.js'
 import { registerSecurityTools, type SecurityDeps } from './tools/security.js'
 import { registerHashferenceTools, type HashferenceDeps } from './tools/hashference.js'
+import { registerHealthTools, sharedMonitor } from './tools/health.js'
+import type { HealthMonitor } from './health/monitor.js'
 
 export interface ServerDeps {
   /** Override for tests and local development (pretend balances). */
@@ -17,6 +19,8 @@ export interface ServerDeps {
   security?: SecurityDeps
   /** Hashference API and payments, replaced in tests. */
   hashference?: HashferenceDeps
+  /** The health monitor (one per process; replaced in tests). */
+  health?: () => HealthMonitor
 }
 
 export function createServer(deps: ServerDeps = {}): McpServer {
@@ -29,5 +33,6 @@ export function createServer(deps: ServerDeps = {}): McpServer {
   registerWalletTools(server)
   registerSecurityTools(server, { now: deps.now, ...deps.security })
   registerHashferenceTools(server, deps.hashference)
+  registerHealthTools(server, deps.health ?? (() => sharedMonitor()))
   return server
 }

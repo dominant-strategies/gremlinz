@@ -68,11 +68,23 @@ export async function setupKey(signer: QuaiSigner, file: string, opts: { fetch?:
 }
 
 export interface HashferenceBalance { availableUsd: number; reservedUsd: number; pendingUsd: number }
+export interface HashferenceAccount extends HashferenceBalance {
+  /** Pool login for mining credit to this account (stratum user is `<miningUsername>.<worker>`). */
+  miningUsername?: string
+}
+
+export async function account(key: HashferenceKey, opts: { fetch?: Fetch; base?: string } = {}): Promise<HashferenceAccount> {
+  const r = await call<{ account: { miningUsername?: string; balance: { availableCredits: number; reservedCredits: number; pendingCredits: number } } }>(opts.fetch ?? fetch, 'GET', '/v1/account', { auth: key.apiKey, base: opts.base })
+  const b = r.account.balance
+  return {
+    availableUsd: b.availableCredits / CREDITS_PER_USD, reservedUsd: b.reservedCredits / CREDITS_PER_USD, pendingUsd: b.pendingCredits / CREDITS_PER_USD,
+    ...(typeof r.account.miningUsername === 'string' && r.account.miningUsername ? { miningUsername: r.account.miningUsername } : {}),
+  }
+}
 
 export async function balance(key: HashferenceKey, opts: { fetch?: Fetch; base?: string } = {}): Promise<HashferenceBalance> {
-  const r = await call<{ account: { balance: { availableCredits: number; reservedCredits: number; pendingCredits: number } } }>(opts.fetch ?? fetch, 'GET', '/v1/account', { auth: key.apiKey, base: opts.base })
-  const b = r.account.balance
-  return { availableUsd: b.availableCredits / CREDITS_PER_USD, reservedUsd: b.reservedCredits / CREDITS_PER_USD, pendingUsd: b.pendingCredits / CREDITS_PER_USD }
+  const { availableUsd, reservedUsd, pendingUsd } = await account(key, opts)
+  return { availableUsd, reservedUsd, pendingUsd }
 }
 
 export interface Invoice {
@@ -106,3 +118,35 @@ export async function verifyPayment(key: HashferenceKey, id: string, tx: string,
 }
 
 export const hasKey = (file: string) => existsSync(file) && !!readKey(file)
+
+export interface BuyDeps {
+  fetch?: Fetch
+  base?: string
+  /** Pays `amountWei` QUAI to `to`; returns the transaction hash. */
+  pay: (to: string, amountWei: bigint) => Promise<string>
+  sleep?: (ms: number) => Promise<void>
+  now?: () => number
+}
+
+export interface Purchase { invoiceId: string; tx: string; quaiWei: bigint; status: Invoice['status'] }
+
+/**
+ * Buy `usd` of credit: invoice, pay exactly the quoted QUAI, then poll for a few minutes (and point Hashference at the
+ * transaction if it hasn't noticed). Throws before paying when anything is off, so a throw never means money left.
+ */
+export async function buyCredit(key: HashferenceKey, usd: number, deps: BuyDeps): Promise<Purchase> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const opts = { fetch: deps.fetch, base: deps.base }
+  const inv = await createQuaiInvoice(key, usd, opts)
+  const amount = BigInt(inv.amountAtomic)
+  // Pay only an invoice that is still open: a late payment is not credited automatically.
+  if (Date.parse(inv.expiresAt) - (deps.now ?? Date.now)() < 30_000) throw new Error('the invoice expires too soon to pay safely; try again')
+  const tx = await deps.pay(inv.addresses[0]!, amount)
+  let status = inv.status
+  for (let i = 0; i < 18 && status !== 'paid'; i++) {
+    await sleep(10_000)
+    try { status = (await invoice(key, inv.id, opts)).status } catch { /* keep polling */ }
+  }
+  if (status === 'awaiting_payment') { try { status = (await verifyPayment(key, inv.id, tx, opts)).status } catch { /* reported by status */ } }
+  return { invoiceId: inv.id, tx, quaiWei: amount, status }
+}

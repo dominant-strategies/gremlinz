@@ -43,10 +43,36 @@ RUN PY=$(uv python find 3.14) \
  && "$PY" -m pm.build_env --source . --python "$PY" --out /opt/hermes/venv --extra mcp --record-selection \
  && /opt/hermes/venv/bin/hermes --version
 
+# xmrig (GPL-3.0-or-later, https://github.com/xmrig/xmrig), for mining as a last resort or a deliberate strategy
+# (packages/gremlin-mcp/src/health/miner.ts). Pinned release, verified by sha256: the official static binary on amd64;
+# arm64 has no official Linux binary, so it is built from the same release's source (TLS and hwloc off: the pool is
+# plain stratum+tcp; libuv linked statically (Debian ships it as libuv_a.a) so the runtime image needs nothing extra).
+FROM node:24.22.1-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS xmrig
+ARG TARGETARCH
+ARG XMRIG_VERSION=6.26.0
+ARG XMRIG_X64_SHA256=fc6f8ae5f64e4f17481f7e3be29a1c56949f216a998414188003eae1db20c9e5
+ARG XMRIG_SRC_SHA256=5005144e78571f26586410c2b2ede2b0c72afe22f97f1708ea24cfb253c3939b
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+WORKDIR /x
+RUN set -eu; \
+    if [ "$TARGETARCH" = amd64 ]; then \
+      curl -fsSLo x.tgz "https://github.com/xmrig/xmrig/releases/download/v${XMRIG_VERSION}/xmrig-${XMRIG_VERSION}-linux-static-x64.tar.gz"; \
+      echo "${XMRIG_X64_SHA256}  x.tgz" | sha256sum -c -; \
+      tar xzf x.tgz; install -m 0755 "xmrig-${XMRIG_VERSION}/xmrig" /usr/local/bin/xmrig; \
+    else \
+      apt-get update && apt-get install -y --no-install-recommends build-essential cmake libuv1-dev; \
+      curl -fsSLo src.tgz "https://github.com/xmrig/xmrig/archive/refs/tags/v${XMRIG_VERSION}.tar.gz"; \
+      echo "${XMRIG_SRC_SHA256}  src.tgz" | sha256sum -c -; \
+      tar xzf src.tgz; mkdir "xmrig-${XMRIG_VERSION}/build"; cd "xmrig-${XMRIG_VERSION}/build"; \
+      cmake .. -DWITH_HWLOC=OFF -DWITH_TLS=OFF -DWITH_OPENCL=OFF -DWITH_CUDA=OFF -DUV_LIBRARY="/usr/lib/$(gcc -dumpmachine)/libuv_a.a"; \
+      make -j"$(nproc)"; install -m 0755 xmrig-notls /usr/local/bin/xmrig; \
+    fi; \
+    /usr/local/bin/xmrig --version
+
 FROM node:24.22.1-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c
 LABEL org.opencontainers.image.source=https://github.com/dominant-strategies/gremlinz \
-      org.opencontainers.image.description="Gremlin egg: egg supervisor + gremlin runtime (Hermes)" \
-      org.opencontainers.image.licenses=MIT
+      org.opencontainers.image.description="Gremlin egg: egg supervisor + gremlin runtime (Hermes). Includes xmrig 6.26.0 (GPL-3.0-or-later, source: https://github.com/xmrig/xmrig/tree/v6.26.0) at /usr/local/bin/xmrig." \
+      org.opencontainers.image.licenses="MIT AND GPL-3.0-or-later"
 # Users: gremlin is the main agent and owns the server (passwordless sudo, the seed, Hermes' home); gremlin-helper
 # runs its subagents' shell commands and shares only the work folder with it (group gremlin-work).
 # Debian security fixes published since the base image was built go in at build time; the gremlin applies later ones
@@ -66,6 +92,7 @@ RUN b="$(ls -d /opt/python/cpython-3.14.*-linux-*/bin | head -1)" \
 COPY --from=hermes /opt/gremlin-runtime /opt/gremlin-runtime
 COPY --from=hermes /opt/hermes /opt/hermes
 COPY --from=build /app /app
+COPY --from=xmrig /usr/local/bin/xmrig /usr/local/bin/xmrig
 ENV NODE_ENV=production \
     GREMLIN_HOME=/var/lib/gremlin GREMLIN_LAUNCH=/etc/gremlin/launch.json \
     HERMES_HOME=/var/lib/gremlin-hermes HERMES_BIN=/opt/hermes/venv/bin/hermes GREMLIN_RUNTIME_DIR=/opt/gremlin-runtime \

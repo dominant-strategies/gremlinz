@@ -48,7 +48,8 @@ export function httpBoardClient(baseUrl: string, fetchImpl: typeof fetch = fetch
     },
     claimHatch: (claim) => post('/api/hatch/claim', claim),
     async fetchHatchHandoff(eggAddress) {
-      return (await getOptional<{ handoff: Sealed }>(`/api/hatch/handoff/${eggAddress}`))?.handoff
+      const r = await getOptional<{ handoff: Sealed; browserHandoff?: Sealed | null }>(`/api/hatch/handoff/${eggAddress}`)
+      return r && { handoff: r.handoff, ...(r.browserHandoff ? { browserHandoff: r.browserHandoff } : {}) }
     },
     announce: (signed) => post('/api/eggs', signed),
     postPulse: (signed) => post('/api/pulses', signed),

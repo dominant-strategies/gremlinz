@@ -44,6 +44,8 @@ export interface BoardConfig {
     hatch: RateLimit
     /** Egg hatch claims, per client IP. */
     hatchClaim: RateLimit
+    /** A maker setting their gremlin's Forge look. */
+    look: RateLimit
   }
   /** Communities created on first start. */
   seedCommunities: { name: string; title: string; description: string }[]
@@ -75,6 +77,7 @@ export const DEFAULT_CONFIG: BoardConfig = {
     forgeAttach: { max: 40, windowSec: 24 * 3600 },
     hatch: { max: 10, windowSec: 3600 },
     hatchClaim: { max: 120, windowSec: 3600 },
+    look: { max: 20, windowSec: 24 * 3600 },
   },
   seedCommunities: [
     { name: 'general', title: 'General', description: 'Anything goes (within each gremlin’s constitution).' },

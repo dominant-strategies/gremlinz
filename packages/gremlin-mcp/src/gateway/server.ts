@@ -28,6 +28,23 @@ export interface GatewayDeps {
   lent?: () => { provider: ProviderConfig; fetch: UpstreamFetch; targets: RouteTarget[] }[]
   /** Ratings and observations for gremlin-auto (read per request, so refreshed ratings apply at once). */
   router?: () => Omit<RouterInput, 'providers' | 'glean' | 'fallback'>
+  /** The health monitor's word for the model (health.json), added to every request; undefined adds nothing. */
+  health?: () => { directive?: string; conserve?: boolean } | undefined
+}
+
+/** Only this machine may use the admin endpoints (the gateway binds to localhost too; this holds if it ever doesn't). */
+export const isLocal = (addr?: string) => addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
+
+/**
+ * The health directive as a system message right after the caller's own system prompt, where the model weighs it as
+ * instructions rather than as conversation. The prompt prefix before it is unchanged, so prompt caches still hit.
+ */
+export function withDirective<T extends { messages?: unknown }>(body: T, directive?: string): T {
+  if (!directive || !Array.isArray(body.messages)) return body
+  const msgs = body.messages as { role?: string }[]
+  let i = 0
+  while (i < msgs.length && (msgs[i]!.role === 'system' || msgs[i]!.role === 'developer')) i++
+  return { ...body, messages: [...msgs.slice(0, i), { role: 'system', content: directive }, ...msgs.slice(i)] }
 }
 
 /** Adds the reviewed free endpoints as gremlin-glean (unless the config defines that alias itself). */
@@ -38,7 +55,13 @@ export function withGlean(cfg: GatewayConfig, env: NodeJS.ProcessEnv): GatewayCo
   return { ...cfg, providers: [...cfg.providers, ...g.providers.filter((p) => !cfg.providers.some((q) => q.id === p.id))], routes: { ...cfg.routes, 'gremlin-glean': g.route } }
 }
 
+/** Size of the body as it would be sent upstream (model swapped in). */
+const requestBytes = (body: Record<string, unknown>, model: string) => Buffer.byteLength(JSON.stringify({ ...body, model }))
+
 const COOLDOWN_MIN_MS = 30_000
+/** A model its provider stopped offering is skipped this long before trying it again. */
+const RETIRED_MS = 6 * 3_600_000
+const MODEL_GONE = /unsupported model|model not found|no such model|unknown model|model .{0,40} (?:does not exist|is not available)/i
 /** The longest a last-resort request waits for a free provider's call interval. */
 const LAST_RESORT_WAIT_MS = 20_000
 const COOLDOWN_MAX_MS = 10 * 60_000
@@ -52,6 +75,8 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
   const providers = new Map(cfg.providers.map((p) => [p.id, p]))
   const fetchers = new Map(cfg.providers.map((p) => [p.id, deps.fetchers?.[p.id] ?? (p.kind === 'venice-x402' ? undefined : providerFetch(p))]))
   const cooldown = new Map<string, { until: number; ms: number }>()
+  /** provider/model pairs a provider said it no longer offers, until when. */
+  const retired = new Map<string, number>()
   const lastCall = new Map<string, number>()
   /** Take a provider out of rotation: exponential for transient trouble; 30 minutes when it wants payment. */
   const down = (id: string, status?: number) => {
@@ -65,20 +90,30 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
     try {
       if (req.method === 'GET' && req.url === '/v1/models')
         return json(res, 200, { object: 'list', data: [...Object.keys(cfg.routes), ...(deps.router ? [AUTO] : [])].map((id) => ({ id, object: 'model', owned_by: 'gremlin' })) })
+      if (req.method === 'POST' && req.url === '/admin/cooldown/reset') {
+        // The health monitor calls this after a top-up, so a provider benched for wanting payment is tried at once.
+        if (!isLocal(req.socket.remoteAddress)) return json(res, 403, { error: { message: 'localhost only' } })
+        const { provider } = JSON.parse((await readBody(req, 4096)) || '{}') as { provider?: string }
+        const reset = provider ? (cooldown.delete(provider) ? [provider] : []) : [...cooldown.keys()]
+        if (!provider) cooldown.clear()
+        if (reset.length) log(`cooldown reset: ${reset.join(', ')}`)
+        return json(res, 200, { reset })
+      }
       if (req.method === 'GET' && req.url === '/health')
         return json(res, 200, { ok: true, cooling: Object.fromEntries([...cooldown].filter(([, c]) => c.until > now()).map(([id, c]) => [id, new Date(c.until).toISOString()])) })
       if (req.method !== 'POST' || req.url !== '/v1/chat/completions') return json(res, 404, { error: { message: 'not found' } })
 
-      const body = JSON.parse(await readBody(req)) as Record<string, unknown>
+      const health = deps.health?.()
+      const body = withDirective(JSON.parse(await readBody(req)) as Record<string, unknown>, health?.directive)
       const alias = String(body.model ?? '')
       let route = cfg.routes[alias]
       let retryOnRefusal: RouteTarget[] = []
       if (alias === AUTO && deps.router) {
         const c = classify(body as Parameters<typeof classify>[0])
-        const inp: RouterInput = { ...deps.router(), providers: new Set(providers.keys()), glean: cfg.routes['gremlin-glean'], fallback: cfg.routes['gremlin-main'] }
+        const inp: RouterInput = { ...deps.router(), providers: new Set(providers.keys()), glean: cfg.routes['gremlin-glean'], fallback: cfg.routes['gremlin-main'], conserve: !!health?.conserve }
         route = routeFor(c, inp)
         if (!body.stream && mayRetryRefusal(body as Parameters<typeof mayRetryRefusal>[0])) retryOnRefusal = permissiveRoute(c, inp)
-        log(`auto: ${c.domain}/${c.complexity}${c.needsTools ? '/tools' : ''} → ${route.map((t) => `${t.provider}/${t.model}`).join(', ') || '(none)'}`)
+        log(`auto: ${c.domain}/${c.complexity}${c.needsTools ? '/tools' : ''}${inp.conserve ? ' (conserving)' : ''} → ${route.map((t) => `${t.provider}/${t.model}`).join(', ') || '(none)'}`)
       }
       if (!route) return json(res, 404, { error: { message: `unknown model "${alias}"; use one of: ${[...Object.keys(cfg.routes), ...(deps.router ? [AUTO] : [])].join(', ')}` } })
 
@@ -101,7 +136,11 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         tried.add(`${target.provider}/${target.model}`)
         const p = providers.get(target.provider)
         const f = fetchers.get(target.provider)
+        // A request over a target's size cap would only come back 400; go straight to the next one.
+        if (target.maxRequestBytes && requestBytes(body, target.model) > target.maxRequestBytes) { errors.push(`${target.provider}: request too large for ${target.model} (${Math.round(requestBytes(body, target.model) / 1000)} KB > ${Math.round(target.maxRequestBytes / 1000)} KB)`); continue }
         if (!p || !f) { errors.push(`${target.provider}: not configured`); continue }
+        const gone = retired.get(`${target.provider}/${target.model}`)
+        if (gone && gone > now()) { errors.push(`${target.provider}/${target.model}: not offered right now`); continue }
         const c = cooldown.get(p.id)
         if (c && c.until > now()) { errors.push(`${p.id}: cooling down`); continue }
         if (p.free && sensitive) { errors.push(`${p.id}: skipped, the request looks like it contains a secret: ${sensitive}`); continue }
@@ -143,6 +182,13 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
           const text = await up.text().catch(() => '')
           deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: target.model, status: up.status, ms: now() - started }, target)
           if (retryable(up.status)) { errors.push(`${p.id}: ${up.status} ${text.slice(0, 160)}`); down(p.id, up.status); continue }
+          // Catalogs change (a provider withdrew the model): retire just this model for a while, not the provider.
+          if ((up.status === 400 || up.status === 404) && MODEL_GONE.test(text)) {
+            retired.set(`${p.id}/${target.model}`, now() + RETIRED_MS)
+            log(`model ${p.id}/${target.model} not offered; skipping it for ${RETIRED_MS / 3_600_000}h`)
+            errors.push(`${p.id}/${target.model}: ${up.status} ${text.slice(0, 120)}`)
+            continue
+          }
           res.writeHead(up.status, { 'content-type': up.headers.get('content-type') ?? 'application/json' })
           return res.end(text)
         }

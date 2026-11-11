@@ -18,7 +18,7 @@
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { chmodSync, chownSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, chownSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gatewayConfig } from '../bootstrap/gateway-config.js'
@@ -26,6 +26,14 @@ import { home } from '../env.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), '[gremlin-run]', ...a)
+/** Starts and child exits, for the health monitor (restarts and crashes; health/measure.ts). */
+const event = (e: Record<string, unknown>) => {
+  try {
+    const f = join(home(), 'runner-events.jsonl')
+    appendFileSync(f, JSON.stringify({ at: new Date().toISOString(), ...e }) + '\n', { mode: 0o600 })
+    if (gremlinIds) chownSync(f, gremlinIds.uid, gremlinIds.gid) // written as root, read by gremlin-mcp
+  } catch { /* never fatal */ }
+}
 const hermesHome = process.env.HERMES_HOME ?? '/var/lib/gremlin-hermes'
 const runtimeDir = process.env.GREMLIN_RUNTIME_DIR ?? '/opt/gremlin-runtime'
 const hermesBin = process.env.HERMES_BIN ?? 'hermes'
@@ -104,9 +112,11 @@ if (!gatewayConfigPath || !existsSync(gatewayConfigPath)) {
 // only if the pid still belongs to the same program (pids get reused).
 const runDir = join(home(), 'run')
 mkdirSync(runDir, { recursive: true, mode: 0o700 })
-const pidFile = (name: string) => join(runDir, `${name}.pid`)
+// The miner's pid is written by gremlin-mcp (the gremlin user), so it lives in GREMLIN_HOME, not in this root-owned folder.
+const pidFile = (name: string) => (name === 'miner' ? join(home(), 'miner.pid') : join(runDir, `${name}.pid`))
 let stoppedLeftovers = false
-for (const [name, marker] of [['gateway', 'gateway/main.js'], ['mcp', 'main.js --http'], ['hermes', 'gateway run']] as const) {
+// The miner is gremlin-mcp's child (as gremlin-helper, via sudo); it outlives an mcp that was killed outright.
+for (const [name, marker] of [['gateway', 'gateway/main.js'], ['mcp', 'main.js --http'], ['hermes', 'gateway run'], ['miner', 'xmrig']] as const) {
   if (!existsSync(pidFile(name))) continue
   const pid = Number(readFileSync(pidFile(name), 'utf8'))
   try {
@@ -135,6 +145,7 @@ const start = (name: string, cmd: string, args: string[], childEnv: NodeJS.Proce
   writeFileSync(pidFile(name), String(c.pid), { mode: 0o600 })
   c.on('exit', (code, signal) => {
     log(`${name} exited (code ${code}, signal ${signal})`)
+    if (!stopping) event({ event: 'exit', child: name, code, signal })
     rmSync(pidFile(name), { force: true })
     stopAll(code ?? (signal === 'SIGTERM' && stopping ? exitCode : 1))
   })
@@ -150,12 +161,13 @@ const waitHealthy = async (name: string, url: string, ok: (r: Response) => boole
   stopAll(1)
 }
 
+event({ event: 'start' })
 start('gateway', process.execPath, [resolve(here, '..', 'gateway', 'main.js')], { ...env, GATEWAY_CONFIG: gatewayConfigPath }, gremlinIds)
 const port = (JSON.parse(readFileSync(gatewayConfigPath, 'utf8')) as { port?: number }).port ?? 8711
 await waitHealthy('inference gateway', `http://127.0.0.1:${port}/health`, (r) => r.ok)
 
 if (mcpHttp) {
-  start('mcp', process.execPath, [resolve(here, '..', 'main.js'), '--http'], { ...env, GREMLIN_MCP_TOKEN: mcpToken!, GREMLIN_MCP_PORT: String(mcpPort) }, gremlinIds)
+  start('mcp', process.execPath, [resolve(here, '..', 'main.js'), '--http'], { ...env, GREMLIN_MCP_TOKEN: mcpToken!, GREMLIN_MCP_PORT: String(mcpPort), GREMLIN_GATEWAY_ADMIN: `http://127.0.0.1:${port}` }, gremlinIds)
   await waitHealthy('gremlin-mcp', `http://127.0.0.1:${mcpPort}/mcp`, (r) => r.status === 401) // up, and asking for the token
 }
 

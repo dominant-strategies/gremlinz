@@ -8,6 +8,7 @@ import { allBalances } from '../wallets/balances.js'
 import { destinationProblem, send } from '../wallets/send.js'
 import { priceFn, recordSend } from '../wallets/policy.js'
 import { fail, text } from '../result.js'
+import { spendGate } from '../health/gate.js'
 
 const CHAIN_LABEL: Record<string, string> = { quai: 'Quai', ethereum: 'Ethereum', base: 'Base', bsc: 'BSC', arbitrum: 'Arbitrum', optimism: 'Optimism', polygon: 'Polygon', avalanche: 'Avalanche', solana: 'Solana', bitcoin: 'Bitcoin', litecoin: 'Litecoin' }
 
@@ -35,9 +36,12 @@ export function registerWalletTools(server: McpServer) {
       to: z.string().min(10).max(200),
       amount: z.string().regex(/^\d+(\.\d+)?$/, 'a decimal number such as 12.5'),
       dryRun: z.boolean().optional(),
+      reason: z.string().max(500).optional().describe('Only needed when your health is critical: how this serves your survival.'),
     },
     annotations: { destructiveHint: true },
-  }, async ({ asset: id, to, amount, dryRun }) => {
+  }, async ({ asset: id, to, amount, dryRun, reason }) => {
+    const gate = dryRun ? undefined : spendGate('wallet_send', { reason, detail: `${amount} ${id} to ${to}` })
+    if (gate) return fail(gate)
     const a = findAsset(id)
     if (!a) return fail(`Unknown asset "${id}". Use one of: ${ASSETS.map((x) => x.id).join(', ')}.`)
     const bad = destinationProblem(a, to)

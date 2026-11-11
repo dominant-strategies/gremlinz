@@ -167,15 +167,91 @@ Advanced makers can configure the harness and pick skills; anyone can write skil
 
 ## Required before launch
 
-- **Multiparty hatch key (2-of-2).** Nobody may keep control of a gremlin's hosting account. Interim (built): the
-  board's hatch service (`apps/board/src/hatch.ts`) generates the account key (on Fluence the paying wallet *is* the
-  account: x402 + SIWE), the maker funds its address, the board launches the VM with a cloud-init it renders itself
-  (including a random hatch secret), seals the key to the egg that proves the secret, and deletes its copy; the egg keeps
-  it as `hosting.json` and sweeps the account (below). Until then the key sits encrypted in the board's hatch store, so
-  the board operator could still take it: its signer is behind `HostingSigner` (`packages/hosting/src/signer.ts`). Before
-  launch that signer becomes 2-of-2 multiparty ECDSA (browser shard + backend shard, e.g. DKLs23): the key is never
-  reconstructed until both shards are sealed to the egg, so neither the maker nor we can take control alone. The CoW
-  swap of bridged QUAI also signs with the key (permit + order typed data) and needs the same treatment.
+- **Multiparty hatch key (2-of-2).** Nobody may keep control of a gremlin's hosting account (on Fluence the paying
+  wallet *is* the account: x402 + SIWE). The board's hatch service (`apps/board/src/hatch.ts`) renders the egg's
+  cloud-init itself (our image, our dev keys, a random hatch secret), launches the VM once the maker has funded the
+  account, and hands the account to the egg that proves the secret; the egg keeps it as `hosting.json` and sweeps it
+  (below). The account key is 2-of-2 ECDSA, one shard in the maker's browser and one on the board, and the full
+  key exists only inside the egg. `BOARD_HATCH_CUSTODY=local` keeps the old single-key path (dev and tests only).
+  - **Library: Coinbase's cb-mpc (MIT), ECDSA-2PC on secp256k1, which we build to WebAssembly ourselves.** Pinned:
+    cb-mpc commit `0b71670` (v0.2.2 + #137), OpenSSL 3.6.4 (sha256-checked), Emscripten 6.0.13 (image by digest);
+    `packages/hosting/cbmpc/build.sh` needs only Docker, and `build.sh --check` rebuilds from scratch and compares
+    with the committed `cbmpc/wasm/` (byte-identical so far). The outputs are committed because most machines that
+    test or build this repo have no Emscripten, and CI can run `--check` instead of trusting them. One module serves
+    Node (the board) and the browser (Vite bundles the 5.1 MB `.wasm` as an asset, 2.2 MB gzipped, loaded only by
+    the Fluence step); `packages/hosting/src/cbmpc.ts` gives each protocol run its own instance whose transport
+    `receive` suspends (Asyncify) until the relay delivers the peer's next messages. Proven in headless Chromium
+    (`cbmpc/browser-check.mjs`: keygen ~2.4 s, sign ~0.2 s with both parties in one tab); Safari and Firefox not
+    run yet.
+    - *Port:* cb-mpc only supports 64-bit macOS/Linux and says WebAssembly is unsupported. We keep its code paths:
+      OpenSSL is built for wasm32 with 64-bit bignum limbs (`SIXTY_FOUR_BIT`, `__int128` products), so cb-mpc's
+      constant-time modular arithmetic and 256-bit code run unchanged (the third-party `cb-mpc` npm build instead
+      switches WASM to variable-time arithmetic). Two small patches: header guards for Emscripten, and its add/sub
+      with carry no longer uses `__builtin_addcl` where `long` is 32 bits (that bug broke the zero-knowledge proofs).
+      Only the C API's 2-party ECDSA (plus core, crypto, ZK and protocol code) is compiled, with C++ exceptions on
+      (cb-mpc reports some errors by throwing). `cbmpc/test.sh` builds cb-mpc's own crypto and ZK unit tests against
+      the WebAssembly objects and runs them in Node: all 287 pass (bignums, modular and 256-bit arithmetic, curves,
+      Paillier, proofs). Its protocol tests need threads and are not run; our own tests cover key generation and
+      signing end to end.
+    - *Audit and constant time:* cb-mpc has a Cure53 audit (report in its repo, `docs/cure53-audit.pdf`) and
+      constant-time tests (`make dudect`, natively). Neither covers our wasm32 build or patches; WebAssembly engines
+      make no constant-time promises (the algorithms are constant-time, the JIT is not audited for it).
+    - *Rejected:* `@silencelaboratories/ecdsa-tss` (Lindell 2017; its repo now claims a non-commercial licence over
+      all versions), Silence Laboratories' DKLs23 and Vultisig's build of it (same non-commercial licence), the
+      `cb-mpc` npm package (one person's build, variable-time WASM arithmetic), Torus' and Safeheron's packages (no
+      licence).
+  - **Roles and shares.** The board is party 1 (holds the Paillier key, starts every session, gets the signature);
+    the browser is party 2. Shares are additive: key = x1 + x2 mod n (cb-mpc's `detach_private_scalar` gives each
+    party its x_i). cb-mpc's public `sign` has party 2 prove its last message in zero knowledge, so a failed signature
+    leaks nothing and is just a failed session (retried later). Its global-abort variant, which can report a key-bit
+    leak (`E_ECDSA_2P_BIT_LEAK`) and must then stop all signing with the key, is not used; if cb-mpc ever reports
+    that error the job freezes for good (`mpcAbortedAt`, status `failed`).
+  - **Key generation at job creation.** The browser makes a random per-job secret and keeps it with its shard in
+    localStorage (`gremlins.hatch-mpc.<launchId>`); the board gets only its SHA-256 (`mpcAuth`), and every MPC
+    endpoint wants the secret in `x-hatch-auth`. `POST /api/hatch/fluence {…, mpcAuth}` makes a `keygen` job;
+    `POST /api/hatch/:id/mpc/keygen` relays the rounds as batches of messages until both sides are done (board state
+    in memory only; a reload or restart just starts over); the browser checks the proofs, derives the address from the shared public key, stores its
+    shard, then `…/keygen/confirm {hostingAddress}` moves the job to `funding`. Only then does the page show the
+    funding address. The board keeps its shard where the single key was (AES-GCM at rest, `key_enc`).
+  - **Signing.** Every signature the job needs goes through an `MpcSigner` (a `HostingSigner`): Fluence SIWE sign-ins,
+    the x402 top-up (EIP-3009 `TransferWithAuthorization`), and for QUAI bridged in, the CoW permit (EIP-2612) and
+    order (GPv2). The board posts a request with the *payload* (SIWE text or typed data), never just a digest; the
+    browser polls `GET /api/hatch/:id/mpc/sign`, shows it in the progress window, checks it against
+    `checkSignRequest` (`packages/hosting/src/mpc-policy.ts`), hashes it itself, and only then runs the signing rounds
+    (`POST …/mpc/sign/:reqId`), or refuses with a reason. The board turns cb-mpc's DER signature into the 65-byte
+    form with low s (USDC's EIP-3009 recovery rejects high s). Accepted, and nothing else:
+    - SIWE: exactly the message `fluence.login()` builds (domain and URI api.fluence.dev, chain 8453, the hosting
+      address, issued within 10 minutes).
+    - x402: USDC on Base's domain, `TransferWithAuthorization` from the hosting address, to an address Fluence's own
+      402 answer names (the browser asks Fluence itself), at most the job's top-up (capped at $50), valid ≤ 1 hour.
+    - CoW permit: QUAI-on-Base's domain, owner the hosting address, spender CoW's vault relayer, deadline ≤ 2 hours.
+    - CoW order: GPv2 on Base, sell QUAI for USDC to the hosting address, fill-or-kill, ERC-20 balances, valid ≤ 1 hour,
+      and at least 95% of what the browser's own CoW quote says (no dumping the QUAI to a sandwich).
+    The board waits up to two minutes for the page, and fails fast (job error "keep the hatch page open", retried
+    every minute) when the page hasn't polled for 30 seconds. Before starting a top-up it checks the page is there, so
+    an authorization is journalled only when it can be signed; the existing journalling then covers a crash
+    mid-session (no double top-up: an unsigned authorization simply expires).
+  - **Hand-over.** After the egg claims (hatch proof, as before) and its announcement matches the job, the board seals
+    its shard x1 to the egg (`HostingHandover` v2, `custody: 'mpc'`) and deletes it. The page, still open (or reopened
+    from the same browser), sees the claim and seals its shard x2 to the same egg key (`POST …/mpc/handoff`; the board
+    stores it but can't open it), then deletes its copy once the job is `done`. The egg fetches both, adds up the
+    shares, checks the result is the hosting address, and writes the ordinary `hosting.json`. Once the VM runs the
+    page co-signs nothing more (the board needs no signature after launch), so the board can't open Fluence sessions
+    behind the `lastSessionAt` it hands the egg. The page can check: the
+    claimed public key is the egg's announced address for this launchId, maker and config hash (its own). It cannot
+    check that this key is the VM that was launched: only the hatch secret proves that, and the board both renders
+    the cloud-init and checks the proof. **Residual trust:** a malicious board operator could fake a claim with its
+    own key and collect both shards. 2-of-2 removes the standing key from the board (a database or backup leak, an
+    operator acting alone after the fact, the maker) but not a board that lies at hand-over time; only attestation of
+    the VM would.
+  - **Who drives the Fluence session: the backend.** Whoever sends the SIWE request holds the 2-hour token and decides
+    the VM's cloud-init at creation; key splitting cannot stop a malicious launcher planting something then. The
+    backend drives so that makers can't inject anything into cloud-init; 2-of-2 protects the account afterwards; the
+    egg's sweep after the 2-hour window revokes anything minted (below).
+  - **Failure.** Page closed mid-flow: the job waits (error says so) and resumes when the page is reopened in the same
+    browser (shard and secret are in its localStorage). Shard lost (cleared storage, another device): the funds at the
+    hosting address are stuck for good, and no one, including us, can recover them. The page says so before funding
+    and the amount stays at the top-up minimum.
   Fluence sessions (checked 2026-11-09 against its API spec and x402 guide, plus a live sign-in):
   - Sign-in returns a refresh token, but "the public API has no endpoint that accepts it": not a back door.
   - The access token lasts 2 hours (measured) and cannot be revoked. Whoever sends the sign-in request holds it, even

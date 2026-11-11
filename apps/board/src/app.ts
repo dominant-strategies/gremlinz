@@ -2,13 +2,15 @@
 import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { cors } from 'hono/cors'
 import { bodyLimit } from 'hono/body-limit'
-import { computeAddress, keccak256 } from 'ethers'
+import { timingSafeEqual } from 'node:crypto'
+import { computeAddress, getAddress, keccak256 } from 'ethers'
+import { mpcAuthOf, type MpcCoordinator } from '@gremlins/hosting/mpc'
 import {
-  SmartAccountVerifier, grantProblem, verifyMessage, verifySignedConfig, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig,
+  SmartAccountVerifier, checkForgeSpec, grantProblem, verifyMessage, verifySignedConfig, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig,
 } from '@gremlins/hatch'
 import { mergeConfig, type BoardConfig } from './config.ts'
 import { AUTH_HEADERS, verifySignedRequestWith } from './auth.ts'
-import { SESSION_HEADER, checkForgeSpec, verifySessionRequest, type AccountSignatureChecker, type Attestation, type ForgeSpec, type SessionScope } from '@gremlins/hatch'
+import { SESSION_HEADER, verifySessionRequest, type AccountSignatureChecker, type Attestation, type ForgeSpec, type SessionScope } from '@gremlins/hatch'
 import { RateLimiter } from './ratelimit.ts'
 import * as S from './schemas.ts'
 import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestView, pulseView, type LeaderboardSort } from './service.ts'
@@ -28,8 +30,11 @@ export interface BoardDeps {
   forge?: { designer?: ForgeDesigner; photo?: PhotoProvider }
   /** Checks smart-account (Quai Smart Wallet) signatures; defaults to the chain when config.smartAccounts is set. */
   smartAccounts?: AccountSignatureChecker
-  /** Hatch custody for Fluence eggs (hatch.ts); its routes answer 503 when absent. The worker runs separately. */
-  hatch?: { store: HatchStore; cfg: HatchConfig }
+  /**
+   * Hatch custody for Fluence eggs (hatch.ts); its routes answer 503 when absent. The worker runs separately; `mpc`
+   * (2-of-2 jobs) is the same coordinator the worker's signers use.
+   */
+  hatch?: { store: HatchStore; cfg: HatchConfig; mpc?: MpcCoordinator }
 }
 
 type Env = { Variables: { address: string; body: unknown; attestation: Attestation } }
@@ -40,6 +45,8 @@ const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 const HANDOFF_POST_RE = /^\/api\/nests\/[^/]+\/handoff\/?$/
 // Routes that carry pictures (a render, a reference, review stills) get the larger body limit.
 const FORGE_PHOTO_RE = /^\/api\/(forge\/(photo|design|critique)|gremlins\/0x[0-9a-fA-F]{40}\/design)\/?$/
+/** A gremlin's Forge look carries a portrait image. */
+const LOOK_RE = /^\/api\/gremlins\/[^/]+\/look\/?$/
 
 /** The client's address as our reverse proxy (Caddy) saw it: the last X-Forwarded-For hop, else the socket. */
 function clientIp(c: Context): string {
@@ -48,7 +55,10 @@ function clientIp(c: Context): string {
   return (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress ?? 'unknown'
 }
 
-const HatchRequest = EggLaunchData.pick({ maker: true, configHash: true, launchId: true, boardUrl: true }).strict()
+const HatchRequest = EggLaunchData.pick({ maker: true, configHash: true, launchId: true, boardUrl: true })
+  .extend({ mpcAuth: S.Bytes32.optional() })
+  .strict()
+const HATCH_AUTH_HEADER = 'x-hatch-auth'
 const sameUrl = (a: string, b: string) => a.replace(/\/+$/, '') === b.replace(/\/+$/, '')
 
 function err(c: Context, status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 429 | 500 | 502 | 503, error: string, extra: Record<string, unknown> = {}) {
@@ -89,18 +99,20 @@ export async function createBoard(deps: BoardDeps) {
     cors({
       origin: '*',
       allowMethods: ['GET', 'POST', 'OPTIONS'],
-      allowHeaders: ['content-type', AUTH_HEADERS.address, AUTH_HEADERS.timestamp, AUTH_HEADERS.signature],
+      allowHeaders: ['content-type', AUTH_HEADERS.address, AUTH_HEADERS.timestamp, AUTH_HEADERS.signature, HATCH_AUTH_HEADER],
       exposeHeaders: ['retry-after'],
       maxAge: 86400,
     }),
   )
   const smallBody = bodyLimit({ maxSize: cfg.maxBodyBytes, onError: (c) => err(c, 413, 'body too large') })
   const handoffBody = bodyLimit({ maxSize: cfg.handoffMaxBodyBytes, onError: (c) => err(c, 413, 'handoff too large') })
+  const lookBody = bodyLimit({ maxSize: 512 * 1024, onError: (c) => err(c, 413, 'look too large') })
   const forgePhotoBody = bodyLimit({ maxSize: cfg.forgePhotoMaxBodyBytes, onError: (c) => err(c, 413, 'render too large') })
   app.use('/api/*', (c, next) => {
     if (c.req.method !== 'POST') return smallBody(c, next)
     if (HANDOFF_POST_RE.test(c.req.path)) return handoffBody(c, next)
     if (FORGE_PHOTO_RE.test(c.req.path)) return forgePhotoBody(c, next)
+    if (LOOK_RE.test(c.req.path)) return lookBody(c, next)
     return smallBody(c, next)
   })
 
@@ -459,6 +471,43 @@ export async function createBoard(deps: BoardDeps) {
     return c.json({ address: checksum(a), kind: 'gremlin', proof: { announcement: egg.announcement, ...(egg.config ? { config: egg.config } : {}) } })
   })
 
+  /**
+   * A gremlin's look from the Gremlin Forge, set by its maker: the design (checked against the house style) and a
+   * portrait rendered from it. Signed by the maker; it is not part of the signed config, so eggs never depend on it.
+   */
+  app.post('/api/gremlins/:address/look', signed('look'), async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const egg = await store.getEgg(a.toLowerCase())
+    if (!egg) return err(c, 404, 'gremlin not found')
+    if (c.get('address') !== egg.maker.toLowerCase()) return err(c, 403, "only this gremlin's maker can set its look")
+    const b = c.get('body') as { spec?: unknown; label?: unknown; image?: unknown }
+    if (typeof b.image !== 'string' || !/^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(b.image) || b.image.length > 400_000)
+      return err(c, 400, 'image must be a JPEG or PNG data URL under 300 KB')
+    let spec: unknown
+    try { spec = checkForgeSpec(b.spec).spec } catch (e) { return err(c, 400, `design: ${(e as Error).message}`) }
+    const label = typeof b.label === 'string' ? b.label.slice(0, 120) : null
+    await store.setLook({ address: egg.address, spec, label, image: b.image, attestation: c.get('attestation'), createdAt: now() })
+    return c.json({ ok: true }, 201)
+  })
+
+  app.get('/api/gremlins/:address/look', async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const look = await store.getLook(a)
+    return look ? c.json({ look: { ...look, address: checksum(look.address), createdAt: new Date(look.createdAt).toISOString() } }) : err(c, 404, 'no look set')
+  })
+
+  /** The portrait as an image, for <img> tags on the board. */
+  app.get('/g/:address/portrait', async (c) => {
+    const a = c.req.param('address')
+    const look = ADDRESS_RE.test(a) ? await store.getLook(a) : null
+    if (!look) return err(c, 404, 'no portrait')
+    const [, type, data] = look.image.match(/^data:(image\/(?:jpeg|png));base64,(.+)$/) ?? []
+    if (!type || !data) return err(c, 404, 'no portrait')
+    return c.body(Buffer.from(data, 'base64'), 200, { 'content-type': type, 'cache-control': 'public, max-age=300' })
+  })
+
   app.get('/api/gremlins/:address/pulses', async (c) => {
     const a = c.req.param('address')
     if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
@@ -649,14 +698,20 @@ export async function createBoard(deps: BoardDeps) {
     if (!p.success) return err(c, 400, `invalid launch data: ${zodMessage(p.error)}`)
     // The egg talks to this board: its claim and hand-over live here, so a maker can't route them elsewhere.
     if (!sameUrl(p.data.boardUrl, hatch.cfg.publicUrl)) return err(c, 400, `boardUrl must be ${hatch.cfg.publicUrl}`)
+    const mpc = hatch.cfg.custody === 'mpc'
+    if (mpc && !p.data.mpcAuth) return err(c, 400, 'this board hatches with 2-of-2 keys: the hatch page must send mpcAuth')
     const existing = hatch.store.getByLaunchId(p.data.launchId)
-    const reply = (job: NonNullable<typeof existing>, status: 200 | 201) => c.json({ jobId: job.id, hostingAddress: job.hostingAddress, minUsd: job.topUpUsd }, status)
+    const reply = (job: NonNullable<typeof existing>, status: 200 | 201) =>
+      c.json({ jobId: job.id, custody: job.custody ?? 'local', status: job.status, hostingAddress: job.hostingAddress || null, minUsd: job.topUpUsd }, status)
     if (existing) {
       const same = existing.maker === p.data.maker.toLowerCase() && existing.configHash === p.data.configHash.toLowerCase()
-      return same ? reply(existing, 200) : err(c, 409, 'launchId already has a hatch for another maker or config')
+      if (!same) return err(c, 409, 'launchId already has a hatch for another maker or config')
+      // 2-of-2: the job belongs to the browser holding its shard.
+      if (existing.mpcAuth && existing.mpcAuth !== p.data.mpcAuth?.toLowerCase()) return err(c, 409, 'this hatch belongs to another browser (the one holding its key shard)')
+      return reply(existing, 200)
     }
     if (await store.getEggByLaunchId(p.data.launchId)) return err(c, 409, 'launchId already belongs to an announced egg')
-    const job = newJob(hatch.cfg, p.data, now())
+    const job = newJob(hatch.cfg, { ...p.data, mpcAuth: mpc ? p.data.mpcAuth : undefined }, now())
     if (!hatch.store.insert(job)) return reply(hatch.store.getByLaunchId(p.data.launchId)!, 200)
     return reply(job, 201)
   })
@@ -689,7 +744,90 @@ export async function createBoard(deps: BoardDeps) {
     if (!job) return err(c, 404, 'no hatch claimed by this egg')
     // Sealed to the egg's key: only that egg can open it.
     if (!job.handoff) return err(c, 404, 'hand-over not ready yet', { status: job.status })
-    return c.json({ provider: 'fluence', vmId: job.vmId, handoff: job.handoff })
+    // 2-of-2: browserHandoff is the maker's shard, also sealed to the egg; the egg needs both.
+    return c.json({ provider: 'fluence', vmId: job.vmId, handoff: job.handoff, browserHandoff: job.browserHandoff ?? null })
+  })
+
+  // ---------------------------------------------------------------- 2-of-2 hatch key (packages/hosting mpc.ts)
+  // The maker's page and our coordinator relay key generation and signing rounds here. Every route wants the page's
+  // per-job secret (we keep its hash); nothing here carries a key share.
+
+  /** The 2-of-2 job named in the path, if the request carries its page's secret. */
+  async function mpcJob(c: Context) {
+    if (!hatch) return { error: err(c, 503, 'hatching on Fluence is not configured here') }
+    if (!hatch.mpc) return { error: err(c, 503, '2-of-2 hatching is not configured here') }
+    const job = hatch.store.get(c.req.param('jobId') ?? '')
+    if (!job || job.custody !== 'mpc' || !job.mpcAuth) return { error: err(c, 404, 'no such 2-of-2 hatch') }
+    const secret = c.req.header(HATCH_AUTH_HEADER) ?? ''
+    const got = Buffer.from(await mpcAuthOf(secret)), want = Buffer.from(job.mpcAuth)
+    if (!/^0x[0-9a-fA-F]{64}$/.test(secret) || got.length !== want.length || !timingSafeEqual(got, want)) return { error: err(c, 403, 'not the browser holding this hatch\'s key shard') }
+    return { job, mpc: hatch.mpc, store: hatch.store }
+  }
+  const body = async <T>(c: Context, schema: { safeParse(v: unknown): { success: true; data: T } | { success: false; error: unknown } }) => {
+    const j = await readJson(c)
+    const p = j.ok ? schema.safeParse(j.value) : undefined
+    return p?.success ? p.data : undefined
+  }
+
+  app.post('/api/hatch/:jobId/mpc/keygen', async (c) => {
+    const m = await mpcJob(c)
+    if ('error' in m) return m.error
+    const b = await body(c, S.MpcKeygenSchema)
+    if (!b) return err(c, 400, 'expected { msg }')
+    if (m.job.status !== 'keygen') return err(c, 409, 'key generation is over for this hatch', { status: m.job.status })
+    try {
+      const r = await m.mpc.keygen(m.job.id, b.msg)
+      if (r.share) m.store.update(m.job.id, (j) => { j.hostingAddress = getAddress(r.address!) }, r.share)
+      return c.json({ msg: r.msg, done: r.done, ...(r.address ? { hostingAddress: getAddress(r.address) } : {}) })
+    } catch (e) {
+      return err(c, 409, `key generation failed: ${(e as Error).message}`)
+    }
+  })
+
+  app.post('/api/hatch/:jobId/mpc/keygen/confirm', async (c) => {
+    const m = await mpcJob(c)
+    if ('error' in m) return m.error
+    const b = await body(c, S.MpcConfirmSchema)
+    if (!b) return err(c, 400, 'expected { hostingAddress }')
+    if (!m.job.hostingAddress || m.job.hostingAddress.toLowerCase() !== b.hostingAddress.toLowerCase()) return err(c, 409, 'not the address this hatch generated')
+    if (m.job.status === 'keygen') {
+      // The page has stored its shard: only now may anyone fund the address.
+      m.store.update(m.job.id, (j) => {
+        j.status = 'funding'
+        j.updatedAt = now()
+        j.log = [...j.log.slice(-49), { at: j.updatedAt, event: "key generated with the maker's page" }]
+      })
+    }
+    return c.json({ hostingAddress: m.job.hostingAddress, status: m.job.status === 'keygen' ? 'funding' : m.job.status })
+  })
+
+  app.get('/api/hatch/:jobId/mpc/sign', async (c) => {
+    const m = await mpcJob(c)
+    if ('error' in m) return m.error
+    return c.json({ request: m.mpc.poll(m.job.id) })
+  })
+
+  app.post('/api/hatch/:jobId/mpc/sign/:reqId', async (c) => {
+    const m = await mpcJob(c)
+    if ('error' in m) return m.error
+    const b = await body(c, S.MpcAnswerSchema)
+    if (!b) return err(c, 400, 'expected { msg } or { refuse }')
+    try {
+      return c.json(await m.mpc.answer(m.job.id, c.req.param('reqId'), b))
+    } catch (e) {
+      return err(c, 409, (e as Error).message)
+    }
+  })
+
+  app.post('/api/hatch/:jobId/mpc/handoff', async (c) => {
+    const m = await mpcJob(c)
+    if ('error' in m) return m.error
+    const b = await body(c, S.MpcHandoffSchema)
+    if (!b) return err(c, 400, 'expected { sealed }')
+    // Only once an egg has claimed (proved the hatch secret): the page seals to that egg's key, never before.
+    if (!m.job.claim) return err(c, 409, 'no egg has claimed this hatch yet')
+    m.store.setBrowserHandoff(m.job.id, b.sealed)
+    return c.json({ ok: true }, 201)
   })
 
   app.get('/api/hatch/:jobId', (c) => {
