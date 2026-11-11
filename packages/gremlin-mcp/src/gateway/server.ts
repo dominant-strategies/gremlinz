@@ -39,6 +39,8 @@ export function withGlean(cfg: GatewayConfig, env: NodeJS.ProcessEnv): GatewayCo
 }
 
 const COOLDOWN_MIN_MS = 30_000
+/** The longest a last-resort request waits for a free provider's call interval. */
+const LAST_RESORT_WAIT_MS = 20_000
 const COOLDOWN_MAX_MS = 10 * 60_000
 /** A provider that wants payment stays out until a top-up is likely (the funding job runs every few minutes). */
 const NO_BALANCE_MS = 30 * 60_000
@@ -48,7 +50,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
   const log = deps.log ?? (() => {})
   const cfg = withGlean(config, deps.env ?? process.env)
   const providers = new Map(cfg.providers.map((p) => [p.id, p]))
-  const fetchers = new Map(cfg.providers.map((p) => [p.id, deps.fetchers?.[p.id] ?? (p.kind === 'openai' ? providerFetch(p) : undefined)]))
+  const fetchers = new Map(cfg.providers.map((p) => [p.id, deps.fetchers?.[p.id] ?? (p.kind === 'venice-x402' ? undefined : providerFetch(p))]))
   const cooldown = new Map<string, { until: number; ms: number }>()
   const lastCall = new Map<string, number>()
   /** Take a provider out of rotation: exponential for transient trouble; 30 minutes when it wants payment. */
@@ -89,7 +91,10 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
       const refused = deps.refuse?.()
       if (refused && !lent.length && alias !== 'gremlin-glean') return json(res, 429, { error: { type: 'budget_exhausted', message: refused } })
       const ownRoute = refused ? route.filter((t) => providers.get(t.provider)?.free) : route
-      let queue = [...lent.flatMap((l) => l.targets), ...ownRoute]
+      // Last resort for every route: the free endpoints. A gremlin that can't pay (or whose paid providers are all down)
+      // still gets an answer, weaker but better than none; secrets never go there (checked below).
+      const lastResort = alias === 'gremlin-glean' ? [] : (cfg.routes['gremlin-glean'] ?? []).filter((t) => !ownRoute.some((o) => o.provider === t.provider && o.model === t.model))
+      let queue = [...lent.flatMap((l) => l.targets), ...ownRoute, ...lastResort]
       let lastRefusal: Record<string, unknown> | undefined
       for (let target = queue.shift(); target; target = queue.shift()) {
         if (tried.has(`${target.provider}/${target.model}`)) continue
@@ -100,7 +105,12 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         const c = cooldown.get(p.id)
         if (c && c.until > now()) { errors.push(`${p.id}: cooling down`); continue }
         if (p.free && sensitive) { errors.push(`${p.id}: skipped, the request looks like it contains a secret`); continue }
-        if (p.minIntervalMs && now() - (lastCall.get(p.id) ?? -Infinity) < p.minIntervalMs) { errors.push(`${p.id}: rate limit (one call per ${p.minIntervalMs / 1000}s)`); continue }
+        if (p.minIntervalMs && now() - (lastCall.get(p.id) ?? -Infinity) < p.minIntervalMs) {
+          // On the last resort, wait out a free provider's short interval rather than fail the whole request.
+          const wait = p.minIntervalMs - (now() - (lastCall.get(p.id) ?? -Infinity))
+          if (!lastResort.includes(target) || wait > LAST_RESORT_WAIT_MS) { errors.push(`${p.id}: rate limit (one call per ${p.minIntervalMs / 1000}s)`); continue }
+          await new Promise((r) => setTimeout(r, wait))
+        }
         lastCall.set(p.id, now())
         const started = now()
         const upstreamBody = { ...body, model: target.model, ...(body.stream ? { stream_options: { ...(body.stream_options as object), include_usage: true } } : {}) }
