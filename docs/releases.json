@@ -2,6 +2,17 @@
   "repository": "ghcr.io/dominant-strategies/gremlinz-egg",
   "releases": [
     {
+      "tag": "egg-v0.1.3",
+      "date": "2026-11-11",
+      "image": "ghcr.io/dominant-strategies/gremlinz-egg@sha256:ef09084efbe4d8508784ac68c4e67e0ee6de7bb55b1591a9c6d8a6ba7049db05",
+      "artifact": {
+        "url": "https://github.com/dominant-strategies/gremlinz/releases/download/egg-v0.1.3/gremlin-linux-amd64.tgz",
+        "sha256": "fa2c4c29c1ffb0bd02ca1bb80fab39077bb85acec0466dc374ba81364f7176bb"
+      },
+      "node": "24.22.1",
+      "fixes": []
+    },
+    {
       "tag": "egg-v0.1.2",
       "date": "2026-11-05",
       "image": "ghcr.io/dominant-strategies/gremlinz-egg@sha256:e72bafdd07a58995d3beafd034d0b6b27fdaf14a024a9183d4c41b13c4588d69",
