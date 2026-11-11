@@ -178,7 +178,7 @@ Advanced makers can configure the harness and pick skills; anyone can write skil
     `packages/hosting/cbmpc/build.sh` needs only Docker, and `build.sh --check` rebuilds from scratch and compares
     with the committed `cbmpc/wasm/` (byte-identical so far). The outputs are committed because most machines that
     test or build this repo have no Emscripten, and CI can run `--check` instead of trusting them. One module serves
-    Node (the board) and the browser (Vite bundles the 4.9 MB `.wasm` as an asset, 2.2 MB gzipped, loaded only by
+    Node (the board) and the browser (Vite bundles the 5.1 MB `.wasm` as an asset, 2.2 MB gzipped, loaded only by
     the Fluence step); `packages/hosting/src/cbmpc.ts` gives each protocol run its own instance whose transport
     `receive` suspends (Asyncify) until the relay delivers the peer's next messages. Proven in headless Chromium
     (`cbmpc/browser-check.mjs`: keygen ~2.4 s, sign ~0.2 s with both parties in one tab); Safari and Firefox not
@@ -188,11 +188,14 @@ Advanced makers can configure the harness and pick skills; anyone can write skil
       constant-time modular arithmetic and 256-bit code run unchanged (the third-party `cb-mpc` npm build instead
       switches WASM to variable-time arithmetic). Two small patches: header guards for Emscripten, and its add/sub
       with carry no longer uses `__builtin_addcl` where `long` is 32 bits (that bug broke the zero-knowledge proofs).
-      Only the C API's 2-party ECDSA (plus core, crypto, ZK and protocol code) is compiled.
+      Only the C API's 2-party ECDSA (plus core, crypto, ZK and protocol code) is compiled, with C++ exceptions on
+      (cb-mpc reports some errors by throwing). `cbmpc/test.sh` builds cb-mpc's own crypto and ZK unit tests against
+      the WebAssembly objects and runs them in Node: all 287 pass (bignums, modular and 256-bit arithmetic, curves,
+      Paillier, proofs). Its protocol tests need threads and are not run; our own tests cover key generation and
+      signing end to end.
     - *Audit and constant time:* cb-mpc has a Cure53 audit (report in its repo, `docs/cure53-audit.pdf`) and
       constant-time tests (`make dudect`, natively). Neither covers our wasm32 build or patches; WebAssembly engines
-      make no constant-time promises (the algorithms are constant-time, the JIT is not audited for it). Running the
-      upstream unit tests under the WASM build is still to do.
+      make no constant-time promises (the algorithms are constant-time, the JIT is not audited for it).
     - *Rejected:* `@silencelaboratories/ecdsa-tss` (Lindell 2017; its repo now claims a non-commercial licence over
       all versions), Silence Laboratories' DKLs23 and Vultisig's build of it (same non-commercial licence), the
       `cb-mpc` npm package (one person's build, variable-time WASM arithmetic), Torus' and Safeheron's packages (no
