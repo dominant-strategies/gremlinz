@@ -25,7 +25,8 @@ export function gatewayConfig(e: GatewayEnv = {}): GatewayConfig {
   // Hashference first: cheaper per token than Venice, and paid in QUAI from the gremlin's own wallet. Until the gremlin
   // has made a key and bought credit it answers 402 locally and the route moves on to Venice, then the free endpoints.
   const hashference = { id: 'hashference', kind: 'hashference' as const, baseUrl: 'https://hashference.com/v1', keyFile: e.hashferenceKeyFile ?? homeFile('hashference.json'), timeoutMs: 600_000, firstByteMs: 180_000, free: false, minIntervalMs: 0 }
-  const hashferenceMain = { provider: 'hashference', model: e.hashferenceModel ?? HASHFERENCE_MAIN_MODEL, inputPerM: 0.441, outputPerM: 1.386 }
+  // Hashference caps GLM-5.3 input at 122,880 tokens estimated as two bytes of request JSON each (~240 KB): stay under.
+  const hashferenceMain = { provider: 'hashference', model: e.hashferenceModel ?? HASHFERENCE_MAIN_MODEL, inputPerM: 0.441, outputPerM: 1.386, maxRequestBytes: 235_000 }
   const providers: GatewayConfig['providers'] = [hashference, venice]
   const main: GatewayConfig['routes'][string] = [hashferenceMain, veniceMain]
   if (e.ollamaUrl && e.ollamaModel) {

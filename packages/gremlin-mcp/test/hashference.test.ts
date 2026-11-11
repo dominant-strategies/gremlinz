@@ -168,3 +168,29 @@ describe('hashference tools', () => {
     expect(JSON.stringify(await client.listTools())).not.toContain('hf_k')
   })
 })
+
+describe('size-capped targets', () => {
+  it('skips a target whose size cap the request exceeds, without calling it, and uses the next', async () => {
+    const seen: string[] = []
+    const up = createServer((req, res) => {
+      seen.push(req.url!.split('/')[1]!)
+      req.resume()
+      req.on('end', () => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' } }] })) })
+    })
+    await new Promise<void>((r) => up.listen(0, '127.0.0.1', r))
+    const u = `http://127.0.0.1:${(up.address() as { port: number }).port}`
+    const gw = createGateway(GatewayConfig.parse({
+      providers: [{ id: 'capped', kind: 'openai', baseUrl: `${u}/capped/v1` }, { id: 'roomy', kind: 'openai', baseUrl: `${u}/roomy/v1` }],
+      routes: { 'gremlin-main': [{ provider: 'capped', model: 'small', maxRequestBytes: 2_000 }, { provider: 'roomy', model: 'big' }] },
+      glean: { enabled: false },
+    }))
+    await new Promise<void>((r) => gw.listen(0, '127.0.0.1', r))
+    const base = `http://127.0.0.1:${(gw.address() as { port: number }).port}/v1`
+    const ask = (content: string) => fetch(`${base}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'gremlin-main', messages: [{ role: 'user', content }] }) })
+    try {
+      expect((await ask('short')).status).toBe(200)
+      expect((await ask('x'.repeat(5_000))).status).toBe(200)
+      expect(seen).toEqual(['capped', 'roomy'])
+    } finally { gw.close(); up.close() }
+  })
+})

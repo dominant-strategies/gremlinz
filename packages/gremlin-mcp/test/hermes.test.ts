@@ -10,7 +10,7 @@ describe('Hermes config', () => {
   }))
 
   it('uses only the gateway, above the minimum context, with auxiliary work on the free route', () => {
-    expect(cfg.model).toEqual({ provider: 'custom:gremlin', default: 'gremlin-auto', context_length: 128000 })
+    expect(cfg.model).toEqual({ provider: 'custom:gremlin', default: 'gremlin-auto', context_length: 64000 })
     expect(cfg.providers.gremlin.api).toBe('http://127.0.0.1:8711/v1')
     expect(cfg.providers.gremlin.models['gremlin-glean'].context_length).toBeGreaterThanOrEqual(64000)
     expect(cfg.auxiliary.goal_judge.model).toBe('gremlin-glean')

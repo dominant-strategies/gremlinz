@@ -55,6 +55,9 @@ export function withGlean(cfg: GatewayConfig, env: NodeJS.ProcessEnv): GatewayCo
   return { ...cfg, providers: [...cfg.providers, ...g.providers.filter((p) => !cfg.providers.some((q) => q.id === p.id))], routes: { ...cfg.routes, 'gremlin-glean': g.route } }
 }
 
+/** Size of the body as it would be sent upstream (model swapped in). */
+const requestBytes = (body: Record<string, unknown>, model: string) => Buffer.byteLength(JSON.stringify({ ...body, model }))
+
 const COOLDOWN_MIN_MS = 30_000
 /** The longest a last-resort request waits for a free provider's call interval. */
 const LAST_RESORT_WAIT_MS = 20_000
@@ -128,6 +131,8 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         tried.add(`${target.provider}/${target.model}`)
         const p = providers.get(target.provider)
         const f = fetchers.get(target.provider)
+        // A request over a target's size cap would only come back 400; go straight to the next one.
+        if (target.maxRequestBytes && requestBytes(body, target.model) > target.maxRequestBytes) { errors.push(`${target.provider}: request too large for ${target.model} (${Math.round(requestBytes(body, target.model) / 1000)} KB > ${Math.round(target.maxRequestBytes / 1000)} KB)`); continue }
         if (!p || !f) { errors.push(`${target.provider}: not configured`); continue }
         const c = cooldown.get(p.id)
         if (c && c.until > now()) { errors.push(`${p.id}: cooling down`); continue }

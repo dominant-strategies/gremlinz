@@ -36,6 +36,8 @@ export const RouteTarget = z.object({
   outputPerM: z.number().min(0).default(0),
   /** Answers what other models refuse; used to retry after an over-refusal. */
   permissive: z.boolean().optional(),
+  /** Largest request body this target accepts, in bytes (providers that cap by size); bigger requests skip it. */
+  maxRequestBytes: z.number().int().positive().optional(),
   /** Set for a lent key: calls are valued for repaying the lender and do not count against the gremlin's budget. */
   grantId: z.string().optional(),
 })

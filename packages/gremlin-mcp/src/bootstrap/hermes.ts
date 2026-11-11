@@ -28,7 +28,11 @@ export interface HermesSetup {
 const GREMLIN_TOOLSETS = ['terminal', 'file', 'memory', 'skills', 'todo', 'session_search', 'web']
 
 export function hermesConfig(s: HermesSetup): string {
-  const ctx = s.contextLength ?? 128_000
+  // The window Hermes plans for. Smaller than the models' real windows on purpose: Hashference caps a request by its JSON
+  // size (two bytes per token, ~240 KB for GLM-5.3), and a gremlin's requests run ~4.5 bytes per token (tool schemas,
+  // escaping), so ~53k real tokens is already too large. 64K is Hermes' minimum; it compresses at 75% of it, about 48k
+  // tokens (~215 KB). The gateway skips a target whose size cap a request still exceeds (maxRequestBytes).
+  const ctx = s.contextLength ?? 64_000
   const aux = (extra: object = {}) => ({ provider: 'gremlin', model: 'gremlin-glean', ...extra })
   const config = {
     providers: {
