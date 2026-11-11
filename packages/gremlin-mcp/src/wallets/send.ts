@@ -2,8 +2,8 @@
  * Outgoing sends for every family. Each sender validates the destination for its chain, builds and signs the
  * transaction, and (unless dryRun) broadcasts it. Network access is injectable for tests.
  */
-import { Contract, JsonRpcProvider, Wallet, isAddress as isEvmAddress } from 'ethers'
-import { JsonRpcProvider as QuaiProvider, Mnemonic, QiHDWallet, Wallet as QuaiWallet, Zone, getZoneForAddress, isQuaiAddress } from 'quais'
+import { Contract, JsonRpcProvider, Wallet, getAddress as evmChecksum, isAddress as isEvmAddress } from 'ethers'
+import { JsonRpcProvider as QuaiProvider, Mnemonic, QiHDWallet, Wallet as QuaiWallet, Zone, getAddress as quaiChecksum, getZoneForAddress, isQuaiAddress } from 'quais'
 import { Address, NETWORK, p2wpkh, selectUTXO } from '@scure/btc-signer'
 import { hex } from '@scure/base'
 import {
@@ -145,7 +145,10 @@ async function sendUtxo(keys: ChainKeys, chain: 'bitcoin' | 'litecoin', to: stri
 
 /** Send `amount` (base units) of `asset` to `to`. */
 export async function send(opts: { keys: ChainKeys; phrase: string; asset: Asset; to: string; amount: bigint; dryRun?: boolean; env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch }): Promise<SendResult> {
-  const { keys, phrase, asset, to, amount } = opts
+  const { keys, phrase, asset, amount } = opts
+  // Addresses often arrive all-lowercase (invoices, APIs); the libraries refuse those without a checksum. Add it.
+  // A mixed-case address with a wrong checksum still throws, so a mistyped address is never "fixed" into another.
+  const to = asset.family === 'quai' ? quaiChecksum(opts.to) : asset.family === 'evm' ? evmChecksum(opts.to) : opts.to
   const dryRun = opts.dryRun ?? false
   const env = opts.env ?? process.env
   const fetchImpl = opts.fetchImpl ?? fetch
