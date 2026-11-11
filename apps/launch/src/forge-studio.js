@@ -9,6 +9,10 @@ import * as T from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { FORGE_CRITIQUE_MAX_STILLS, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints } from '@gremlins/hatch'
 import { fitName, hideCursor, mountHud, renderHud, tickHud } from './forge-hud.js'
 import { applySkins, applyPose, drawLabels, forgetIsolate, mountLabels, resetView, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, view } from './forge-motion.js'
@@ -99,6 +103,12 @@ let lastSurface = { missed: 0, missingPictures: 0 }
 const STUDIO = '#e6e1d7' // pale studio: reads in a feed, and the accent stands out on it
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 let renderer, scene, camera, controls, rig, robot = null, spin = !reduceMotion, glOK = false
+// Post: ambient occlusion grounds every crease and joint, and the multisampled target keeps edges clean. Glows get
+// their own halos (below) rather than a full-scene bloom, which washed out the enamel and chrome highlights.
+// `quality` steps down on slow GPUs: AO goes first, then pixel density.
+let composer, aoPass, aoCamera
+const quality = { ao: true }
+const HALO_LAYER = 1 // halos live on their own layer so the AO pass, which sees layer 0 only, doesn't shade round them
 
 function initStudio() {
   const stage = $('stage')
@@ -137,6 +147,16 @@ function initStudio() {
   key.shadow.bias = -0.0004; key.shadow.normalBias = 0.02; rig.add(key); rig.add(key.target)
   const rim = new T.DirectionalLight('#dfe8ff', 1.6); rim.position.set(4, 3.5, -4); rig.add(rim); rig.add(rim.target)
   scene.add(new T.HemisphereLight('#fffaf0', '#8c8172', 0.35))
+  const fill = new T.DirectionalLight('#f3eee6', 0.7); fill.position.set(5, 2.5, 4); rig.add(fill); rig.add(fill.target)
+  composer = new EffectComposer(renderer, new T.WebGLRenderTarget(1, 1, { type: T.HalfFloatType, samples: 4 }))
+  composer.addPass(new RenderPass(scene, camera))
+  camera.layers.enable(HALO_LAYER)
+  aoCamera = camera.clone(); aoCamera.layers.set(0)
+  aoPass = new GTAOPass(scene, aoCamera, 1, 1)
+  aoPass.blendIntensity = 0.85
+  aoPass.updateGtaoMaterial({ radius: 0.32, distanceExponent: 1.6, thickness: 1.4, scale: 1.1, samples: 16 })
+  composer.addPass(aoPass)
+  composer.addPass(new OutputPass())
   new ResizeObserver(resize).observe(stage); resize()
   let down = null
   renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, t: performance.now() } })
@@ -160,10 +180,18 @@ function initStudio() {
   renderer.setAnimationLoop(() => {
     if (document.hidden) return
     const now = performance.now() / 1000, dt = lastT ? Math.min(0.1, now - lastT) : 0; lastT = now
-    // Quality step for integrated GPUs: drop to 1x pixels after ~2 s of frames slower than 32 fps.
+    // Quality steps for integrated GPUs, each after ~2 s of frames slower than 32 fps: AO off, then 1x pixels.
     avg = avg * 0.95 + dt * 0.05
-    if (avg > 1 / 32 && ++slow > 120 && renderer.getPixelRatio() > 1) { renderer.setPixelRatio(1); resize(); slow = 0 }
-    if (spin && robot && !placing && !selected.size) robot.rotation.y += 0.004
+    if (avg > 1 / 32 && ++slow > 120) {
+      slow = 0; avg = 1 / 60
+      if (quality.ao) quality.ao = false
+      else if (renderer.getPixelRatio() > 1) { renderer.setPixelRatio(1); composer.setPixelRatio(1); resize() }
+    } else if (avg <= 1 / 32) slow = 0
+    // AO reads the ghosts and glass of isolate and x-ray as solid, so it rests while they're on
+    aoPass.enabled = quality.ao && !view.isolate && !view.xray
+    // during the tour the camera drifts round the gremlin instead of the turntable spinning it
+    controls.autoRotate = view.tour && !reduceMotion; controls.autoRotateSpeed = 0.7
+    if (spin && robot && !placing && !selected.size && !view.tour) robot.rotation.y += 0.004
     if (inner && spec()) {
       const still = !!placing || selected.size > 0, rig = inner.userData.rig
       applyPose(rig, spec(), stepView(spec(), dt, now, still, reduceMotion))
@@ -177,7 +205,8 @@ function initStudio() {
     controls.update()
     rig.rotation.y = controls.getAzimuthalAngle()
     if (robot) { robot.updateMatrixWorld(); wearFrame.value.copy(robot.matrixWorld).invert() }
-    renderer.render(scene, camera)
+    if (aoPass.enabled) { aoCamera.copy(camera, false); aoCamera.layers.set(0) }
+    composer.render()
     if (inner) drawLabels(inner.userData.rig, camera, renderer.domElement.clientWidth, renderer.domElement.clientHeight)
   })
 }
@@ -185,6 +214,7 @@ function resize() {
   const el = $('stage'), w = el.clientWidth, h = el.clientHeight
   if (!w || !h || !renderer) return
   renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix()
+  composer?.setSize(w, h)
 }
 function sweepGeometry() {
   const prof = [[7, 0], [-2.2, 0]]
@@ -229,20 +259,39 @@ function focusCamera(dt) {
 }
 
 // ---------------------------------------------------------------------------------------------------- materials + geometry
-function materials(pal) {
+/**
+ * The studio's materials. `clean` is the study-model finish (teardown's look): satin enamel with a soft clear coat
+ * instead of high-gloss appliance paint. Metals are satin either way, so small parts don't streak white.
+ */
+function materials(pal, clean = view.clean) {
+  const enamel = (c) => new T.MeshPhysicalMaterial(clean
+    ? { color: c, roughness: 0.48, clearcoat: 0.35, clearcoatRoughness: 0.32 }
+    : { color: c, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.06 })
   return {
-    enamel: new T.MeshPhysicalMaterial({ color: pal.enamel, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.06 }),
-    accent: new T.MeshPhysicalMaterial({ color: pal.accent, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.06 }),
-    chrome: new T.MeshStandardMaterial({ color: '#ffffff', metalness: 1, roughness: 0.14, envMapIntensity: 1.6 }),
-    brass: new T.MeshStandardMaterial({ color: '#e0ad55', metalness: 1, roughness: 0.2, envMapIntensity: 1.6 }),
-    copper: new T.MeshStandardMaterial({ color: '#d0805a', metalness: 1, roughness: 0.24, envMapIntensity: 1.5 }),
+    enamel: enamel(pal.enamel),
+    accent: enamel(pal.accent),
+    chrome: new T.MeshStandardMaterial({ color: '#f4f4f4', metalness: 1, roughness: 0.22, envMapIntensity: 1.25 }),
+    brass: new T.MeshStandardMaterial({ color: '#e0ad55', metalness: 1, roughness: 0.28, envMapIntensity: 1.3 }),
+    copper: new T.MeshStandardMaterial({ color: '#d0805a', metalness: 1, roughness: 0.3, envMapIntensity: 1.25 }),
     glass: new T.MeshPhysicalMaterial({ color: '#0b1016', roughness: 0.04, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.02 }),
     glow: new T.MeshBasicMaterial({ color: pal.glow, toneMapped: false }),
+    halo: haloMaterial(pal.glow),
     rubber: new T.MeshStandardMaterial({ color: '#1e1f21', roughness: 0.85 }),
     steel: new T.MeshStandardMaterial({ color: '#3a3f45', metalness: 0.85, roughness: 0.48 }),
     ivory: new T.MeshPhysicalMaterial({ color: '#f4ecd8', roughness: 0.4, clearcoat: 0.6 }),
     __wear: new Map(),
   }
+}
+/** An additive radial glow in the eye colour, drawn behind nothing and casting nothing. */
+let haloTex = null
+function haloMaterial(color) {
+  if (!haloTex) {
+    const c = document.createElement('canvas'); c.width = c.height = 128
+    const g = c.getContext('2d'), grd = g.createRadialGradient(64, 64, 0, 64, 64, 64)
+    grd.addColorStop(0, 'rgba(255,255,255,.85)'); grd.addColorStop(0.18, 'rgba(255,255,255,.35)'); grd.addColorStop(0.5, 'rgba(255,255,255,.08)'); grd.addColorStop(1, 'rgba(255,255,255,0)')
+    g.fillStyle = grd; g.fillRect(0, 0, 128, 128); haloTex = new T.CanvasTexture(c); haloTex.colorSpace = T.SRGBColorSpace
+  }
+  return new T.SpriteMaterial({ map: haloTex, color, blending: T.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.55, toneMapped: false })
 }
 const D = Math.PI / 180
 function mesh(geo, mat) { const m = new T.Mesh(geo, mat); m.castShadow = true; m.receiveShadow = true; if (mat.userData.wear) m.userData.wear = mat.userData.wear; return m }
@@ -276,6 +325,19 @@ function latheRadiusAt(pts, y) {
   }
   return r
 }
+/**
+ * House detail: a big plain enamel shell with no seams or rivets of its own gets two panel seams, each with a rivet row
+ * just above it, so it reads as a machined shell and not a moulded toy. Shown only; the design is left as it is.
+ */
+function autoDetail(p, pts) {
+  if (p.seams || p.rivets || !['enamel', 'accent'].includes(p.mat) || pts.length < 3) return p
+  const ys = pts.map((v) => v.y), lo = Math.min(...ys), hi = Math.max(...ys), h = hi - lo
+  const maxR = Math.max(...pts.map((v) => v.x))
+  if (maxR < 0.28 || h < 0.4) return p
+  const seams = [lo + h * 0.34, lo + h * 0.68].filter((y) => (latheRadiusAt(pts, y) || 0) > 0.2)
+  const rivets = seams.map((y) => ({ y: y + 0.04, count: Math.min(56, Math.max(12, Math.round((2 * Math.PI * (latheRadiusAt(pts, y + 0.04) || maxR)) / 0.085))), mat: 'steel' }))
+  return { ...p, seams, rivets }
+}
 /** Rivet rows (one instanced draw each) and dark panel seams round a lathe or cylinder. */
 function addDetail(g, p, M, radiusAt) {
   for (const y of p.seams || []) {
@@ -296,27 +358,56 @@ const LINK_PROFILES = {
   disc: [[0, -0.5], [0.9, -0.5], [1, -0.25], [1, 0.25], [0.9, 0.5], [0, 0.5]],
 }
 const LINK_FILL = { drum: 0.78, disc: 0.42, ball: 0.9, block: 0.7 }
-/** A chain: `count` links threaded on a dark spine along the curve, each link one instance of a single draw. */
+/**
+ * A chain: `count` machined links threaded on a dark spine, with an accent collar on every fourth link and a pair of
+ * bolt heads on each (the reference's arm links are white drums, dark gaps, orange pads and bolts). Each layer is one
+ * instanced draw, and poseChain re-threads them along new points without building anything, so limbs can bend every
+ * frame, each copy on its own beat.
+ */
 function buildChain(g, p, M) {
-  const curve = new T.CatmullRomCurve3(p.points.map((a) => new T.Vector3(a[0], a[1], a[2])))
-  const [r0, r1] = Array.isArray(p.radius) ? p.radius : [p.radius, p.radius]
-  const len = curve.getLength(), n = p.count, segLen = len / n
-  g.add(mesh(taperedTube(curve, r0 * 0.5, r1 * 0.5, Math.max(12, Math.min(120, Math.round(len * 40)))), M.steel))
-  const geo = p.link === 'ball' ? new T.SphereGeometry(1, 20, 14)
+  const n = p.count, collarsN = Math.max(1, Math.floor((n + 1) / 4))
+  const linkGeo = p.link === 'ball' ? new T.SphereGeometry(1, 20, 14)
     : p.link === 'block' ? new RoundedBoxGeometry(1.6, 1, 1.6, 2, 0.2)
       : new T.LatheGeometry(LINK_PROFILES[p.link || 'drum'].map(([x, y]) => new T.Vector2(x, y)), 32)
-  const links = new T.InstancedMesh(geo, M[p.mat], n)
-  const pt = new T.Vector3(), tg = new T.Vector3(), up = new T.Vector3(0, 1, 0), q = new T.Quaternion(), sc = new T.Vector3(), m = new T.Matrix4()
+  const layer = (geo, mat, count) => {
+    const im = new T.InstancedMesh(geo, mat, count)
+    im.castShadow = im.receiveShadow = true; im.frustumCulled = false // they move every frame; skip re-bounding
+    if (mat.userData.wear) im.userData.wear = mat.userData.wear
+    return im
+  }
+  const ch = new T.Group()
+  ch.add(
+    layer(linkGeo, M[p.mat], n),
+    layer(new T.CylinderGeometry(1, 1, 1, 14, 1), M.steel, n),
+    layer(new T.TorusGeometry(1, 0.16, 8, 32), p.mat === 'accent' ? M.steel : M.accent, collarsN),
+    layer(new T.SphereGeometry(1, 8, 6), M.steel, n * 2),
+  )
+  ch.userData.chain = { points: p.points, radius: p.radius, link: p.link || 'drum' }
+  poseChain(ch, p.points)
+  g.add(ch)
+}
+const _c = { pt: new T.Vector3(), tg: new T.Vector3(), side: new T.Vector3(), q: new T.Quaternion(), qz: new T.Quaternion(), sc: new T.Vector3(), m: new T.Matrix4(), y: new T.Vector3(0, 1, 0), z: new T.Vector3(0, 0, 1), x: new T.Vector3(1, 0, 0), b: new T.Vector3() }
+/** Lays a chain's links, spine, collars and bolts along `points`. */
+function poseChain(ch, points) {
+  const { radius, link } = ch.userData.chain, [links, spine, collars, bolts] = ch.children
+  const curve = new T.CatmullRomCurve3(points.map((a) => new T.Vector3(a[0], a[1], a[2])))
+  curve.arcLengthDivisions = 64
+  const [r0, r1] = Array.isArray(radius) ? radius : [radius, radius]
+  const n = links.count, segLen = curve.getLength() / n
+  const { pt, tg, side, q, qz, sc, m, y, z, x, b } = _c
+  let c = 0
   for (let i = 0; i < n; i++) {
     const u = (i + 0.5) / n, r = r0 + (r1 - r0) * u
-    curve.getPointAt(u, pt); curve.getTangentAt(u, tg); q.setFromUnitVectors(up, tg)
-    const h = p.link === 'ball' ? Math.min(r, segLen * 0.5) : segLen * LINK_FILL[p.link || 'drum']
-    if (p.link === 'ball') sc.set(h, h, h); else sc.set(r, h, r)
+    curve.getPointAt(u, pt); curve.getTangentAt(u, tg); q.setFromUnitVectors(y, tg)
+    const h = link === 'ball' ? Math.min(r, segLen * 0.5) : segLen * LINK_FILL[link]
+    if (link === 'ball') sc.set(h, h, h); else sc.set(r, h, r)
     links.setMatrixAt(i, m.compose(pt, q, sc))
+    spine.setMatrixAt(i, m.compose(pt, q, sc.set(r * 0.5, segLen * 1.05, r * 0.5)))
+    side.copy(x).applyQuaternion(q)
+    for (const k of [1, -1]) bolts.setMatrixAt(i * 2 + (k > 0 ? 0 : 1), m.compose(b.copy(pt).addScaledVector(side, r * k * 0.98), q, sc.setScalar(Math.max(0.006, r * 0.14))))
+    if (i % 4 === 2 && c < collars.count) { qz.setFromUnitVectors(z, tg); collars.setMatrixAt(c++, m.compose(pt, qz, sc.setScalar(r * 1.04))) }
   }
-  links.castShadow = links.receiveShadow = true; links.computeBoundingSphere()
-  if (M[p.mat].userData.wear) links.userData.wear = M[p.mat].userData.wear
-  g.add(links)
+  for (const im of ch.children) { im.instanceMatrix.needsUpdate = true; im.boundingSphere = null } // re-bound on the next pick
 }
 function buildOne(p, M0, spec) {
   const g = new T.Group(), mat = partMats(spec, p, M0)
@@ -325,7 +416,7 @@ function buildOne(p, M0, spec) {
     let pts = p.profile.map(([r, y]) => new T.Vector2(r, y))
     if (pts.length >= 3) pts = new T.SplineCurve(pts).getPoints(Math.min(120, pts.length * 12)).map((v) => new T.Vector2(Math.max(0, v.x), v.y))
     g.add(mesh(new T.LatheGeometry(pts, 96), M[p.mat]))
-    addDetail(g, p, M, (y) => latheRadiusAt(pts, y))
+    addDetail(g, autoDetail(p, pts), M, (y) => latheRadiusAt(pts, y))
   } else if (p.kind === 'tube') {
     const curve = new T.CatmullRomCurve3(p.points.map((a) => new T.Vector3(a[0], a[1], a[2])))
     const segs = Math.max(12, Math.min(120, Math.round(curve.getLength() * 40)))
@@ -362,6 +453,8 @@ function buildOne(p, M0, spec) {
     if (p.eye === 'ring') m = mesh(new T.TorusGeometry(s, s * 0.12, 8, 40), M.glow)
     if (p.eye === 'smile') { m = mesh(new T.TorusGeometry(s, s * 0.15, 8, 24, 1.7), M.glow); m.rotation.z = Math.PI + (Math.PI - 1.7) / 2 }
     m.castShadow = false; g.add(m); g.userData.glow = true
+    // a soft halo facing the camera, so the eye reads as a light without blooming the whole frame
+    const halo = new T.Sprite(M0.halo); halo.scale.setScalar(s * 7); halo.position.z = s * 0.4; halo.userData.overlay = halo.userData.halo = true; halo.layers.set(HALO_LAYER); halo.raycast = () => {}; g.add(halo)
   } else {
     const s = p.size; let geo
     if (p.kind === 'sphere') geo = new T.SphereGeometry(s[0], 40, 28)
@@ -424,7 +517,7 @@ function buildParts(spec, M) {
     }
     const j = a.joint, piv = j ? j.pivot : [0, 0, 0]
     rig[a.id] = {
-      a, node, bends: [], bent: 0,
+      a, node, bends: [], waves: [], bent: 0,
       main: pivotGroup(piv),
       mirror: j?.move === 'open' ? pivotGroup([-piv[0], piv[1], piv[2]]) : null,
       axis: j ? new T.Vector3(...j.axis).normalize() : new T.Vector3(0, 1, 0),
@@ -447,8 +540,17 @@ function buildParts(spec, M) {
     }
     r.main.content.add(plain)
     ;(r.mirror ? r.mirror.content : r.main.content).add(mirrored)
-    // Curling limbs: rebuild the part along bent points and swap it into every copy.
-    if (r.a.joint?.move === 'curl' && pathed(p)) {
+    // Curling chains re-thread every frame, each copy (each arm of a radial set, each side of a mirror) on its own
+    // beat so the limbs wave independently instead of in lockstep.
+    if (r.a.joint?.move === 'curl' && p.kind === 'chain') {
+      const j = r.a.joint
+      r.waves.push((deg, t, idle) => holders.forEach((h, k) => {
+        const d = deg + (idle ? j.range * 0.1 * Math.sin(t * 1.3 + k * 0.9) + j.range * 0.04 * Math.sin(t * 2.3 + k * 2.1) : 0)
+        const pts = curlPoints(p.points, j.axis, d)
+        h.traverse((o) => { if (o.userData.chain) poseChain(o, pts) })
+      }))
+    } else if (r.a.joint?.move === 'curl' && pathed(p)) {
+      // Curling tubes: rebuild the part along bent points and swap it into every copy.
       r.bends.push((deg) => {
         const bent = buildOne({ ...p, points: curlPoints(p.points, r.a.joint.axis, deg) }, M, spec)
         tagPart(bent, i)
@@ -510,7 +612,9 @@ function rebuild(fresh) {
   if (!glOK || !sp) return
   const rot = robot ? robot.rotation.y : 0
   if (robot) { scene.remove(robot); disposeTree(robot) }
-  inner = buildParts(sp, materials(sp.palette))
+  // Clean is how it's shown, not part of the design: weathering stays in the spec and comes back when Clean is off.
+  const shown = view.clean ? { ...sp, wear: [], parts: sp.parts.map(({ wear: _w, ...p }) => p) } : sp
+  inner = buildParts(shown, materials(sp.palette))
   forgetIsolate(); resetView(sp)
   const bb = new T.Box3().setFromObject(inner), size = new T.Vector3(), c = new T.Vector3(); bb.getSize(size); bb.getCenter(c)
   let s = Math.min(2.2, Math.max(0.4, 2.4 / Math.max(0.3, size.y)))
@@ -557,7 +661,7 @@ let consoleKey = ''
 function syncConsole(force) {
   const m = spec()?.modes?.find((x) => x.id === view.mode)
   const up = view.mode !== 'idle' && (view.inputTo > 0 || view.input > 0.02)
-  const key = [view.isolate, up && view.mode, view.explodeTo, view.labels, view.tour, view.xray].join('|')
+  const key = [view.isolate, up && view.mode, view.explodeTo, view.labels, view.tour, view.xray, view.clean].join('|')
   if (!force && key === consoleKey) return
   consoleKey = key
   for (const b of $('asmChips').children) b.setAttribute('aria-pressed', String(view.isolate === b.dataset.asm))
@@ -566,6 +670,7 @@ function syncConsole(force) {
   $('dExplode').setAttribute('aria-pressed', String(view.explodeTo > 0))
   $('dTour').setAttribute('aria-pressed', String(view.tour))
   $('dXray').setAttribute('aria-pressed', String(view.xray))
+  $('dClean').setAttribute('aria-pressed', String(view.clean))
   if (!view.tour) hideCursor()
   const ml = $('modeLabel'), word = up ? m?.name : view.explodeTo > 0 ? 'Exploded' : view.isolate ? spec()?.assemblies?.find((a) => a.id === view.isolate)?.name : ''
   ml.classList.toggle('rest', !word)
@@ -573,6 +678,11 @@ function syncConsole(force) {
 }
 $('dLabels').addEventListener('click', () => { view.labels = !view.labels; syncConsole(true) })
 $('dXray').addEventListener('click', () => { view.xray = !view.xray; syncConsole(true) })
+$('dClean').addEventListener('click', () => {
+  view.clean = !view.clean
+  try { localStorage.setItem('gremlins.forge.clean', view.clean ? '1' : '0') } catch { /* private mode */ }
+  rebuild(false); syncConsole(true)
+})
 $('dExplode').addEventListener('click', () => { toggleExplode(); syncConsole(true) })
 $('dTour').addEventListener('click', () => { if (view.tour) stopTour(); else startTour(performance.now() / 1000); syncConsole(true) })
 

@@ -14,7 +14,7 @@ const EXPLODE_SECONDS = 0.9
 /** Viewer state. `input` and `explode` move toward their targets each frame, so every change animates. */
 export const view = {
   mode: 'idle', input: 0, inputTo: 0, explode: 0, explodeTo: 0,
-  isolate: null, labels: false, xray: false, tour: false, tourStart: 0, beats: [], beat: -1,
+  isolate: null, labels: false, xray: false, clean: (() => { try { return localStorage.getItem('gremlins.forge.clean') === '1' } catch { return false } })(), tour: false, tourStart: 0, beats: [], beat: -1,
   pose: {},
 }
 
@@ -88,7 +88,10 @@ export function applyPose(rig, spec, poseIn) {
       r.main.pv.position.addScaledVector(r.axis, v)
     } else if (j.move === 'pulse') {
       r.main.pv.scale.setScalar(1 + v)
-    } else if (j.move === 'curl' && r.bends.length && Math.abs(v - r.bent) > 0.75) {
+    } else if (j.move === 'curl' && r.waves.length) {
+      for (const wave of r.waves) wave(v, poseIn.t ?? 0, poseIn.idle !== false)
+    }
+    if (j.move === 'curl' && r.bends.length && Math.abs(v - r.bent) > 0.75) {
       r.bent = v
       for (const bend of r.bends) bend(v)
       skinned = null // the bent limbs are new meshes: isolate and x-ray have to reach them too
@@ -113,6 +116,7 @@ export function applySkins(rig, isolate, xray) {
   for (const r of Object.values(rig)) {
     const ghost = !!isolate && r.a.id !== isolate
     r.node.traverse((n) => {
+      if (n.userData.halo) { n.visible = !ghost; return }
       if (!n.isMesh) return
       if (n.userData.ink) { n.visible = !ghost && !xray; return }
       if (n.userData.overlay) return
