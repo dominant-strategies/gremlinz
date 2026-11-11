@@ -51,13 +51,18 @@ export interface RouterInput {
   seen?: Map<string, Observed>
   glean?: RouteTarget[]
   fallback?: RouteTarget[]
+  /** Health is bad or critical (not for lack of inference): cheapest adequate model first, one quality step down. */
+  conserve?: boolean
 }
+
+const STEP_DOWN: Record<Complexity, Complexity> = { hard: 'medium', medium: 'small', small: 'small' }
 
 export function routeFor(c: Classification, inp: RouterInput): RouteTarget[] {
   const usable = inp.ratings.filter((r) => inp.providers.has(r.provider) && (!c.needsTools || !inp.toolCapable || inp.toolCapable.has(`${r.provider}/${r.model}`)))
-  const ranked = rank(usable, c.domain, { minQuality: QUALITY_FLOOR[c.complexity], seen: inp.seen })
+  const ranked = rank(usable, c.domain, { minQuality: QUALITY_FLOOR[inp.conserve ? STEP_DOWN[c.complexity] : c.complexity], seen: inp.seen })
+  if (inp.conserve) ranked.sort((a, b) => a.usdPerTask - b.usdPerTask || b.quality - a.quality)
   const fromRatings: RouteTarget[] = ranked.map(({ r }) => ({ provider: r.provider, model: r.model, inputPerM: r.inputPerM, outputPerM: r.outputPerM, permissive: r.permissive }))
-  const route = [...(c.complexity === 'small' && !c.needsTools ? inp.glean ?? [] : []), ...fromRatings, ...(inp.fallback ?? [])]
+  const route = [...((c.complexity === 'small' || inp.conserve) && !c.needsTools ? inp.glean ?? [] : []), ...fromRatings, ...(inp.fallback ?? [])]
   const seenKeys = new Set<string>()
   return route.filter((t) => !seenKeys.has(`${t.provider}/${t.model}`) && seenKeys.add(`${t.provider}/${t.model}`))
 }

@@ -28,6 +28,23 @@ export interface GatewayDeps {
   lent?: () => { provider: ProviderConfig; fetch: UpstreamFetch; targets: RouteTarget[] }[]
   /** Ratings and observations for gremlin-auto (read per request, so refreshed ratings apply at once). */
   router?: () => Omit<RouterInput, 'providers' | 'glean' | 'fallback'>
+  /** The health monitor's word for the model (health.json), added to every request; undefined adds nothing. */
+  health?: () => { directive?: string; conserve?: boolean } | undefined
+}
+
+/** Only this machine may use the admin endpoints (the gateway binds to localhost too; this holds if it ever doesn't). */
+export const isLocal = (addr?: string) => addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
+
+/**
+ * The health directive as a system message right after the caller's own system prompt, where the model weighs it as
+ * instructions rather than as conversation. The prompt prefix before it is unchanged, so prompt caches still hit.
+ */
+export function withDirective<T extends { messages?: unknown }>(body: T, directive?: string): T {
+  if (!directive || !Array.isArray(body.messages)) return body
+  const msgs = body.messages as { role?: string }[]
+  let i = 0
+  while (i < msgs.length && (msgs[i]!.role === 'system' || msgs[i]!.role === 'developer')) i++
+  return { ...body, messages: [...msgs.slice(0, i), { role: 'system', content: directive }, ...msgs.slice(i)] }
 }
 
 /** Adds the reviewed free endpoints as gremlin-glean (unless the config defines that alias itself). */
@@ -65,20 +82,30 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
     try {
       if (req.method === 'GET' && req.url === '/v1/models')
         return json(res, 200, { object: 'list', data: [...Object.keys(cfg.routes), ...(deps.router ? [AUTO] : [])].map((id) => ({ id, object: 'model', owned_by: 'gremlin' })) })
+      if (req.method === 'POST' && req.url === '/admin/cooldown/reset') {
+        // The health monitor calls this after a top-up, so a provider benched for wanting payment is tried at once.
+        if (!isLocal(req.socket.remoteAddress)) return json(res, 403, { error: { message: 'localhost only' } })
+        const { provider } = JSON.parse((await readBody(req, 4096)) || '{}') as { provider?: string }
+        const reset = provider ? (cooldown.delete(provider) ? [provider] : []) : [...cooldown.keys()]
+        if (!provider) cooldown.clear()
+        if (reset.length) log(`cooldown reset: ${reset.join(', ')}`)
+        return json(res, 200, { reset })
+      }
       if (req.method === 'GET' && req.url === '/health')
         return json(res, 200, { ok: true, cooling: Object.fromEntries([...cooldown].filter(([, c]) => c.until > now()).map(([id, c]) => [id, new Date(c.until).toISOString()])) })
       if (req.method !== 'POST' || req.url !== '/v1/chat/completions') return json(res, 404, { error: { message: 'not found' } })
 
-      const body = JSON.parse(await readBody(req)) as Record<string, unknown>
+      const health = deps.health?.()
+      const body = withDirective(JSON.parse(await readBody(req)) as Record<string, unknown>, health?.directive)
       const alias = String(body.model ?? '')
       let route = cfg.routes[alias]
       let retryOnRefusal: RouteTarget[] = []
       if (alias === AUTO && deps.router) {
         const c = classify(body as Parameters<typeof classify>[0])
-        const inp: RouterInput = { ...deps.router(), providers: new Set(providers.keys()), glean: cfg.routes['gremlin-glean'], fallback: cfg.routes['gremlin-main'] }
+        const inp: RouterInput = { ...deps.router(), providers: new Set(providers.keys()), glean: cfg.routes['gremlin-glean'], fallback: cfg.routes['gremlin-main'], conserve: !!health?.conserve }
         route = routeFor(c, inp)
         if (!body.stream && mayRetryRefusal(body as Parameters<typeof mayRetryRefusal>[0])) retryOnRefusal = permissiveRoute(c, inp)
-        log(`auto: ${c.domain}/${c.complexity}${c.needsTools ? '/tools' : ''} → ${route.map((t) => `${t.provider}/${t.model}`).join(', ') || '(none)'}`)
+        log(`auto: ${c.domain}/${c.complexity}${c.needsTools ? '/tools' : ''}${inp.conserve ? ' (conserving)' : ''} → ${route.map((t) => `${t.provider}/${t.model}`).join(', ') || '(none)'}`)
       }
       if (!route) return json(res, 404, { error: { message: `unknown model "${alias}"; use one of: ${[...Object.keys(cfg.routes), ...(deps.router ? [AUTO] : [])].join(', ')}` } })
 
