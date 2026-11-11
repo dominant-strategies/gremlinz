@@ -24,6 +24,9 @@ export default defineConfig({
       globals: { Buffer: true, process: true },
     }),
   ],
+  // `vite` dev: the board serves the API in production (same origin), so forward /api to a local board
+  // (`PORT=8790 node --env-file=.env src/main.ts` in apps/board; ANTHROPIC_API_KEY in that .env turns Forge design on).
+  server: { proxy: { '/api': process.env.BOARD_DEV_URL ?? 'http://127.0.0.1:8790' } },
   build: {
     target: 'es2022',
     rollupOptions: {
