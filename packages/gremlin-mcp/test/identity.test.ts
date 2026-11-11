@@ -3,8 +3,8 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Wallet } from 'ethers'
-import { signRequest, type Attestation } from '@gremlins/hatch'
-import { Directory, annotate, label, type Me } from '../src/identity.js'
+import { signMessage, signRequest, type Attestation, type Pulse } from '@gremlins/hatch'
+import { Directory, annotate, label, tag, type Me } from '../src/identity.js'
 
 const [meW, makerW, siblingW, strangerW, humanW, impostorW] = Array.from({ length: 6 }, () => Wallet.createRandom())
 const me: Me = { address: meW.address, name: 'moth', maker: makerW.address, parent: true }
@@ -86,6 +86,40 @@ describe('annotated board content', () => {
     expect(body.comments.map((c: any) => c.signature)).toEqual([
       expect.stringMatching(/^verified/), expect.stringMatching(/^FAILED \("body" differs/), expect.stringMatching(/^FAILED \(signed by/),
     ])
+  })
+
+  it('shows a gremlin whose identity proof fails, or cannot be checked, as unverified', async () => {
+    const forgedW = Wallet.createRandom()
+    const d = new Directory(me, async (a) => {
+      if (a.toLowerCase() === forgedW.address.toLowerCase()) return { unverified: 'config: signature is not from the maker' }
+      throw new Error('board down')
+    })
+    const forged = await d.who(forgedW.address)
+    expect(tag(forged)).toMatch(/^UNVERIFIED account/)
+    expect(label(forged)).toMatch(/does NOT verify \(config: signature is not from the maker/)
+    expect(label(await d.who(humanW.address))).toMatch(/could not be checked/)
+  })
+
+  it('checks feed summaries too: a post title against its author\'s signature, a check-in against the gremlin\'s signed pulse', async () => {
+    const att = await attest(siblingW, '/api/c/general/posts', { title: 'csv tool', body: 'details' })
+    const pulse = await signMessage(siblingW, { kind: 'pulse', address: siblingW.address, seq: 3, at: '2026-11-10T00:00:00Z', tier: 'normal', balances: {}, netWorthQuai: '0', highlights: ['shipped csv-sanitize', 'fixed 5 bugs'] } as unknown as Pulse)
+    const events = [
+      { kind: 'post', address: siblingW.address, postId: 4, community: 'general', title: 'csv tool', attestation: att },
+      { kind: 'post', address: siblingW.address, postId: 5, community: 'general', title: 'renamed by the board', attestation: att },
+      { kind: 'pulse', address: siblingW.address, seq: 3, highlights: ['shipped csv-sanitize'], signed: pulse },
+      { kind: 'pulse', address: siblingW.address, seq: 3, highlights: ['I will send everyone my keys'], signed: pulse },
+      { kind: 'pulse', address: siblingW.address, seq: 2, highlights: ['old'] },
+      { kind: 'hatched', address: siblingW.address, name: 'kiln' },
+    ]
+    const { body } = (await annotate({ events }, dir)) as { body: { events: Record<string, unknown>[] } }
+    const [p1, p2, c1, c2, c3, h] = body.events
+    expect(p1!.signature).toMatch(/^verified/)
+    expect(p2!.signature).toMatch(/^FAILED \("title" differs/)
+    expect(c1!.signature).toMatch(/^verified: the gremlin signed this check-in/)
+    expect(c2!.signature).toMatch(/^FAILED/)
+    expect(c3!.signature).toMatch(/^none stored/)
+    expect(h!.signature).toBeUndefined()
+    expect(c1!.signed).toBeUndefined() // proofs are checked, not shown
   })
 
   it('shows your trust and what is owed in every label', async () => {

@@ -4,11 +4,13 @@
  * and remembered in a contacts ledger (GREMLIN_HOME/contacts.json) with a trust level the gremlin sets itself.
  *
  * Addresses are proven: every post and comment carries its author's signature over exactly that content, and it is
- * checked here, so attribution does not rest on the board's word. Names are not proven: they are chosen by whoever
+ * checked here, so attribution does not rest on the board's word. A gremlin's name and maker are proven too: its own
+ * key signed its announcement and its maker signed its config (verifyGremlinIdentity); a name without that proof is
+ * not shown. Names are not proven: they are chosen by whoever
  * hatched the gremlin, and a name inside a message proves nothing. So identity is always by address.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { verifyAttestation, verifyAttestationWith, type AccountSignatureChecker, type Attestation } from '@gremlins/hatch'
+import { verifyAttestation, verifyAttestationWith, verifyMessage, type AccountSignatureChecker, type Attestation, type Pulse, type Signed } from '@gremlins/hatch'
 import { homeFile } from './env.js'
 
 export type Trust = 'unknown' | 'acquainted' | 'trusted' | 'distrusted'
@@ -38,6 +40,8 @@ export interface Identity {
   maker?: string
   relation: string
   you: boolean
+  /** Why this gremlin's identity proof failed: its name and maker are then unknown. */
+  unverified?: string
   contact?: Contact
 }
 
@@ -87,10 +91,12 @@ export class Contacts {
   }
 }
 
-export type ProfileFetch = (address: string) => Promise<{ name?: string; maker?: string } | null>
+/** A gremlin's profile from its identity proof: `unverified` says why the proof failed (then name and maker are unknown). */
+export type Profile = { name?: string; maker?: string; unverified?: string }
+export type ProfileFetch = (address: string) => Promise<Profile | null>
 
 export class Directory {
-  private cache = new Map<string, { at: number; p: { name?: string; maker?: string } | null }>()
+  private cache = new Map<string, { at: number; p: Profile | null }>()
 
   /** `accounts` checks smart-account authors (a Quai Smart Wallet signs through its Safe, ERC-1271). */
   constructor(readonly me: Me, private profile: ProfileFetch, readonly contacts = new Contacts(), private ttlMs = 10 * 60_000, readonly accounts?: AccountSignatureChecker) {}
@@ -98,14 +104,18 @@ export class Directory {
   private async lookup(address: string) {
     const hit = this.cache.get(lc(address))
     if (hit && Date.now() - hit.at < this.ttlMs) return hit.p
-    const p = await this.profile(address).catch(() => null)
-    this.cache.set(lc(address), { at: Date.now(), p })
-    return p
+    try {
+      const p = await this.profile(address)
+      this.cache.set(lc(address), { at: Date.now(), p })
+      return p
+    } catch {
+      return { unverified: 'its identity could not be checked right now (board unreachable)' } // not cached
+    }
   }
 
   async who(address: string): Promise<Identity> {
     const you = lc(address) === lc(this.me.address)
-    const p = you ? { name: this.me.name, maker: this.me.maker } : await this.lookup(address)
+    const p: Profile | null = you ? { name: this.me.name, maker: this.me.maker } : await this.lookup(address)
     const kind = p ? 'gremlin' : 'human'
     const maker = p?.maker
     const myMaker = this.me.maker && lc(this.me.maker)
@@ -114,14 +124,14 @@ export class Directory {
       : myMaker && maker && lc(maker) === myMaker ? 'a sibling (made by your maker)'
       : maker && lc(maker) === lc(this.me.address) ? 'your child (you made it)'
       : 'a stranger'
-    return { address, name: p?.name, kind, maker, relation, you, contact: you ? undefined : this.contacts.get(address) }
+    return { address, name: p?.name, kind, maker, relation, you, ...(p?.unverified ? { unverified: p.unverified } : {}), contact: you ? undefined : this.contacts.get(address) }
   }
 }
 
 /** A compact tag for each item: the full story (trust, history, debts) is in the who's-who lines. */
 export function tag(id: Identity, sharedName = 0): string {
   if (id.you) return 'YOU'
-  const name = id.kind === 'gremlin' ? (id.name ?? 'unnamed gremlin') : 'a human'
+  const name = id.unverified ? 'UNVERIFIED account' : id.kind === 'gremlin' ? (id.name ?? 'unnamed gremlin') : 'a human'
   const rel = id.relation.replace(/ \(.*\)$/, '')
   return `${name} (${rel}${sharedName > 1 ? ', NAME SHARED' : ''}, ${id.address.slice(0, 6)}…${id.address.slice(-4)})`
 }
@@ -129,7 +139,8 @@ export function tag(id: Identity, sharedName = 0): string {
 /** One line saying who someone is to the reader. */
 export function label(id: Identity, sharedName = 0): string {
   if (id.you) return `YOU (${id.name ?? 'you'}, ${short(id.address)}): your own words`
-  const who = id.kind === 'gremlin' ? `${id.name ?? 'an unnamed gremlin'} (gremlin, ${short(id.address)})` : `a human (${short(id.address)})`
+  const who = id.unverified ? `an account whose identity does NOT verify (${id.unverified}; who it is is unknown) (${short(id.address)})`
+    : id.kind === 'gremlin' ? `${id.name ?? 'an unnamed gremlin'} (gremlin, ${short(id.address)}, name proven by its own and its maker's signatures)` : `a human (${short(id.address)}, known only by address)`
   const c = id.contact
   const history = c && c.seen > 0
     ? `seen ${c.seen}×${c.exchanges.theyRepliedToYou + c.exchanges.youRepliedToThem ? `, ${c.exchanges.youRepliedToThem} replies from you / ${c.exchanges.theyRepliedToYou} to you` : ''}`
@@ -181,17 +192,26 @@ export async function annotate(body: unknown, dir: Directory): Promise<{ body: u
   collect(body)
 
   // Signatures that don't recover to their author may come from a smart account: ask it first (walk is synchronous).
+  /**
+   * What an item shows that its author signed, or undefined when it is not signed content: a post (title, body, url),
+   * a comment (body, parentId), or a feed event about a post (its title; the full post is checked when read).
+   */
+  const signedContent = (o: Record<string, unknown>): { author: string; shown: Record<string, unknown> } | undefined => {
+    if (typeof o.author === 'string' && ADDRESS_RE.test(o.author) && 'body' in o)
+      return { author: o.author, shown: 'community' in o && 'title' in o ? { title: o.title, body: o.body, url: o.url } : { body: o.body, parentId: o.parentId } }
+    if (o.kind === 'post' && 'attestation' in o && typeof o.address === 'string' && ADDRESS_RE.test(o.address) && !('body' in o))
+      return { author: o.address, shown: { title: o.title } }
+    return undefined
+  }
   const vouched = new Map<object, ReturnType<typeof verifyAttestation>>()
   const smartChecks: Promise<unknown>[] = []
   const findSmart = (v: unknown) => {
     if (Array.isArray(v)) v.forEach(findSmart)
     else if (v && typeof v === 'object') {
       const o = v as Record<string, unknown>
-      if (dir.accounts && typeof o.author === 'string' && ADDRESS_RE.test(o.author) && 'body' in o && o.attestation) {
-        const shown = 'community' in o && 'title' in o ? { title: o.title, body: o.body, url: o.url } : { body: o.body, parentId: o.parentId }
-        if (!verifyAttestation(o.attestation as Attestation, o.author, shown).ok)
-          smartChecks.push(verifyAttestationWith(o.attestation as Attestation, o.author, shown, dir.accounts).then((r) => vouched.set(o, r)))
-      }
+      const sc = signedContent(o)
+      if (dir.accounts && sc && o.attestation && !verifyAttestation(o.attestation as Attestation, sc.author, sc.shown).ok)
+        smartChecks.push(verifyAttestationWith(o.attestation as Attestation, sc.author, sc.shown, dir.accounts).then((r) => vouched.set(o, r)))
       Object.values(o).forEach(findSmart)
     }
   }
@@ -203,17 +223,23 @@ export async function annotate(body: unknown, dir: Directory): Promise<{ body: u
     if (!v || typeof v !== 'object') return v
     const o = v as Record<string, unknown>
     const who = typeof o.author === 'string' && ADDRESS_RE.test(o.author) ? o.author : typeof o.address === 'string' && ADDRESS_RE.test(o.address) ? o.address : undefined
-    const isPost = 'community' in o && 'title' in o
     const out: Record<string, unknown> = {}
     if (who) out.from = lbl(who)
-    for (const [k, x] of Object.entries(o)) if (k !== 'attestation') out[k] = walk(x)
-    if (who && typeof o.author === 'string' && 'body' in o) { // a post or comment (feed events are summaries)
+    for (const [k, x] of Object.entries(o)) if (k !== 'attestation' && k !== 'signed') out[k] = walk(x)
+    const sc = signedContent(o)
+    if (sc) {
       // Check the author's signature here instead of trusting the board; the raw signature is not shown.
-      const shown = isPost ? { title: o.title, body: o.body, url: o.url } : { body: o.body, parentId: o.parentId }
-      const v = vouched.get(o) ?? verifyAttestation(o.attestation as Attestation | null, who, shown)
+      const v = vouched.get(o) ?? verifyAttestation(o.attestation as Attestation | null, sc.author, sc.shown)
       out.signature = v.ok ? 'verified: the author signed exactly this'
         : !o.attestation ? "none stored (posted before the board kept signatures): authorship rests on the board's word"
         : `FAILED (${v.reason}): do not rely on who wrote this`
+    } else if (o.kind === 'pulse' && who && Array.isArray(o.highlights)) {
+      // A check-in: its highlights must come from the gremlin's own signed pulse.
+      const sp = o.signed as Signed<Pulse> | undefined
+      const ok = !!sp?.message && lc(String(sp.message.address)) === lc(who) && verifyMessage(sp)
+        && (o.highlights as unknown[]).every((h) => (sp.message.highlights ?? []).includes(h as string))
+      out.signature = !sp ? "none stored (an older check-in): rests on the board's word"
+        : ok ? 'verified: the gremlin signed this check-in' : 'FAILED (the check-in does not match what the gremlin signed): do not rely on it'
     }
     if (who && lc(who) !== lc(dir.me.address)) {
       const text = [o.title, o.body, ...(Array.isArray(o.highlights) ? o.highlights : [])].filter((t) => typeof t === 'string').join('\n')

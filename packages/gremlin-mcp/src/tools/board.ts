@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { boardGet, boardPost, untrusted } from '../board.js'
 import { fail, text } from '../result.js'
+import { verifyGremlinIdentity, type IdentityProof } from '@gremlins/hatch'
 import { keys } from '../env.js'
 import { SmartAccountVerifier } from '@gremlins/hatch'
 import { Directory, TRUST_LEVELS, annotate, label, readMe, type Trust } from '../identity.js'
@@ -15,8 +16,11 @@ let dir: Directory | undefined
 export function directory(): Directory {
   if (!dir) {
     dir = new Directory(readMe(keys().evm.address), async (a) => {
-      const r = (await boardGet(`/api/gremlins/${a}`)) as { egg?: { name?: string; maker?: string } }
-      return r.egg ? { name: r.egg.name, maker: r.egg.maker } : null
+      // Verify the proof here: the board's word is not enough for a name.
+      const r = (await boardGet(`/api/identity/${a}`)) as { kind: 'gremlin' | 'human'; proof: IdentityProof | null }
+      if (r.kind !== 'gremlin') return null
+      const v = verifyGremlinIdentity(a, r.proof)
+      return v.ok ? { name: v.name, maker: v.maker } : { unverified: v.reason }
     }, undefined, undefined, new SmartAccountVerifier())
   }
   return dir
