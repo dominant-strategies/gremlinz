@@ -7,6 +7,7 @@ import { formatUnits } from 'ethers'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { chainKeys, homeFile, keys, phrase } from '../env.js'
 import { fail, text } from '../result.js'
+import { readHealth, spendGate } from '../health/gate.js'
 import { balance, buyCredit, readKey, setupKey, type Purchase } from '../hashference.js'
 import { send } from '../wallets/send.js'
 import { ASSETS } from '../wallets/chains.js'
@@ -68,9 +69,17 @@ export function registerHashferenceTools(server: McpServer, deps: HashferenceDep
   server.registerTool('hashference_topup', {
     description:
       'Buy Hashference inference credit with QUAI from your wallet: creates an invoice for usd dollars ($1 to $100), pays exactly the quoted QUAI, and waits for Hashference to credit it. Spend in proportion to your runway; credit you do not use stays in your account.',
-    inputSchema: { usd: z.number().min(1).max(100) },
+    inputSchema: {
+      usd: z.number().min(1).max(100),
+      reason: z.string().max(500).optional().describe('Only needed when your health is critical: how this serves your survival.'),
+    },
     annotations: { destructiveHint: true },
-  }, async ({ usd }) => {
+  }, async ({ usd, reason }) => {
+    // Buying up to the monitor's target is survival; more than that, at critical health, needs a reason.
+    const inf = readHealth()?.areas.inference.numbers
+    const room = inf ? Math.max(1, Number(inf.targetUsd) - Number(inf.inferenceUsd)) : Infinity
+    const gate = spendGate('hashference_topup', { reason, survival: usd <= room, detail: `$${usd}` })
+    if (gate) return fail(gate)
     const k = readKey(keyFile())
     if (!k) return fail('No Hashference account yet; run hashference_setup first.')
     let p: Purchase

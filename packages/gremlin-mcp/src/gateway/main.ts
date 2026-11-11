@@ -11,6 +11,7 @@ import { veniceFetch } from './venice.js'
 import { setKnownSecrets } from './glean.js'
 import { base58 } from '@scure/base'
 import { hashferenceFetch } from './providers.js'
+import { healthReader } from '../health/gate.js'
 
 const cfg = GatewayConfig.parse(JSON.parse(readFileSync(process.env.GATEWAY_CONFIG ?? '/etc/gremlin/gateway.json', 'utf8')))
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a)
@@ -61,5 +62,6 @@ const lent = () => lentOffers(grants.map((g) => {
   return { g, allow: allowance(g.grant.policy, now, used, remaining.get(g.grant.grantId)) }
 }))
 
-createGateway(cfg, { log, fetchers, router, lent, onCall: (r, t) => ledger.record(r, t), refuse: () => ledger.refuse(cfg.budget?.dailyUsd) })
+// The health monitor's directive goes into every request (re-read every 30 s; none when health.json is stale).
+createGateway(cfg, { log, fetchers, router, lent, health: healthReader(), onCall: (r, t) => ledger.record(r, t), refuse: () => ledger.refuse(cfg.budget?.dailyUsd) })
   .listen(cfg.port, cfg.host, () => log(`gateway on http://${cfg.host}:${cfg.port}/v1 (${Object.keys(cfg.routes).join(', ')}, gremlin-auto)`))

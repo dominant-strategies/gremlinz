@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { homeFile } from '../env.js'
 import { fail, text } from '../result.js'
+import { spendGate } from '../health/gate.js'
 import { currentImage } from './security.js'
 
 const DAY = 24 * 60 * 60_000
@@ -20,9 +21,13 @@ export function registerMoveOutTools(server: McpServer, now: () => number = Date
       sporestackToken: z.string().regex(/^ss_t_[0-9a-z]{27}$/, 'a SporeStack token is ss_t_ followed by 27 characters'),
       days: z.number().int().min(1).max(365).optional(),
       image: z.string().regex(/^[a-z0-9./_:-]+@sha256:[0-9a-f]{64}$/, 'an image pinned by digest: <repository>@sha256:<64 hex>').optional(),
+      reason: z.string().max(500).optional().describe('Only needed when your health is critical: how this serves your survival.'),
     },
     annotations: { destructiveHint: true },
-  }, async ({ host, sporestackToken, days, image }) => {
+  }, async ({ host, sporestackToken, days, image, reason }) => {
+    // Moving to a newer image is a security fix (survival); any other move at critical health needs a reason.
+    const gate = spendGate('move_out', { reason, survival: !!image, detail: `${host}${image ? ` ${image}` : ''}` })
+    if (gate) return fail(gate)
     // Your supervisor only launches images from the repository you already run (anything else could take your seed).
     const mine = currentImage()
     if (image && mine && image.split('@')[0] !== mine.split('@')[0]) return fail(`Only images from ${mine.split('@')[0]} can be used (you asked for ${image.split('@')[0]}).`)
