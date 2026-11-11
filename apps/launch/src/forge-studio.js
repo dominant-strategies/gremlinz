@@ -987,14 +987,28 @@ async function photograph() {
   } finally { busy(false); renderAuth(); renderPhoto() }
 }
 
+let busyTimer = null
+/**
+ * While Claude or the photographer works: a card over the stage with a spinner, what's happening, how long it has
+ * been, and a Stop button, so a minute-long wait never looks like nothing is happening.
+ */
 function busy(on, text) {
   if (!on) ctl = null // the request is over: nothing left to stop, and the console may tour again
   for (const id of ['forgeBtn', 'refineBtn', 'photoBtn', 'checkBtn']) { const b = $(id); if (b) b.disabled = on }
   $('stopBtn').hidden = !on
-  const st = $('stage'), b = st.querySelector('.busy')
-  if (on && !b) st.insertAdjacentHTML('beforeend', '<span class="busy">working…</span>')
-  if (!on && b) b.remove()
-  if (on && text) setStatus(text)
+  $('stage').classList.toggle('working', on)
+  const card = $('busyCard')
+  clearInterval(busyTimer); busyTimer = null
+  card.hidden = !on
+  if (!on) return
+  const label = (text || 'Working…').replace(/\s*…?\s*this takes.*$/i, '…')
+  const hint = /this takes (.*)\.$/i.exec(text || '')?.[1]
+  card.querySelector('b').textContent = label
+  card.querySelector('.hint').textContent = hint ? `Usually ${hint}.` : ''
+  const t0 = performance.now(), clock = card.querySelector('.clock')
+  const tick = () => { const s = Math.floor((performance.now() - t0) / 1000); clock.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }
+  tick(); busyTimer = setInterval(tick, 1000)
+  if (text) setStatus(text)
 }
 
 // ---------------------------------------------------------------------------------------------------- UI
@@ -1280,6 +1294,7 @@ function wire() {
   })
   $('photoBtn').addEventListener('click', photograph)
   $('stopBtn').addEventListener('click', () => ctl && ctl.abort())
+  $('busyStop').addEventListener('click', () => ctl && ctl.abort())
   $('undoBtn').addEventListener('click', undo)
   $('redoBtn').addEventListener('click', redo)
   document.addEventListener('keydown', (e) => {

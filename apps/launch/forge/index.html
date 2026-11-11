@@ -42,7 +42,19 @@
     .stage canvas.studio { display: block; width: 100%; height: 100%; cursor: grab; }
     .stage .photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; background: #d6ccbd; }
     .stage[data-view="photo"] .photo { display: block; }
-    .stage .busy { position: absolute; left: 16px; bottom: 16px; font-family: var(--mono); font-size: 12px; background: rgba(36,33,29,.85); color: #f7f3ec; padding: 6px 10px; border-radius: 999px; }
+    /* working: dim the stage and float a card with a spinner, what's happening, a timer and Stop */
+    .stage canvas.studio { transition: filter .4s, opacity .4s; }
+    .stage.working canvas.studio { filter: saturate(.55) blur(1.5px); opacity: .55; }
+    .stage .busycard { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 4; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto auto; gap: 4px 16px; align-items: center; min-width: min(360px, 86%); max-width: 92%; padding: 18px 22px; background: rgba(251,250,247,.96); border: 1px solid #dcd5c8; border-left: 4px solid var(--signal, #e8571e); border-radius: 6px; box-shadow: 0 12px 40px rgba(36,33,29,.18); }
+    .stage .busycard[hidden] { display: none; }
+    .stage .busycard .spinner { grid-row: 1 / 3; width: 40px; height: 40px; border-radius: 50%; border: 4px solid rgba(232,87,30,.18); border-top-color: var(--signal, #e8571e); animation: forge-spin .8s linear infinite; }
+    .stage .busycard b { font: 700 18px/1.2 var(--display); color: #24211d; }
+    .stage .busycard .meta { display: flex; gap: 10px; font: 12px var(--mono); color: #66625b; letter-spacing: .04em; }
+    .stage .busycard .clock { color: var(--signal, #e8571e); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .stage .busycard .btn { grid-column: 2; justify-self: start; margin-top: 6px; }
+    @keyframes forge-spin { to { transform: rotate(360deg); } }
+    @keyframes forge-pulse { 50% { opacity: .35; } }
+    @media (prefers-reduced-motion: reduce) { .stage .busycard .spinner { animation: forge-pulse 1.6s ease-in-out infinite; } .stage canvas.studio { transition: none; } }
     .stage .views { position: absolute; top: 12px; left: 12px; display: flex; gap: 6px; }
     .stage .views button { min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1.5px solid rgba(36,33,29,.25); background: rgba(247,243,236,.85); color: #24211d; font: inherit; font-size: 13px; cursor: pointer; }
     .stage .views button[aria-pressed="true"] { background: #24211d; color: #f7f3ec; border-color: #24211d; }
@@ -332,7 +344,13 @@
             <button type="button" id="photoTab" aria-pressed="false" disabled>Photo</button>
           </div>
           <svg class="blueprint" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><circle cx="50" cy="52" r="34"/><circle cx="50" cy="52" r="22"/><path d="M50 10 V94 M8 52 H92"/></svg>
-          <div class="modelabel" id="modeLabel" aria-live="polite"><small>Operating mode</small><b></b></div>
+          <div class="busycard" id="busyCard" role="status" aria-live="polite" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <b>Working…</b>
+          <span class="meta"><span class="clock">0:00</span><span class="hint"></span></span>
+          <button type="button" class="btn btn-small" id="busyStop">Stop</button>
+        </div>
+        <div class="modelabel" id="modeLabel" aria-live="polite"><small>Operating mode</small><b></b></div>
         </div>
         <div class="row stagebar" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center">
           <button class="btn btn-spark btn-small" id="photoBtn" type="button" hidden>Make it a photo</button>

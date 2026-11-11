@@ -69,7 +69,7 @@ export function tickHud(now) {
   $('hudLoad').textContent = `${pct}%`
   const lit = Math.round(load * CELLS)
   ;[...$('hudCells').children].forEach((c, i) => { c.className = i < lit ? (i >= CELLS * 0.8 ? 'hot' : 'on') : '' })
-  const status = up ? mode?.name : view.explode > 0.02 ? 'Exploded' : view.isolate ? 'Isolated' : 'Idle'
+  const status = $('stage').classList.contains('working') ? 'Working' : up ? mode?.name : view.explode > 0.02 ? 'Exploded' : view.isolate ? 'Isolated' : 'Idle'
   $('hudStatus').lastChild.textContent = String(status).toUpperCase()
   $('hudStatus').classList.toggle('on', status !== 'Idle')
   $('hudClock').textContent = (() => { const t = now - born; return `${pad(t / 3600)}:${pad((t / 60) % 60)}:${pad(t % 60)}` })()
