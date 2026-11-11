@@ -1408,10 +1408,10 @@ function renderBadges(sp) {
 }
 /** Panels open one at a time (native <details name> where supported, this as the fallback) and remember the last one. */
 /**
- * The open panel grows to its content up to 600px (Surfaces fully open), then scrolls inside. A cap, not a size: a short
+ * The open panel grows to its content up to 450px, then scrolls inside. A cap, not a size: a short
  * panel stays as tall as its content.
  */
-const PANEL_MAX = 600
+const PANEL_MAX = 450
 function sizePanels() {
   const host = $('panels'); if (!host) return
   host.style.setProperty('--panel-max', `${PANEL_MAX}px`)
