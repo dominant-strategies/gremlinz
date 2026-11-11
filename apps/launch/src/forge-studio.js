@@ -994,12 +994,13 @@ function renderBadges(sp) {
 }
 /** Panels open one at a time (native <details name> where supported, this as the fallback) and remember the last one. */
 /**
- * Lets the open panel grow to most of the window (it sits below the console, so the page scrolls to it). It's a cap,
- * not a size: a short panel stays as tall as its content.
+ * The open panel grows to its content up to 600px (Surfaces fully open), then scrolls inside. A cap, not a size: a short
+ * panel stays as tall as its content.
  */
+const PANEL_MAX = 600
 function sizePanels() {
   const host = $('panels'); if (!host) return
-  host.style.setProperty('--panel-max', `${Math.max(480, Math.floor(window.innerHeight * 0.9))}px`)
+  host.style.setProperty('--panel-max', `${PANEL_MAX}px`)
 }
 function wirePanels() {
   const panels = [...document.querySelectorAll('#panels > details')]
