@@ -20,6 +20,7 @@ services:
       BOARD_EGG_IMAGE: ${BOARD_EGG_IMAGE:-}
       BOARD_PUBLIC_URL: ${BOARD_PUBLIC_URL:-}
       BOARD_EGG_DEV_SSH_KEYS: ${BOARD_EGG_DEV_SSH_KEYS:-}
+      BOARD_HATCH_CUSTODY: ${BOARD_HATCH_CUSTODY:-mpc}
     expose:
       - "8787"
   caddy:
