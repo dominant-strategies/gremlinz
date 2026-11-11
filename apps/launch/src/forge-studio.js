@@ -782,17 +782,31 @@ function renderInspector() {
     if (p.kind === 'visor') row('Size', [p.w, p.h], (q, k, n) => { q[k ? 'h' : 'w'] = n }, { names: ['width', 'height'] })
     void i
   }
-  // wear on just these parts
+  // wear on just these parts: a finish shows as on whether the part has its own layer or gets it from the whole robot's
+  // weathering, and turning it off here only takes it off these parts (an inherited one is kept off with `unwear`)
   const wear = $('selWear'); wear.replaceChildren()
   const canWear = parts.filter((p) => p.kind !== 'eye')
+  const robotWear = spec().wear || []
+  const matsOf = (p) => (p.kind === 'visor' ? ['chrome', 'glass'] : [p.mat])
+  const fromRobot = (p, k) => robotWear.some((w) => w.kind === k && (!w.on || matsOf(p).some((m) => w.on.includes(m))))
+  const own = (p, k) => (p.wear || []).some((w) => w.kind === k)
+  const has = (p, k) => own(p, k) || (fromRobot(p, k) && !p.unwear?.includes(k))
   for (const k of FORGE_WEAR) {
-    const all = canWear.length && canWear.every((p) => (p.wear || []).some((w) => w.kind === k))
+    const all = canWear.length && canWear.every((p) => has(p, k))
+    const inherited = canWear.some((p) => fromRobot(p, k))
     const b = document.createElement('button'); b.type = 'button'; b.textContent = WEAR_LABEL[k]; b.setAttribute('aria-pressed', String(!!all))
+    if (inherited) b.title = `${WEAR_LABEL[k]} also comes from the whole robot's weathering (Surfaces). Turning it off here takes it off just ${parts.length > 1 ? 'these parts' : 'this part'}.`
     b.disabled = !canWear.length
     b.addEventListener('click', () => editSelected((p) => {
       if (p.kind === 'eye') return
-      if (all) { p.wear = (p.wear || []).filter((w) => w.kind !== k); if (!p.wear.length) delete p.wear }
-      else if (!(p.wear || []).some((w) => w.kind === k) && (p.wear || []).length < 3) p.wear = [...(p.wear || []), { kind: k, amount: 0.4 }]
+      const keepOff = (on) => { const u = new Set(p.unwear || []); if (on) u.add(k); else u.delete(k); if (u.size) p.unwear = [...u]; else delete p.unwear }
+      if (all) {
+        p.wear = (p.wear || []).filter((w) => w.kind !== k); if (!p.wear.length) delete p.wear
+        if (fromRobot(p, k)) keepOff(true)
+      } else if (!has(p, k)) {
+        keepOff(false) // let the whole robot's layer back on, if there is one
+        if (!has(p, k) && (p.wear || []).length < 3) p.wear = [...(p.wear || []), { kind: k, amount: 0.4 }]
+      }
     }, `${all ? 'Removed' : 'Added'} ${WEAR_LABEL[k].toLowerCase()} on ${parts.length} part${parts.length > 1 ? 's' : ''}`))
     wear.appendChild(b)
   }

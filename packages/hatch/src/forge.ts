@@ -102,6 +102,8 @@ export interface ForgePart {
   size?: number[]
   arc?: number
   wear?: ForgeWear[]
+  /** Whole-robot weathering kinds kept off this part (the person turned them off on just this part). */
+  unwear?: ForgeWear['kind'][]
   /** Added by a house rule rather than by the model. */
   house?: true
 }
@@ -154,7 +156,7 @@ HOUSE STYLE (what makes every gremlin part of one product line):
 - Be inventive with the overall form; the description should drive the body plan. Use 15 to 70 parts; a chain, a rivet row or an array counts once.
 
 SURFACES (optional; use them when the description asks for age, damage, dirt, markings, logos, tattoos or pictures, or when they clearly suit the character):
-- "wear":[{"kind":k,"amount":0-1,"pattern":p,"scale":0.3-4,"on":["enamel",...]}] at the top level weathers the whole robot, or only the materials listed in "on". A part can carry its own "wear" list (without "on") to weather just that part.
+- "wear":[{"kind":k,"amount":0-1,"pattern":p,"scale":0.3-4,"on":["enamel",...]}] at the top level weathers the whole robot, or only the materials listed in "on". A part can carry its own "wear" list (without "on") to weather just that part, and "unwear":["rust",...] keeps those top-level kinds off it. Keep any "unwear" you find: the person chose it.
   Kinds: rust (flaky orange-brown oxide), grime (brown dirt), soot (black), scratches (bright scuffs through the finish), patina (green verdigris, best on brass and copper), chipped (paint flaked off, showing bare steel), oil (glossy black stains).
   Patterns: spots (scattered blotches), streaks (runs and drips), patches (large soft areas), bottom (builds up toward the feet), all (an even film). Amount 0.15 is a hint, 0.4 is clearly weathered, 0.8 is derelict. "scale" above 1 makes the marks smaller and busier. Up to 4 top-level layers and 3 per part.
 - "art":{"id":"<svg viewBox=...>...</svg>"} is vector artwork you draw yourself: logos, emblems, insignia, tattoos, stencilled numbers, hazard stripes, pin-striping, flash-tattoo motifs. Give each a viewBox and a transparent background; use flat, bold shapes and a small palette; no scripts, event handlers, external links or embedded images. Under 4000 characters each, at most 6 pieces. Text only when asked for, in font-family="Futura, Helvetica, Arial, sans-serif" with font-weight="bold".
@@ -749,6 +751,10 @@ export function checkForgeSpec(raw: unknown): { spec: ForgeSpec; notes: string[]
     if (p.wear && kind !== 'eye') {
       const { wear } = checkWear(p.wear, 3, false, parts.length + 1)
       if (wear.length) q.wear = wear
+    }
+    if (Array.isArray(p.unwear) && kind !== 'eye') {
+      const off = [...new Set(p.unwear.map((k) => String(k).toLowerCase()))].filter((k): k is ForgeWear['kind'] => (FORGE_WEAR as readonly string[]).includes(k))
+      if (off.length) q.unwear = off
     }
     if (kind === 'lathe' || kind === 'cylinder') {
       const rows = (Array.isArray(p.rivets) ? p.rivets : []).slice(0, 6).flatMap((row) => {

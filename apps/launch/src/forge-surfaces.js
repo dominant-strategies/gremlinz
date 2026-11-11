@@ -138,7 +138,7 @@ export function wearMaterial(base, layers) {
 /** The wear layers that land on one material of one part: the part's own first, then matching top-level layers. */
 export function wearFor(spec, part, matName) {
   if (matName === 'glow') return []
-  const fromSpec = (spec.wear || []).filter((w) => !w.on || w.on.includes(matName))
+  const fromSpec = (spec.wear || []).filter((w) => (!w.on || w.on.includes(matName)) && !part.unwear?.includes(w.kind))
   let layers = [...(part.wear || []), ...fromSpec]
   if (matName === 'glass') layers = layers.filter((w) => ['grime', 'soot', 'oil'].includes(w.kind))
   return layers.slice(0, WEAR_MAX)

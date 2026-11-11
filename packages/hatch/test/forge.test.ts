@@ -134,3 +134,13 @@ describe('forge prompts', () => {
     expect(review).toContain('"fixed"')
   })
 })
+
+describe('per-part unwear', () => {
+  it('keeps known whole-robot wear kinds a part opts out of, and drops the rest', () => {
+    const raw = { wear: [{ kind: 'rust', amount: 0.4 }], parts: [{ kind: 'sphere', mat: 'enamel', size: [0.5], unwear: ['rust', 'rust', 'glitter', 'OIL'] }, { kind: 'eye', shape: 'dot', size: 0.05, unwear: ['rust'] }] }
+    const { spec } = checkForgeSpec(raw)
+    expect(spec.parts[0]!.unwear).toEqual(['rust', 'oil'])
+    expect(spec.parts[1]!.unwear).toBeUndefined()
+    expect(checkForgeSpec(forgeSpecToWire(spec)).spec).toEqual(spec)
+  })
+})
