@@ -52,6 +52,9 @@ GREMLINS_MAINNET=1 npx vitest run packages/treasury/test   # live mainnet quotes
 - Site (board + static site) on one server with automatic HTTPS:
   `EGG_IMAGE=<image@digest> SITE_DOMAIN=<domain> scripts/deploy-site.sh user@host`
   (uses `site.Dockerfile`, `deploy/compose.yaml`, `deploy/Caddyfile`).
+- gremlinz.ai today: in the server's tmux pane, stop the board (Ctrl-C) and run `cd ~/gremlinz && scripts/prod-run.sh`.
+  It pulls `main`, installs, sources the settings in `~/gremlinz-board.env` (secrets, mode 600, outside git; template
+  `deploy/board.env.example`) and starts the board. Site build settings stay in `apps/launch/.env.production`.
 
 ## Layout
 
