@@ -219,7 +219,9 @@ Advanced makers can configure the harness and pick skills; anyone can write skil
     its shard x1 to the egg (`HostingHandover` v2, `custody: 'mpc'`) and deletes it. The page, still open (or reopened
     from the same browser), sees the claim and seals its shard x2 to the same egg key (`POST …/mpc/handoff`; the board
     stores it but can't open it), then deletes its copy once the job is `done`. The egg fetches both, multiplies the
-    shares, checks the result is the hosting address, and writes the ordinary `hosting.json`. The page can check: the
+    shares, checks the result is the hosting address, and writes the ordinary `hosting.json`. Once the VM runs the
+    page co-signs nothing more (the board needs no signature after launch), so the board can't open Fluence sessions
+    behind the `lastSessionAt` it hands the egg. The page can check: the
     claimed public key is the egg's announced address for this launchId, maker and config hash (its own). It cannot
     check that this key is the VM that was launched: only the hatch secret proves that, and the board both renders
     the cloud-init and checks the proof. **Residual trust:** a malicious board operator could fake a claim with its

@@ -86,11 +86,13 @@ export function keepCosigning(o: { board: Board; boardUrl: string; launchId: str
       (await quoteSell({ chainId: CHAIN.base, sellToken: QUAI_SYNTH[CHAIN.base], buyToken: USDC[CHAIN.base]!, from: h.address!, receiver: h.address!, sellAmountBeforeFee: sell, app: buildAppData({ appCode: 'gremlins-egg' }) })).buyAmount,
   }
   void (async () => {
+    const state = { launched: false }
     for (let i = 0; ; i++) {
       try {
-        if (!(await cosignOnce(t, o.jobId, h.share!, ctx, panel.show))) await sleep(1_500)
+        // Nothing needs signing once the server runs: from then on we only hand our shard over.
+        if (state.launched || !(await cosignOnce(t, o.jobId, h.share!, ctx, panel.show))) await sleep(1_500)
         // Every ~15 s: is there an egg to hand our shard to?
-        if (i % 10 === 0 && (await handOver(o, h, panel))) break
+        if (i % 10 === 0 && (await handOver(o, h, panel, state))) break
       } catch (e) {
         panel.note(`Waiting for the hatch service: ${(e as Error).message}`)
         await sleep(5_000)
@@ -101,8 +103,10 @@ export function keepCosigning(o: { board: Board; boardUrl: string; launchId: str
 }
 
 /** Seal our shard to the egg that claimed the account; true once the board has forgotten its own. */
-async function handOver(o: Parameters<typeof keepCosigning>[0], h: Held, panel: ReturnType<typeof mountPanel>): Promise<boolean> {
+async function handOver(o: Parameters<typeof keepCosigning>[0], h: Held, panel: ReturnType<typeof mountPanel>, state: { launched: boolean }): Promise<boolean> {
   const job: HatchJobView = await o.board.hatchJob(o.jobId)
+  // The board signs nothing after launch; refusing then keeps it from opening Fluence sessions behind the egg's back.
+  if (['launched', 'handed-off', 'done'].includes(job.status)) state.launched = true
   if (job.mpcAborted || job.status === 'failed') {
     panel.note(`The hatch stopped: ${job.error ?? 'failed'}`)
     return true
