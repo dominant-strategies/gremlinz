@@ -1,0 +1,20 @@
+--- a/include-internal/cbmpc/internal/crypto/base_bn256.h	2026-11-10 22:03:47
++++ b/include-internal/cbmpc/internal/crypto/base_bn256.h	2026-11-10 22:03:47
+@@ -15,7 +15,7 @@
+   carry = _addcarry_u64(uint8_t(carry), x, y, &z);
+   return z;
+ #else
+-#if __has_builtin(__builtin_addcl)
++#if __has_builtin(__builtin_addcl) && __SIZEOF_LONG__ == 8  // wasm32: long is 32 bits
+   return __builtin_addcl(x, y, carry, (unsigned long int*)&carry);
+ #else
+   auto r = uint128_t(x) + y + carry;
+@@ -31,7 +31,7 @@
+   borrow = _subborrow_u64(uint8_t(borrow), x, y, &z);
+   return z;
+ #else
+-#if __has_builtin(__builtin_subcl)
++#if __has_builtin(__builtin_subcl) && __SIZEOF_LONG__ == 8
+   return __builtin_subcl(x, y, borrow, (unsigned long int*)&borrow);
+ #else
+   auto r = uint128_t(x) - y - borrow;
