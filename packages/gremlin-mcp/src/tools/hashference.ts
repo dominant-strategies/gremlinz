@@ -7,7 +7,7 @@ import { formatUnits } from 'ethers'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { chainKeys, homeFile, keys, phrase } from '../env.js'
 import { fail, text } from '../result.js'
-import { balance, createQuaiInvoice, invoice, readKey, setupKey, verifyPayment, type Invoice } from '../hashference.js'
+import { balance, buyCredit, readKey, setupKey, type Purchase } from '../hashference.js'
 import { send } from '../wallets/send.js'
 import { ASSETS } from '../wallets/chains.js'
 import { recordSend } from '../wallets/policy.js'
@@ -20,17 +20,20 @@ export interface HashferenceDeps {
   sleep?: (ms: number) => Promise<void>
 }
 
-const keyFile = () => homeFile('hashference.json')
+export const keyFile = () => homeFile('hashference.json')
+
+/** A real QUAI transfer from the gremlin's wallet, recorded in the send log. Returns the transaction hash. */
+export async function payQuai(to: string, amount: bigint): Promise<string> {
+  const quai = ASSETS.find((a) => a.id === 'quai:quai')!
+  const r = await send({ keys: await chainKeys(), phrase: phrase(), asset: quai, to, amount })
+  recordSend(homeFile('sends.jsonl'), { asset: quai.id, to, amount: formatUnits(amount, quai.decimals), tx: r.tx })
+  return r.tx
+}
 
 export function registerHashferenceTools(server: McpServer, deps: HashferenceDeps = {}) {
   const opts = { fetch: deps.fetch, base: deps.base }
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)))
-  const pay = deps.pay ?? (async (to: string, amount: bigint) => {
-    const quai = ASSETS.find((a) => a.id === 'quai:quai')!
-    const r = await send({ keys: await chainKeys(), phrase: phrase(), asset: quai, to, amount })
-    recordSend(homeFile('sends.jsonl'), { asset: quai.id, to, amount: formatUnits(amount, quai.decimals), tx: r.tx })
-    return r.tx
-  })
+  const pay = deps.pay ?? payQuai
 
   server.registerTool('hashference_setup', {
     description:
@@ -70,22 +73,14 @@ export function registerHashferenceTools(server: McpServer, deps: HashferenceDep
   }, async ({ usd }) => {
     const k = readKey(keyFile())
     if (!k) return fail('No Hashference account yet; run hashference_setup first.')
-    let inv: Invoice
-    try { inv = await createQuaiInvoice(k, usd, opts) } catch (e) { return fail(`Could not create the invoice: ${(e as Error).message.slice(0, 300)}`) }
-    const amount = BigInt(inv.amountAtomic)
-    // Pay only an invoice that is still open: a late payment is not credited automatically.
-    if (Date.parse(inv.expiresAt) - Date.now() < 30_000) return fail('The invoice expires too soon to pay safely; try again.')
-    let tx: string
-    try { tx = await pay(inv.addresses[0]!, amount) } catch (e) { return fail(`Paying the invoice failed (nothing was credited): ${(e as Error).message.slice(0, 300)}`) }
-    // Credited after confirmations; poll for a few minutes, then point Hashference at the transaction if needed.
-    let status = inv.status
-    for (let i = 0; i < 18 && status !== 'paid'; i++) {
-      await sleep(10_000)
-      try { status = (await invoice(k, inv.id, opts)).status } catch { /* keep polling */ }
+    let p: Purchase
+    try {
+      p = await buyCredit(k, usd, { ...opts, pay, sleep })
+    } catch (e) {
+      return fail(`Top-up failed before any credit was added: ${(e as Error).message.slice(0, 300)}`)
     }
-    if (status === 'awaiting_payment') { try { status = (await verifyPayment(k, inv.id, tx, opts)).status } catch { /* reported below */ } }
-    const quai = formatUnits(amount, 18)
-    if (status === 'paid') return text(`Paid ${quai} QUAI (${tx}); Hashference credited $${usd}.`)
-    return text(`Paid ${quai} QUAI (${tx}). Hashference has it as "${status}" (invoice ${inv.id}); credit appears once it confirms. Check later with hashference_balance.`)
+    const quai = formatUnits(p.quaiWei, 18)
+    if (p.status === 'paid') return text(`Paid ${quai} QUAI (${p.tx}); Hashference credited $${usd}.`)
+    return text(`Paid ${quai} QUAI (${p.tx}). Hashference has it as "${p.status}" (invoice ${p.invoiceId}); credit appears once it confirms. Check later with hashference_balance.`)
   })
 }
