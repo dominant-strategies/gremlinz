@@ -25,10 +25,18 @@ export function gatewayConfig(e: GatewayEnv = {}): GatewayConfig {
   // Hashference first: cheaper per token than Venice, and paid in QUAI from the gremlin's own wallet. Until the gremlin
   // has made a key and bought credit it answers 402 locally and the route moves on to Venice, then the free endpoints.
   const hashference = { id: 'hashference', kind: 'hashference' as const, baseUrl: 'https://hashference.com/v1', keyFile: e.hashferenceKeyFile ?? homeFile('hashference.json'), timeoutMs: 600_000, firstByteMs: 180_000, free: false, minIntervalMs: 0 }
-  // Hashference caps GLM-5.3 input at 122,880 tokens estimated as two bytes of request JSON each (~240 KB): stay under.
-  const hashferenceMain = { provider: 'hashference', model: e.hashferenceModel ?? HASHFERENCE_MAIN_MODEL, inputPerM: 0.441, outputPerM: 1.386, maxRequestBytes: 235_000 }
+  // Several Hashference models, because its catalog changes (its featured GLM-5.3 was withdrawn within an hour in the
+  // rehearsal); a model it stops offering is skipped by the gateway and the next one used. Tool-capable, cheapest first
+  // among good ones (USD per million tokens, 2026-11). Its own featured routes cap requests at ~240 KB of JSON.
+  const hashferenceRoute = e.hashferenceModel
+    ? [{ provider: 'hashference', model: e.hashferenceModel, inputPerM: 0, outputPerM: 0 }]
+    : [
+        { provider: 'hashference', model: 'z-ai-glm-5-3-flash', inputPerM: 0.18, outputPerM: 0.6 },
+        { provider: 'hashference', model: 'deepseek-v4-flash', inputPerM: 0.17, outputPerM: 0.33 },
+        { provider: 'hashference', model: HASHFERENCE_MAIN_MODEL, inputPerM: 0.441, outputPerM: 1.386, maxRequestBytes: 235_000 },
+      ]
   const providers: GatewayConfig['providers'] = [hashference, venice]
-  const main: GatewayConfig['routes'][string] = [hashferenceMain, veniceMain]
+  const main: GatewayConfig['routes'][string] = [...hashferenceRoute, veniceMain]
   if (e.ollamaUrl && e.ollamaModel) {
     // A local model may need minutes to load into memory on its first call.
     providers.unshift({ id: 'ollama', kind: 'openai', baseUrl: `${e.ollamaUrl.replace(/\/$/, '')}/v1`, timeoutMs: 900_000, firstByteMs: 180_000, free: false, minIntervalMs: 0 })

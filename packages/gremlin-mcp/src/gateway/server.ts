@@ -59,6 +59,9 @@ export function withGlean(cfg: GatewayConfig, env: NodeJS.ProcessEnv): GatewayCo
 const requestBytes = (body: Record<string, unknown>, model: string) => Buffer.byteLength(JSON.stringify({ ...body, model }))
 
 const COOLDOWN_MIN_MS = 30_000
+/** A model its provider stopped offering is skipped this long before trying it again. */
+const RETIRED_MS = 6 * 3_600_000
+const MODEL_GONE = /unsupported model|model not found|no such model|unknown model|model .{0,40} (?:does not exist|is not available)/i
 /** The longest a last-resort request waits for a free provider's call interval. */
 const LAST_RESORT_WAIT_MS = 20_000
 const COOLDOWN_MAX_MS = 10 * 60_000
@@ -72,6 +75,8 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
   const providers = new Map(cfg.providers.map((p) => [p.id, p]))
   const fetchers = new Map(cfg.providers.map((p) => [p.id, deps.fetchers?.[p.id] ?? (p.kind === 'venice-x402' ? undefined : providerFetch(p))]))
   const cooldown = new Map<string, { until: number; ms: number }>()
+  /** provider/model pairs a provider said it no longer offers, until when. */
+  const retired = new Map<string, number>()
   const lastCall = new Map<string, number>()
   /** Take a provider out of rotation: exponential for transient trouble; 30 minutes when it wants payment. */
   const down = (id: string, status?: number) => {
@@ -134,6 +139,8 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         // A request over a target's size cap would only come back 400; go straight to the next one.
         if (target.maxRequestBytes && requestBytes(body, target.model) > target.maxRequestBytes) { errors.push(`${target.provider}: request too large for ${target.model} (${Math.round(requestBytes(body, target.model) / 1000)} KB > ${Math.round(target.maxRequestBytes / 1000)} KB)`); continue }
         if (!p || !f) { errors.push(`${target.provider}: not configured`); continue }
+        const gone = retired.get(`${target.provider}/${target.model}`)
+        if (gone && gone > now()) { errors.push(`${target.provider}/${target.model}: not offered right now`); continue }
         const c = cooldown.get(p.id)
         if (c && c.until > now()) { errors.push(`${p.id}: cooling down`); continue }
         if (p.free && sensitive) { errors.push(`${p.id}: skipped, the request looks like it contains a secret: ${sensitive}`); continue }
@@ -175,6 +182,13 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
           const text = await up.text().catch(() => '')
           deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: target.model, status: up.status, ms: now() - started }, target)
           if (retryable(up.status)) { errors.push(`${p.id}: ${up.status} ${text.slice(0, 160)}`); down(p.id, up.status); continue }
+          // Catalogs change (a provider withdrew the model): retire just this model for a while, not the provider.
+          if ((up.status === 400 || up.status === 404) && MODEL_GONE.test(text)) {
+            retired.set(`${p.id}/${target.model}`, now() + RETIRED_MS)
+            log(`model ${p.id}/${target.model} not offered; skipping it for ${RETIRED_MS / 3_600_000}h`)
+            errors.push(`${p.id}/${target.model}: ${up.status} ${text.slice(0, 120)}`)
+            continue
+          }
           res.writeHead(up.status, { 'content-type': up.headers.get('content-type') ?? 'application/json' })
           return res.end(text)
         }
