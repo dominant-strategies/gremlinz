@@ -13,9 +13,10 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
-import { FORGE_CRITIQUE_MAX_STILLS, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints } from '@gremlins/hatch'
-import { fitName, hideCursor, mountHud, renderHud, tickHud } from './forge-hud.js'
-import { applySkins, applyPose, drawLabels, forgetIsolate, mountLabels, resetView, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, view } from './forge-motion.js'
+import { FORGE_CRITIQUE_MAX_STILLS, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints, forgeEase, forgeTour, forgeTourAt } from '@gremlins/hatch'
+import { encodeVideo, paintOverlay, videoSupport } from './forge-record.js'
+import { fitName, hideCursor, modelCode, mountHud, renderHud, tickHud } from './forge-hud.js'
+import { applySkins, applyPose, drawLabels, layoutLabels, forgetIsolate, mountLabels, resetView, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, view } from './forge-motion.js'
 import { addDecals, artReady, wearFor, wearFrame, wearMaterial } from './forge-surfaces.js'
 import { creatureSvg } from '@gremlins/hatch/creature'
 import { account, hasSessionKey, mountAuth, onAccountChange, sessionPostJson, signIn, signOut, walletErrorMessage } from './auth.ts'
@@ -178,7 +179,7 @@ function initStudio() {
   mountHud({ operator: () => account()?.address })
   let lastT = 0, avg = 1 / 60, slow = 0
   renderer.setAnimationLoop(() => {
-    if (document.hidden) return
+    if (document.hidden || recording) return // a recording draws its own frames
     const now = performance.now() / 1000, dt = lastT ? Math.min(0.1, now - lastT) : 0; lastT = now
     // Quality steps for integrated GPUs, each after ~2 s of frames slower than 32 fps: AO off, then 1x pixels.
     avg = avg * 0.95 + dt * 0.05
@@ -1016,6 +1017,77 @@ async function generate(mode, text) {
   }
 }
 
+/** A progress note on the working card, e.g. a recording's percentage. */
+function busyNote(t) { const n = $('busyCard').querySelector('.hint'); if (n) n.textContent = t }
+
+// ---------------------------------------------------------------------------------------------------- record tour
+let recording = false
+const REC = { w: 1920, h: 1080, fps: 30 }
+/**
+ * Records one pass of the tour as a 1080p MP4: each frame is posed from its own time (forgeTourAt), the camera follows
+ * a scripted path (a slow orbit, gliding in on the part a mode works, stepping back when exploded), and the console's
+ * name, labels and mode are painted on. Frame-exact however slow the GPU; then it downloads.
+ */
+async function recordTour() {
+  if (!glOK || !inner || ctl || !hero) return
+  const sp = spec(), beats = forgeTour(sp), lastBeat = beats[beats.length - 1]
+  const len = Math.min(40, Math.max(8, lastBeat ? lastBeat.at + lastBeat.dur : 8)), frames = Math.round(len * REC.fps)
+  if (!(await videoSupport(REC.w, REC.h, REC.fps))) return setStatus('This browser can’t encode video. Try Chrome, Edge or Safari 17 or newer.', true)
+  ctl = new AbortController(); busy(true, 'Recording the tour… this takes about a minute.')
+  recording = true
+  const out = document.createElement('canvas'); out.width = REC.w; out.height = REC.h
+  const ctx = out.getContext('2d')
+  const keep = ['labels', 'isolate', 'mode', 'input', 'inputTo', 'explode', 'explodeTo']
+  const saved = { pos: camera.position.clone(), target: controls.target.clone(), ratio: renderer.getPixelRatio(), turn: robot.rotation.y, view: Object.fromEntries(keep.map((k) => [k, view[k]])) }
+  const rig0 = inner.userData.rig, heroDir = new T.Vector3(0.36, 0.17, 0.92).normalize()
+  const az0 = Math.atan2(heroDir.x, heroDir.z), el = Math.asin(heroDir.y)
+  const code = modelCode(sp), kicker = $('hudKicker').textContent
+  const slug = (sp.name || 'gremlin').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'gremlin'
+  try {
+    stopTour(); hideCursor()
+    renderer.setPixelRatio(1); renderer.setSize(REC.w, REC.h, false); composer.setPixelRatio(1); composer.setSize(REC.w, REC.h)
+    camera.aspect = REC.w / REC.h; camera.updateProjectionMatrix()
+    robot.rotation.y = 0
+    const blob = await encodeVideo({
+      canvas: out, frames, fps: REC.fps, signal: ctl.signal,
+      onProgress: (d, n) => busyNote(`${Math.round((d / n) * 100)}% of ${len.toFixed(0)} s`),
+      draw: (i) => {
+        const t = i / REC.fps, s = forgeTourAt(beats, t), b = beats[s.beat]
+        const m = sp.modes?.find((x) => x.id === s.mode)
+        const focus = m?.focus && s.input > 0.25 ? m.focus : null
+        Object.assign(view, { isolate: focus, labels: b?.label === 'Exploded', mode: s.mode, input: s.input, explode: s.explode })
+        applyPose(rig0, sp, { mode: s.mode, input: s.input, explode: s.explode, t, idle: true })
+        applySkins(rig0, focus, false)
+        const kz = focus ? forgeEase(Math.min(1, s.input * 1.6)) : 0
+        const anchor = focus && rig0[focus]?.anchor ? rig0[focus].anchor.getWorldPosition(new T.Vector3()) : hero.target
+        const target = hero.target.clone().lerp(anchor, kz * 0.8)
+        const dist = hero.dist * (1 - 0.28 * kz) * (1 + 0.4 * forgeEase(s.explode)), az = az0 + t * 0.16
+        camera.position.copy(target).add(new T.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).multiplyScalar(dist))
+        camera.lookAt(target); camera.updateMatrixWorld()
+        rig.rotation.y = az
+        robot.updateMatrixWorld(); wearFrame.value.copy(robot.matrixWorld).invert()
+        aoPass.enabled = quality.ao && !focus
+        aoCamera.copy(camera, false); aoCamera.layers.set(0)
+        composer.render()
+        ctx.drawImage(renderer.domElement, 0, 0, REC.w, REC.h)
+        const word = s.input > 0.05 && m ? m.name : s.explode > 0.05 ? 'Exploded' : ''
+        paintOverlay(ctx, { w: REC.w, h: REC.h, code, kicker, name: sp.name, tagline: sp.tagline, mode: word, labels: layoutLabels(rig0, camera, REC.w, REC.h, 78) })
+      },
+    })
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${slug}-tour.mp4`
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60_000)
+    setStatus(`Saved ${slug}-tour.mp4: ${len.toFixed(0)} seconds at 1080p, ${(blob.size / 1048576).toFixed(1)} MB.`)
+  } catch (e) {
+    setStatus(e.name === 'AbortError' ? 'Recording stopped.' : `The recording failed: ${e.message}`, e.name !== 'AbortError')
+  } finally {
+    recording = false
+    Object.assign(view, saved.view)
+    renderer.setPixelRatio(saved.ratio); composer.setPixelRatio(saved.ratio); resize()
+    camera.position.copy(saved.pos); controls.target.copy(saved.target); camera.lookAt(controls.target); robot.rotation.y = saved.turn
+    forgetIsolate(); busy(false)
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------- reference picture
 let reference = null // { data: JPEG data URL, name }, kept for this visit only
 let reviewNext = false
@@ -1104,7 +1176,7 @@ let busyTimer = null
  */
 function busy(on, text) {
   if (!on) ctl = null // the request is over: nothing left to stop, and the console may tour again
-  for (const id of ['forgeBtn', 'refineBtn', 'photoBtn', 'checkBtn']) { const b = $(id); if (b) b.disabled = on }
+  for (const id of ['forgeBtn', 'refineBtn', 'photoBtn', 'checkBtn', 'recBtn']) { const b = $(id); if (b) b.disabled = on }
   $('stopBtn').hidden = !on
   $('stage').classList.toggle('working', on)
   const card = $('busyCard')
@@ -1397,6 +1469,7 @@ function wire() {
   ask.addEventListener('drop', (e) => { const f = [...e.dataTransfer.files].find((x) => x.type.startsWith('image/')); if (f) { e.preventDefault(); loadReference(f) } ask.classList.remove('dragover') })
   $('prompt').addEventListener('paste', (e) => { const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/')); if (f) { e.preventDefault(); loadReference(f) } })
   $('checkBtn').addEventListener('click', () => review(false))
+  $('recBtn').addEventListener('click', recordTour)
   $('refineForm').addEventListener('submit', (e) => {
     e.preventDefault(); const t = $('refine').value.trim()
     if (!t) return setStatus('Say what to change first.', true)

@@ -140,27 +140,35 @@ export function mountLabels(stage) {
 }
 const v3 = new T.Vector3()
 /**
+ * Where each shown label goes: its part's point on screen, the side of the stage nearest it (half the labels each side),
+ * and a slot stacked down that side so none overlap. Shared by the stage's labels and the recorded video's.
+ */
+export function layoutLabels(rig, camera, w, h, gap = 46) {
+  const show = Object.values(rig).filter((r) => (view.labels || view.isolate === r.a.id) && r.anchor && (view.isolate == null || view.isolate === r.a.id))
+  const items = show.map((r) => {
+    r.anchor.getWorldPosition(v3).project(camera)
+    const x = (v3.x * 0.5 + 0.5) * w, y = (-v3.y * 0.5 + 0.5) * h
+    const p = view.pose[r.a.id]
+    return { r, name: r.a.name, x, y, left: x < w / 2, active: !!p?.active || view.isolate === r.a.id, status: p?.status || r.a.states[0] }
+  })
+  // balance: the left half of the labels (by where their parts sit on screen) goes left, the rest right
+  items.slice().sort((a, b) => a.x - b.x).forEach((it, i, all) => { it.left = i < Math.ceil(all.length / 2) })
+  // stack each side top to bottom, `gap` apart, inside the stage
+  for (const side of [true, false]) {
+    const col = items.filter((i) => i.left === side).sort((a, b) => a.y - b.y)
+    let last = gap * 0.5
+    for (const it of col) { it.ly = Math.max(last, Math.min(h - gap * 1.5, it.y)); last = it.ly + gap }
+  }
+  return items
+}
+/**
  * Places a label per shown assembly at the side of the stage nearest its part, stacked so none overlap, with a thin
  * leader into the part. Active assemblies (driven by the current mode, or isolated) are drawn in the accent.
  */
 export function drawLabels(rig, camera, w, h) {
   if (!layer) return
   const svg = layer.firstChild
-  const show = Object.values(rig).filter((r) => (view.labels || view.isolate === r.a.id) && r.anchor && (view.isolate == null || view.isolate === r.a.id))
-  const items = show.map((r) => {
-    r.anchor.getWorldPosition(v3).project(camera)
-    const x = (v3.x * 0.5 + 0.5) * w, y = (-v3.y * 0.5 + 0.5) * h
-    const p = view.pose[r.a.id]
-    return { r, x, y, left: x < w / 2, active: !!p?.active || view.isolate === r.a.id, status: p?.status || r.a.states[0] }
-  })
-  // balance: the left half of the labels (by where their parts sit on screen) goes left, the rest right
-  items.slice().sort((a, b) => a.x - b.x).forEach((it, i, all) => { it.left = i < Math.ceil(all.length / 2) })
-  // stack each side top to bottom, at least 46px apart, inside the stage
-  for (const side of [true, false]) {
-    const col = items.filter((i) => i.left === side).sort((a, b) => a.y - b.y)
-    let last = 24
-    for (const it of col) { it.ly = Math.max(last, Math.min(h - 70, it.y)); last = it.ly + 46 }
-  }
+  const items = layoutLabels(rig, camera, w, h)
   const seen = new Set()
   for (const it of items) {
     const id = it.r.a.id; seen.add(id)
