@@ -152,10 +152,10 @@ function initStudio() {
   let lastActive = performance.now() / 1000
   for (const ev of ['pointerdown', 'keydown', 'wheel']) document.addEventListener(ev, (e) => {
     lastActive = performance.now() / 1000
-    if (view.tour && !e.target.closest?.('#hudLog, #dTour')) { stopTour(); hideCursor(); syncConsole(true) }
+    if (view.tour && !e.target.closest?.('#dTour')) { stopTour(); hideCursor(); syncConsole(true) }
   }, { capture: true, passive: true })
   mountLabels(stage)
-  mountHud({ operator: () => account()?.address, onChange: () => syncConsole(true) })
+  mountHud({ operator: () => account()?.address })
   let lastT = 0, avg = 1 / 60, slow = 0
   renderer.setAnimationLoop(() => {
     if (document.hidden) return
@@ -993,15 +993,13 @@ function renderBadges(sp) {
   $('badgeHouse').textContent = h ? `${h} fix${h > 1 ? 'es' : ''}` : 'all clear'
 }
 /** Panels open one at a time (native <details name> where supported, this as the fallback) and remember the last one. */
-/** Gives the open panel whatever height is left in the window, so the whole forge fits on one screen. */
+/**
+ * Lets the open panel grow to most of the window (it sits below the console, so the page scrolls to it). It's a cap,
+ * not a size: a short panel stays as tall as its content.
+ */
 function sizePanels() {
   const host = $('panels'); if (!host) return
-  if (window.matchMedia('(max-width: 960px)').matches) { host.style.removeProperty('--panel-max'); return }
-  const top = host.getBoundingClientRect().top + window.scrollY
-  let chrome = 0
-  for (const d of host.querySelectorAll(':scope > details:not([hidden])')) chrome += d.querySelector('summary').offsetHeight + 3 + 6
-  const left = window.innerHeight - top - chrome - 24
-  host.style.setProperty('--panel-max', `${Math.max(120, Math.floor(left))}px`)
+  host.style.setProperty('--panel-max', `${Math.max(480, Math.floor(window.innerHeight * 0.9))}px`)
 }
 function wirePanels() {
   const panels = [...document.querySelectorAll('#panels > details')]

@@ -14,7 +14,7 @@ const EXPLODE_SECONDS = 0.9
 /** Viewer state. `input` and `explode` move toward their targets each frame, so every change animates. */
 export const view = {
   mode: 'idle', input: 0, inputTo: 0, explode: 0, explodeTo: 0,
-  isolate: null, labels: false, xray: false, tour: false, tourStart: 0, paused: false, tourAt: 0, beats: [], beat: -1,
+  isolate: null, labels: false, xray: false, tour: false, tourStart: 0, beats: [], beat: -1,
   pose: {},
 }
 
@@ -35,25 +35,14 @@ export function toggleMode(id) {
 }
 export function toggleExplode() { view.tour = false; view.explodeTo = view.explodeTo > 0 ? 0 : 1 }
 export function toggleIsolate(id) { view.tour = false; view.isolate = view.isolate === id ? null : id }
-export function startTour(now) { Object.assign(view, { tour: true, tourStart: now, paused: false, isolate: null }) }
+export function startTour(now) { Object.assign(view, { tour: true, tourStart: now, isolate: null }) }
 /** Total length of one pass of the tour, in seconds. */
-export const tourLength = () => { const b = view.beats[view.beats.length - 1]; return b ? b.at + b.dur : 0 }
+const tourLength = () => { const b = view.beats[view.beats.length - 1]; return b ? b.at + b.dur : 0 }
 /** Where the tour is now, in seconds into one pass. */
-export function tourTime(now) {
+function tourTime(now) {
   const len = tourLength(); if (!len) return 0
-  const t = view.paused ? view.tourAt : now - view.tourStart
+  const t = now - view.tourStart
   return ((t % len) + len) % len
-}
-/** Jumps the tour to `t` seconds (the timeline's scrubber); the tour keeps playing from there unless paused. */
-export function seekTour(now, t) {
-  if (!view.tour) Object.assign(view, { tour: true, isolate: null })
-  view.tourStart = now - t; view.tourAt = t
-}
-export function pauseTour(now, paused) {
-  if (paused === view.paused) return
-  if (paused) view.tourAt = tourTime(now)
-  else view.tourStart = now - view.tourAt
-  view.paused = paused
 }
 /** Hands control back: whatever the tour was showing settles to rest. */
 export function stopTour() {
@@ -72,7 +61,7 @@ export function step(spec, dt, t, still, reduceMotion) {
     Object.assign(view, { mode: s.mode, input: s.input, inputTo: s.input, explode: s.explode, explodeTo: s.explode, beat: s.beat })
     const m = spec.modes?.find((x) => x.id === s.mode)
     view.isolate = m?.focus && s.input > 0.25 ? m.focus : null
-    return { mode: s.mode, input: s.input, explode: s.explode, t, idle: !reduceMotion && !view.paused }
+    return { mode: s.mode, input: s.input, explode: s.explode, t, idle: !reduceMotion }
   }
   const toward = (v, to, secs) => (v < to ? Math.min(to, v + dt / secs) : Math.max(to, v - dt / secs))
   view.input = reduceMotion ? view.inputTo : toward(view.input, view.inputTo, MODE_SECONDS)

@@ -1,14 +1,13 @@
 /**
- * Forge console (teardown phase 3): the identity header, the live readout cards, the subsystem list and the
- * operation-log timeline around the stage. Every number here is read from the viewer state and forgePose, the same
+ * Forge console (teardown phase 3): the identity header, the live readout cards and the subsystem list around the
+ * stage. Every number here is read from the viewer state and forgePose, the same
  * source that moves the model, so nothing on screen can disagree with what the gremlin is doing. Nothing is typed in.
  */
-import { pauseTour, seekTour, startTour, tourLength, tourTime, view } from './forge-motion.js'
+import { view } from './forge-motion.js'
 
 const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
 const pad = (n) => String(Math.floor(n)).padStart(2, '0')
-const mmss = (t) => `${pad(t / 60)}:${pad(t % 60)}`
 const CELLS = 24
 const MOVE_UNIT = { swing: '°', open: '°', curl: '°', spin: '°', slide: ' u', pulse: '%' }
 
@@ -36,30 +35,6 @@ export function mountHud(opts) {
   operator = opts.operator
   $('name').addEventListener('input', fitName)
   $('hudCells').innerHTML = Array.from({ length: CELLS }, () => '<i></i>').join('')
-  // timeline: play/pause, and scrub by dragging or with the arrow keys
-  $('logPlay').addEventListener('click', () => {
-    const now = performance.now() / 1000
-    if (!view.tour) startTour(now)
-    else pauseTour(now, !view.paused)
-    opts.onChange()
-  })
-  const track = $('logTrack')
-  const seekTo = (e) => {
-    const r = track.getBoundingClientRect(), k = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
-    seekTour(performance.now() / 1000, k * tourLength())
-    opts.onChange()
-  }
-  track.addEventListener('pointerdown', (e) => { track.setPointerCapture(e.pointerId); pauseTour(performance.now() / 1000, true); seekTo(e) })
-  track.addEventListener('pointermove', (e) => { if (track.hasPointerCapture(e.pointerId)) seekTo(e) })
-  track.addEventListener('pointerup', (e) => { track.releasePointerCapture(e.pointerId); pauseTour(performance.now() / 1000, false) })
-  track.addEventListener('keydown', (e) => {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-    e.preventDefault()
-    const now = performance.now() / 1000, t = view.tour ? tourTime(now) : 0
-    if (!view.tour) startTour(now)
-    pauseTour(now, true); seekTour(now, Math.max(0, t + (e.key === 'ArrowRight' ? 1 : -1)))
-    opts.onChange()
-  })
 }
 
 /** Rebuilds the parts of the console that depend on the design. */
@@ -75,11 +50,6 @@ export function renderHud(spec) {
     ? jointed().map((a) => `<li data-asm="${esc(a.id)}"><span class="n">${esc(a.name)}</span><span class="v">0</span><i><b></b></i></li>`).join('')
     : '<li class="none">No moving joints in this design.</li>'
   $('hudSubs').innerHTML = asms.map((a, i) => `<li data-asm="${esc(a.id)}"><span class="ix">${pad(i + 1)}</span><span class="nm"><b>${esc(a.name)}</b><small>${esc(a.role || '')}</small></span><span class="pill">${esc(a.states[0])}</span></li>`).join('')
-  // a tick where each step of the tour begins
-  const len = tourLength() || 1
-  const starts = view.beats.filter((b, i) => i === 0 || b.label !== view.beats[i - 1].label)
-  $('logTicks').innerHTML = starts.map((b) => `<i style="left:${(b.at / len) * 100}%" title="${esc(b.label)}"></i>`).join('')
-  $('logCount').textContent = `${Math.max(0, starts.length - 1)} operator actions`
   shownBeat = -1
 }
 
@@ -99,7 +69,7 @@ export function tickHud(now) {
   $('hudLoad').textContent = `${pct}%`
   const lit = Math.round(load * CELLS)
   ;[...$('hudCells').children].forEach((c, i) => { c.className = i < lit ? (i >= CELLS * 0.8 ? 'hot' : 'on') : '' })
-  const status = view.tour && view.paused ? 'Paused' : up ? mode?.name : view.explode > 0.02 ? 'Exploded' : view.isolate ? 'Isolated' : 'Idle'
+  const status = up ? mode?.name : view.explode > 0.02 ? 'Exploded' : view.isolate ? 'Isolated' : 'Idle'
   $('hudStatus').lastChild.textContent = String(status).toUpperCase()
   $('hudStatus').classList.toggle('on', status !== 'Idle')
   $('hudClock').textContent = (() => { const t = now - born; return `${pad(t / 3600)}:${pad((t / 60) % 60)}:${pad(t % 60)}` })()
@@ -128,18 +98,6 @@ export function tickHud(now) {
     pill.classList.toggle('on', Math.abs(p.drive) > 0.5)
     li.classList.toggle('focus', view.isolate === li.dataset.asm)
   }
-  // timeline
-  const len = tourLength(), t = view.tour ? tourTime(now) : 0, k = len ? t / len : 0
-  $('logFill').style.width = `${k * 100}%`
-  $('logKnob').style.left = `${k * 100}%`
-  $('logTrack').setAttribute('aria-valuenow', String(Math.round(t)))
-  $('logTrack').setAttribute('aria-valuemax', String(Math.round(len)))
-  $('logTime').textContent = `${mmss(t)} / ${mmss(len)}`
-  const beat = view.tour ? view.beats[view.beat] : null
-  $('logBeat').textContent = beat ? `Operator · ${beat.label}` : up ? `Operator · ${mode?.name}` : 'Manual · your controls'
-  const playing = view.tour && !view.paused
-  $('logPlay').setAttribute('aria-label', playing ? 'Pause the tour' : 'Play the tour')
-  $('logPlay').dataset.state = playing ? 'pause' : 'play'
 }
 
 function drawSpark() {
