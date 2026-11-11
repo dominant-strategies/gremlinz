@@ -57,3 +57,4 @@ mountAuth()
 
 // One-click donation boxes on profile pages (loaded only where one exists).
 if (document.querySelector('[data-donate]')) void import('./donate.js').then((m) => m.mountAll())
+if (document.querySelector('[data-sig], [data-idv]')) void import('./verify.js').then((m) => m.verifyPage())

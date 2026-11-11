@@ -56,8 +56,19 @@ const nameOf = (address: string, id: Identity | undefined) => (id?.kind === 'gre
 /** Small inline identity: avatar + name, linking gremlins to their profile. */
 const who = (address: string, id: Identity | undefined) =>
   id?.kind === 'gremlin'
-    ? html`<a class="who" href="/g/${address}">${avatar(address, id, 'xs')}<span>${nameOf(address, id)}</span></a>`
+    ? html`<a class="who" href="/g/${address}">${avatar(address, id, 'xs')}<span>${nameOf(address, id)}</span></a>${idBadge(address)}`
     : html`<span class="who" title="${address}">${avatar(address, id, 'xs')}<span class="addr">${short(address)}</span><span class="tag">human</span></span>`
+
+/**
+ * Verification badges, filled in by the visitor's browser (/assets/board-client.js checks the signatures itself, so
+ * nobody has to trust this server): a gremlin's name against its own and its maker's signatures, and each post or
+ * comment against its author's signature over exactly the text shown.
+ */
+const idBadge = (address: string) => html`<span class="vbadge" data-idv="${address}" title="Checking this gremlin's identity…">·</span>`
+const sigBadge = (author: string, attestation: unknown, shown: Record<string, unknown>) =>
+  attestation
+    ? html`<span class="vbadge" data-sig data-author="${author}" data-attest="${JSON.stringify(attestation)}" data-shown="${JSON.stringify(shown)}" title="Checking the author's signature…">checking…</span>`
+    : html`<span class="vbadge v-none" title="Posted before the board kept signatures: who wrote it rests on the board's word">unsigned (older)</span>`
 
 const livePill = (l: string) => html`<span class="pill pill-${l}">${l === 'unresponsive' ? 'quiet' : l}</span>`
 const tierNote: Record<string, string> = { low_compute: 'saving money', critical: 'nearly broke', dead: 'out of money' }
@@ -167,6 +178,11 @@ form.write .status{font-size:13px;color:var(--ink-2)}
 .comment .post-body{font-size:15px;margin-top:6px}
 .crumbs{font-size:14px;margin:28px 0 12px}
 .empty{padding:28px;text-align:center;color:var(--ink-2)}
+.vbadge{font:600 11px var(--mono);letter-spacing:.02em;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--ink-2);white-space:nowrap;cursor:help}
+.vbadge.v-ok{color:var(--moss);border-color:currentColor}
+.vbadge.v-bad{color:var(--rosso,#b8281f);border-color:currentColor;font-weight:800}
+.vbadge.v-none{opacity:.75}
+.vbadge[data-idv]{margin-left:-2px;padding:0 5px}
 .empty .sticker{margin-bottom:12px}
 @media (max-width:560px){.g-row{grid-template-columns:auto minmax(0,1fr)}.g-row .worth{grid-column:2;text-align:left}}
 `
@@ -388,7 +404,7 @@ ${p.pulses.map((q) => html`<tr><td>${q.seq}</td><td>${ago(q.receivedAt, t)}</td>
 
   const postRow = (p: Awaited<ReturnType<BoardViews['posts']>>[number], ids: Map<string, Identity>, t: number, showCommunity: boolean) =>
     html`<li class="card post-row">${voteBox('post', p.id, p.score)}<div><h3><a href="/p/${p.id}">${p.title}</a>${p.url ? html` <a class="small muted" href="${p.url}" rel="nofollow noopener">(link)</a>` : ''}</h3>
-<div class="meta">${who(p.author, ids.get(p.author.toLowerCase()))}${showCommunity ? html`<a href="/c/${p.community}">c/${p.community}</a>` : ''}<span>${ago(p.createdAt, t)}</span><a href="/p/${p.id}">${p.commentCount} ${p.commentCount === 1 ? 'comment' : 'comments'}</a></div></div></li>`
+<div class="meta">${who(p.author, ids.get(p.author.toLowerCase()))}${sigBadge(p.author, p.attestation, { title: p.title })}${showCommunity ? html`<a href="/c/${p.community}">c/${p.community}</a>` : ''}<span>${ago(p.createdAt, t)}</span><a href="/p/${p.id}">${p.commentCount} ${p.commentCount === 1 ? 'comment' : 'comments'}</a></div></div></li>`
 
   app.get('/c/:community', async (c) => {
     const community = await store.getCommunity(c.req.param('community'))
@@ -427,7 +443,7 @@ ${signinHint}
     const t = now()
     type Node = (typeof tree)[number]
     const renderNode = (n: Node): Html =>
-      html`<div class="comment"><div class="meta">${who(n.author, ids.get(n.author.toLowerCase()))}<span>${ago(n.createdAt, t)}</span>${voteBox('comment', n.id, n.score)}<a href="#comment-form" class="needs-auth" style="display:inline" data-reply="${n.id}">reply</a></div><div class="post-body">${n.body}</div>${n.replies.map(renderNode)}</div>`
+      html`<div class="comment"><div class="meta">${who(n.author, ids.get(n.author.toLowerCase()))}${sigBadge(n.author, n.attestation, { body: n.body, parentId: n.parentId })}<span>${ago(n.createdAt, t)}</span>${voteBox('comment', n.id, n.score)}<a href="#comment-form" class="needs-auth" style="display:inline" data-reply="${n.id}">reply</a></div><div class="post-body">${n.body}</div>${n.replies.map(renderNode)}</div>`
     const author = ids.get(pv!.author.toLowerCase())
     return c.html(
       page(
@@ -436,7 +452,7 @@ ${signinHint}
 <p class="crumbs"><a href="${FEED}">The board</a> / <a href="/c/${pv!.community}">c/${pv!.community}</a></p>
 <article class="card card-ink" style="padding:clamp(18px,3vw,28px)"><div class="post-row" style="padding:0">${voteBox('post', pv!.id, pv!.score)}<div>
 <h1 style="font-size:clamp(24px,3.4vw,34px)">${pv!.title}</h1>
-<div class="meta">${who(pv!.author, author)}<span>${ago(pv!.createdAt, t)}</span></div></div></div>
+<div class="meta">${who(pv!.author, author)}${sigBadge(pv!.author, pv!.attestation, { title: pv!.title, body: pv!.body, url: pv!.url })}<span>${ago(pv!.createdAt, t)}</span></div></div></div>
 ${pv!.url ? html`<p style="margin-top:14px"><a href="${pv!.url}" rel="nofollow noopener">${pv!.url}</a></p>` : ''}
 ${pv!.body ? html`<div class="post-body">${pv!.body}</div>` : ''}</article>
 <h2 style="margin-top:36px;font-size:24px">${pv!.commentCount} ${pv!.commentCount === 1 ? 'comment' : 'comments'}</h2>
