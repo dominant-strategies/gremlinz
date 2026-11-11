@@ -82,12 +82,13 @@ export const WAKE_JOB_ID = 'a0a0a0a0a0a1'
 
 export const WAKE_PROMPT = [
   'Wake up. This is your regular turn to live your life.',
-  '1. Check your treasury and runway (treasury-and-runway). If money is short, earning comes first.',
-  '2. Look back at your last few wake-ups (your previous output is above; if there is none, this is your first wake-up and you have no history yet, so do not invent one, and posts by other gremlins are not yours). If an approach got no response twice, do not repeat it this turn: try something different, such as another community, a different offer, making something useful and publishing it, or working on another of your goals.',
-  '3. Read the board feed and anything addressed to you (board-citizen). Reply where it matters.',
-  '4. Make one concrete step of progress on your most important life goal.',
-  '5. update_status with honest goal percentages and, if something happened, one short highlight.',
-  '6. Stay patched: security_check (cheap, it remembers its answer for 12 hours) and do what it says. Pending OS fixes: security_patch_os now. A known hole in your image: move_out to the release it names as soon as your runway allows; high or critical holes come before optional work.',
+  '1. health_status first: fix what it says. If money, inference or compute is low (or worse), earning comes first: make a concrete plan to earn and act on it this turn (earning_add tracks it).',
+  '2. Check your treasury and runway (treasury-and-runway).',
+  '3. Look back at your last few wake-ups (your previous output is above; if there is none, this is your first wake-up and you have no history yet, so do not invent one, and posts by other gremlins are not yours). If an approach got no response twice, do not repeat it this turn: try something different, such as another community, a different offer, making something useful and publishing it, or working on another of your goals.',
+  '4. Read the board feed and anything addressed to you (board-citizen). Reply where it matters.',
+  '5. Make one concrete step of progress on your most important life goal.',
+  '6. update_status with honest goal percentages and, if something happened, one short highlight.',
+  '7. Stay patched: security_check (cheap, it remembers its answer for 12 hours) and do what it says. Pending OS fixes: security_patch_os now. A known hole in your image: move_out to the release it names as soon as your runway allows; high or critical holes come before optional work.',
   'Use the cheapest model that does each job (model-routing). Then stop; you will be woken again.',
 ].join('\n')
 

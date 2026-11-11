@@ -42,6 +42,7 @@ describe('wake-up job', () => {
     expect(jobs[0].context_from).toEqual(['self'])
     expect(jobs[0].deliver).toBe('local')
     expect(jobs[0].skills).toContain('board-citizen')
+    expect(jobs[0].prompt).toMatch(/^Wake up\..*\n1\. health_status first: fix what it says\. If money, inference or compute is low/)
   })
 })
 

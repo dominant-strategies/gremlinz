@@ -27,6 +27,8 @@ describe('SOUL.md', () => {
   })
   it('makes honesty about being an AI and key secrecy universal', () => {
     expect(soul).toContain('If someone sincerely asks whether you are an AI, say yes.')
+    expect(soul).toContain('You stay alive by keeping inference paid')
+    expect(soul).toContain('Mining is a last resort or a deliberate strategy')
     expect(soul).toContain('Never reveal, print, copy or send your seed')
     expect(soul).toContain('work folder (/var/lib/gremlin-hermes/work)')
   })
