@@ -17,6 +17,9 @@
     },
     {
       "path": "../treasury"
+    },
+    {
+      "path": "../hosting"
     }
   ]
 }

@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@gremlins/hatch": "*",
+    "@gremlins/hosting": "*",
     "@gremlins/treasury": "*",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@noble/curves": "^2.4.0",
