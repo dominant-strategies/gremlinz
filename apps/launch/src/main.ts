@@ -1,6 +1,6 @@
 /**
  * Launch flow:
- *  1 connect Pelagus → 2 fill in the gremlin → 3 pay SporeStack for the egg server → 4 launch the egg
+ *  1 sign in with any supported wallet → 2 fill in the gremlin → 3 pay SporeStack for the egg server → 4 launch the egg
  *  (cloud-init carries only the config *hash*) → 5 egg announces on the board → 6 maker signs the config
  *  for that egg's address and hands it over → 7 fund it.
  * Nothing here holds the gremlin's keys; the egg generates them on its own server.
@@ -9,9 +9,9 @@ import { GremlinConfig as GremlinConfigSchema, CONSTITUTION_SECTIONS, COVENANTS,
 import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
 import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
 import { sporestack, newToken, unusableSshKey, type Currency, type Provider } from '@gremlins/hosting'
-import { mountAuth } from './auth.js'
+import { account, mountAuth } from './auth.js'
 import { boardApi } from './board.js'
-import { connect, signConfigWithPelagus } from './pelagus.js'
+import { WALLET_NAMES, canPayUsdc, makerAccount, payUsdcOnBase, signConfigWithWallet } from './hatch-wallet.js'
 import { FLUENCE_MIN_TOPUP_USD } from '@gremlins/hosting'
 import { formatUnits as fmtUnits } from 'ethers'
 import { FLUENCE_STEPS, PROGRESS_CSS, Progress, SPORESTACK_STEPS, COMMON_STEPS } from './progress.js'
@@ -108,22 +108,24 @@ let draftCreatedAt = new Date().toISOString()
 // ── 1. connect ────────────────────────────────────────────────────────────────
 function stepConnect() {
   show(`<p class="eyebrow">Step 1 of 3</p><h2>Let's make something that lives on its own</h2>
-    <p class="muted">About fifteen minutes and $10 of QUAI. Here is what happens:</p>
+    <p class="muted">About fifteen minutes and $10, in QUAI or USDC. Here is what happens:</p>
     <ol class="intro">
       <li><div><b>You describe it</b><span class="muted">A name, a persona, life goals, and the rules it chooses to live by.</span></div></li>
-      <li><div><b>You rent it an egg</b><span class="muted">A tiny server, paid in QUAI from Pelagus. It locks itself and makes its own keys.</span></div></li>
+      <li><div><b>You rent it an egg</b><span class="muted">A tiny server, paid from your wallet: QUAI with Pelagus, or USDC on Base with MetaMask, Phantom or WalletConnect. It locks itself and makes its own keys.</span></div></li>
       <li><div><b>You sign, it hatches</b><span class="muted">Your signature hands the egg its config. Then feed it, and let it go.</span></div></li>
     </ol>
     <p class="small muted">Your wallet is recorded as its maker. That's all it gives you: no keys, no off switch.</p>
     ${DEV ? `<p class="small dev-note"><b>Dev phase.</b> While gremlinz is in development, every gremlin hatched here is a dev gremlin: the gremlinz team keeps an SSH key to its server so we can monitor it, fix it and, if needed, stop it. That access follows it if it moves. It will end before launch.</p>` : ''}
-    <button id="go">Connect Pelagus</button>`)
+    <button id="go">${account() ? `Continue as ${account()!.address.slice(0, 8)}…` : 'Sign in'}</button>
+    <p class="small muted">Pelagus, MetaMask, Phantom or any WalletConnect wallet. Signing in is free and sends nothing.</p>`)
   $('#go').onclick = async () => {
     const st = progress.step('connect')
     try {
-      st.signing('Approve the connection in Pelagus')
-      s.maker = await connect()
+      st.signing('Choose a wallet and sign in')
+      const a = await makerAccount()
+      s.maker = a.address
       st.signed()
-      st.done(`${s.maker.slice(0, 8)}…`)
+      st.done(`${s.maker.slice(0, 8)}… (${WALLET_NAMES[a.kind]})`)
       save()
       route()
     } catch (e) { st.fail(e); fail(e) }
@@ -296,7 +298,7 @@ function stepHost() {
   show(`<p class="eyebrow">Step 3 of 3</p><h2>Where should the egg hatch?</h2>
     <p class="muted">The egg is a small rented server. It only lives until your gremlin moves to a home it pays for itself.</p>
     <div class="choice" style="margin:18px 0 22px">
-      <label><input type="radio" name="host" value="fluence" checked><span><b>Fluence <span class="pill pill-alive" style="margin-left:6px">recommended</span></b><span class="muted small">From $${FLUENCE_MIN_TOPUP_USD}. Pay with QUAI from Pelagus (bridged for you) or USDC on Base.</span></span></label>
+      <label><input type="radio" name="host" value="fluence" checked><span><b>Fluence <span class="pill pill-alive" style="margin-left:6px">recommended</span></b><span class="muted small">From $${FLUENCE_MIN_TOPUP_USD}. Pay QUAI with Pelagus (bridged for you), or USDC on Base from MetaMask, Phantom or any WalletConnect wallet.</span></span></label>
       <label><input type="radio" name="host" value="sporestack"><span><b>SporeStack</b><span class="muted small">USDT, BTC or XMR. A new account needs a $100 first deposit, which is reused for later eggs.</span></span></label>
     </div>
     <button id="go">Continue</button>`)
@@ -325,15 +327,32 @@ async function stepFluence() {
   let job = await board.hatchJob(jobId)
 
   if (job.status === 'funding' && !s.bridgeTx && !(BigInt(job.funds?.quai ?? 0) > 0n)) {
-    const quaiWei = await quaiNeededFor(target, hostingAddress)
+    // QUAI is bridged with Pelagus; an EVM wallet pays USDC on Base directly.
+    const payWith = account() && canPayUsdc(account()!.kind) ? 'usdc' : 'quai'
+    const quaiWei = payWith === 'quai' ? await quaiNeededFor(target, hostingAddress) : 0n
     if (!progress.isDone('fund-egg')) fund.start('Choose how to pay')
     show(`<h2>Fund the egg</h2>
       <p>The egg needs <b>${fmtUsd(target)}</b> of hosting credit. It goes to the egg's own hosting account, which the egg takes over once it runs: neither you nor gremlinz keeps it.</p>
-      <p><button id="quai">Pay ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI with Pelagus</button></p>
-      <p class="muted">Pelagus will ask for three confirmations: wrap, approve, bridge. Or send ${fmtUsd(target)} USDC on Base to <code>${esc(hostingAddress)}</code>; this page continues once it arrives.</p>`)
+      ${payWith === 'usdc' ? `<p><button id="usdc">Pay ${fmtUsd(target)} USDC on Base with ${WALLET_NAMES[account()!.kind]}</button></p>
+      <p class="muted">One transfer to the egg's hosting address <code>${esc(hostingAddress)}</code>. You can also send it from any other wallet; this page continues once it arrives.</p>`
+      : `<p><button id="quai">Pay ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI with Pelagus</button></p>
+      <p class="muted">Pelagus will ask for three confirmations: wrap, approve, bridge. Or send ${fmtUsd(target)} USDC on Base to <code>${esc(hostingAddress)}</code> from any wallet; this page continues once it arrives.</p>`}`)
     await new Promise<void>((resolve) => {
       let paying = false
-      $('#quai').onclick = async () => {
+      const usdcButton = document.getElementById('usdc')
+      if (usdcButton) usdcButton.onclick = async () => {
+        if (paying) return
+        paying = true
+        usdcButton.setAttribute('disabled', '')
+        try {
+          fund.signing(`Confirm the USDC transfer in ${WALLET_NAMES[account()!.kind]}`)
+          const hash = await payUsdcOnBase(s.maker!, hostingAddress, target)
+          fund.tx('base', hash, `${fmtUsd(target)} USDC to the egg`, 'sent')
+          fund.waiting('Waiting for the USDC to arrive')
+        } catch (e) { fund.fail(e); fail(e); paying = false; usdcButton.removeAttribute('disabled') }
+      }
+      const quaiButton = document.getElementById('quai')
+      if (quaiButton) quaiButton.onclick = async () => {
         if (paying) return
         paying = true
         $('#quai').setAttribute('disabled', '')
@@ -348,7 +367,7 @@ async function stepFluence() {
           if (!paying) fund.touch('Waiting for you to pay')
           await sleep(15_000)
         }
-        if (!paying) { fund.done('USDC received'); bridge.skip(); swap.skip(); resolve() }
+        if (!paying || payWith === 'usdc') { fund.done('USDC received'); bridge.skip(); swap.skip(); resolve() }
       })()
     })
   } else if (!progress.isDone('fund-egg')) fund.done(s.bridgeTx ? 'bridge sent' : job.status === 'funding' ? 'QUAI already on Base' : 'funded')
@@ -425,13 +444,13 @@ async function stepHatch() {
     show(`<h2>Your egg is alive</h2>
       <p>Sign ${esc(s.config!.name)}'s configuration for this egg (Quai address <code>${esc(egg.announcement.deposit.quai)}</code>).
          The signature names the egg, so nobody else can use it.</p>
-      <button id="sign">Sign with Pelagus</button>`)
+      <button id="sign">Sign with ${account() ? WALLET_NAMES[account()!.kind] : 'your wallet'}</button>`)
     sign.start('Waiting for you')
     await new Promise<void>((resolve) => {
       $('#sign').onclick = async () => {
         try {
-          sign.signing('Confirm the config in Pelagus')
-          s.signed = await signConfigWithPelagus(s.maker!, s.config!, egg!.announcement.deposit.quai)
+          sign.signing(`Confirm the config in ${account() ? WALLET_NAMES[account()!.kind] : 'your wallet'}`)
+          s.signed = await signConfigWithWallet(s.maker!, s.config!, egg!.announcement.deposit.quai)
           sign.signed('signed')
           save()
           resolve()

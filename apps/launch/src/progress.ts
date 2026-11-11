@@ -38,7 +38,7 @@ export interface StepDef {
 }
 
 export const COMMON_STEPS: StepDef[] = [
-  { id: 'connect', title: 'Connect Pelagus', sigs: 1, who: 'you' },
+  { id: 'connect', title: 'Sign in with your wallet', sigs: 1, who: 'you' },
   { id: 'describe', title: 'Describe your gremlin', sigs: 0, who: 'you' },
   { id: 'host', title: 'Choose where the egg hatches', sigs: 0, who: 'you' },
 ]

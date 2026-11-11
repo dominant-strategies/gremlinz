@@ -1,4 +1,4 @@
-/** Minimal Pelagus (Quai wallet) adapter: connect and sign EIP-712 typed data. */
+/** Minimal Pelagus (Quai wallet) adapter: sign EIP-712 typed data (sign-in itself goes through auth.ts). */
 import { HATCH_DOMAIN, HATCH_TYPES, configHash, type GremlinConfig, type SignedConfig } from '@gremlins/hatch'
 
 interface Eip1193 {
@@ -12,12 +12,6 @@ declare global {
 export function pelagus(): Eip1193 {
   if (!window.pelagus) throw new Error('Pelagus wallet not found. Install it from pelaguswallet.io and reload.')
   return window.pelagus
-}
-
-export async function connect(): Promise<string> {
-  const accounts = (await pelagus().request({ method: 'quai_requestAccounts' })) as string[]
-  if (!accounts?.length) throw new Error('No Quai account available in Pelagus')
-  return accounts[0]
 }
 
 /**
