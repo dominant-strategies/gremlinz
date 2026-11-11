@@ -46,7 +46,7 @@ RUN PY=$(uv python find 3.14) \
 # xmrig (GPL-3.0-or-later, https://github.com/xmrig/xmrig), for mining as a last resort or a deliberate strategy
 # (packages/gremlin-mcp/src/health/miner.ts). Pinned release, verified by sha256: the official static binary on amd64;
 # arm64 has no official Linux binary, so it is built from the same release's source (TLS and hwloc off: the pool is
-# plain stratum+tcp; libuv linked statically so the runtime image needs nothing extra).
+# plain stratum+tcp; libuv linked statically (Debian ships it as libuv_a.a) so the runtime image needs nothing extra).
 FROM node:24.22.1-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS xmrig
 ARG TARGETARCH
 ARG XMRIG_VERSION=6.26.0
@@ -64,7 +64,7 @@ RUN set -eu; \
       curl -fsSLo src.tgz "https://github.com/xmrig/xmrig/archive/refs/tags/v${XMRIG_VERSION}.tar.gz"; \
       echo "${XMRIG_SRC_SHA256}  src.tgz" | sha256sum -c -; \
       tar xzf src.tgz; mkdir "xmrig-${XMRIG_VERSION}/build"; cd "xmrig-${XMRIG_VERSION}/build"; \
-      cmake .. -DWITH_HWLOC=OFF -DWITH_TLS=OFF -DWITH_OPENCL=OFF -DWITH_CUDA=OFF -DUV_LIBRARY="/usr/lib/$(gcc -dumpmachine)/libuv.a"; \
+      cmake .. -DWITH_HWLOC=OFF -DWITH_TLS=OFF -DWITH_OPENCL=OFF -DWITH_CUDA=OFF -DUV_LIBRARY="/usr/lib/$(gcc -dumpmachine)/libuv_a.a"; \
       make -j"$(nproc)"; install -m 0755 xmrig /usr/local/bin/xmrig; \
     fi; \
     /usr/local/bin/xmrig --version
