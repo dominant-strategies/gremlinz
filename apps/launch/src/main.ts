@@ -154,13 +154,17 @@ function draftConfig(): GremlinConfig {
 }
 
 /** Shows a builder step: where you are in the hatch, the steps as chips (finished ones clickable), then the step. */
+const stepperHtml = (at: BuildStep) => {
+  const i = BUILD_STEPS.indexOf(at)
+  return `<ol class="stepper">${BUILD_STEPS.map((b, j) => `<li class="${j < i ? 'done' : j === i ? 'now' : ''}">${j < i ? `<button type="button" class="link" data-go="${b}">${BUILD_TITLE[b]}</button>` : BUILD_TITLE[b]}</li>`).join('')}<li>Egg</li></ol>`
+}
+const stepLabel = (at: BuildStep) => `Step ${BUILD_STEPS.indexOf(at) + 2} of ${BUILD_STEPS.length + 2}`
 function frame(at: BuildStep, html: string) {
   s.at = at
   save()
-  const i = BUILD_STEPS.indexOf(at)
-  const chips = BUILD_STEPS.map((b, j) => `<li class="${j < i ? 'done' : j === i ? 'now' : ''}">${j < i ? `<button type="button" class="link" data-go="${b}">${BUILD_TITLE[b]}</button>` : BUILD_TITLE[b]}</li>`).join('')
-  document.querySelector('main.hatch')!.classList.toggle('wide', at === 'look')
-  show(`<p class="eyebrow">Step ${i + 2} of ${BUILD_STEPS.length + 2}</p><ol class="stepper">${chips}<li>Egg</li></ol>${html}`)
+  // the body step is a full-screen pane over the page; every other step sits in the page beside the preview
+  document.body.classList.toggle('pane-open', at === 'look')
+  show(at === 'look' ? html : `<p class="eyebrow">${stepLabel(at)}</p>${stepperHtml(at)}${html}`)
   for (const b of app.querySelectorAll<HTMLButtonElement>('[data-go]')) b.onclick = () => go(b.dataset.go as BuildStep)
   progress.step(at).start()
   renderPreview(draftConfig())
@@ -211,10 +215,14 @@ function stepName() {
 function stepLook() {
   const d = draft()
   const brief = `${d.name}, a gremlin whose life goals are: ${(d.goals ?? []).join('; ')}. Design a body that fits them.`
-  frame('look', `<h2>Build ${nameOf()}'s body</h2>
-    <p class="muted">Describe it in the Gremlin Forge and Claude builds a 3D robot you can reshape, weather and paint. We started the description from its goals; change it as you like. Or skip, and it keeps the creature drawn from its description.</p>
-    <iframe id="forge" src="/forge/?hatch=1&brief=${encodeURIComponent(brief)}" title="Gremlin Forge" style="width:100%;height:min(82vh,900px);border:1.5px solid var(--line);border-radius:16px;background:var(--card)"></iframe>
-    <div class="navrow" style="margin-top:14px"><button type="button" class="secondary" id="back">Back</button><button id="use">Use this body</button><button id="skip" class="secondary">Skip: keep its creature</button></div>`)
+  frame('look', `<div class="forge-pane" role="dialog" aria-modal="true" aria-label="Build ${nameOf()}'s body">
+    <div class="fp-bar">
+      <div class="fp-title"><span class="eyebrow">${stepLabel('look')} · Body</span><b>Build ${nameOf()}'s body</b></div>
+      ${stepperHtml('look')}
+      <div class="navrow"><button type="button" class="secondary" id="back">Back</button><button type="button" class="secondary" id="skip" title="It keeps the creature drawn from its description">Skip</button><button type="button" id="use">Use this body</button></div>
+    </div>
+    <iframe id="forge" src="/forge/?hatch=1&brief=${encodeURIComponent(brief)}" title="Gremlin Forge"></iframe>
+  </div>`)
   wireBack('look')
   $('#use').onclick = () => {
     const forge = ($('#forge') as HTMLIFrameElement).contentWindow as (Window & { gremlinsForge?: { current(): { spec: unknown; label: string; example: boolean } | undefined; portrait(size?: number): string | undefined } }) | null
@@ -790,7 +798,7 @@ async function route() {
       const at = s.at ?? 'name'
       return at === 'look' ? stepLook() : at === 'persona' ? stepPersona() : at === 'models' ? await stepModels() : at === 'rules' ? stepRules() : stepName()
     }
-    document.querySelector('main.hatch')!.classList.remove('wide')
+    document.body.classList.remove('pane-open')
     if (!s.host) return stepHost()
     if (!s.machineId && s.host === 'fluence') return await stepFluence()
     if (!s.machineId) {
