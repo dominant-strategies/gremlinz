@@ -282,6 +282,22 @@
     .forge .refchip img { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; border: 1.5px solid var(--line); }
     .forge .refchip[hidden] + #refHint { display: inline; }
     .forge .refchip:not([hidden]) + #refHint { display: none; }
+    /* live mode: the console on a gremlin's public page (and embedded in it) */
+    .hud .vitals { display: none; }
+    body.live .hud .vitals { display: block; }
+    body.live .hud .build { display: none; }
+    body.live .forge-build, body.live #undoBtn, body.live #redoBtn, body.live #checkBtn, body.live #copyBtn, body.live #attachBtn, body.live #selectHint, body.live #photoBtn, body.live #renderTab, body.live #photoTab { display: none !important; }
+    body.embedded .site-header { display: none; }
+    body.embedded main.forge { padding-bottom: 8px; }
+    body.live .hud { --stage-h: clamp(380px, calc(100vh - 200px), 780px); }
+    body.live .stage.departed canvas.studio { filter: grayscale(.85) brightness(1.05); }
+    .attach-dlg { border: 1px solid #dcd5c8; border-left: 4px solid #e8571e; border-radius: 8px; padding: 18px 20px; max-width: 440px; width: calc(100% - 32px); background: #fbfaf7; color: #24211d; }
+    .attach-dlg::backdrop { background: rgba(36,33,29,.35); }
+    .attach-dlg h2 { font: 700 20px/1.2 var(--display); margin: 0 0 6px; }
+    .attach-dlg ul { list-style: none; margin: 12px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow: auto; }
+    .attach-dlg li button { width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid #dcd5c8; border-radius: 6px; background: #fff; font: inherit; cursor: pointer; }
+    .attach-dlg li button:hover { border-color: #24211d; }
+    .attach-dlg li small { font-family: var(--mono); color: #66625b; }
     #askForm.dragover { outline: 2px dashed var(--signal, #e8571e); outline-offset: 4px; }
   </style>
 </head>
@@ -294,6 +310,12 @@
     </div>
   </header>
 
+  <dialog class="attach-dlg" id="attachDlg" aria-labelledby="attachTitle">
+    <h2 id="attachTitle">Put it on which gremlin?</h2>
+    <p class="small muted" style="margin:0">Its public page will show this design live, moving with what it does, and links to it will preview with this picture.</p>
+    <ul id="attachList"></ul>
+    <div class="row" style="display:flex;gap:8px;justify-content:flex-end"><button class="btn btn-small" type="button" id="attachCancel">Cancel</button></div>
+  </dialog>
   <main class="forge">
     <section class="hud" id="hud" aria-label="Gremlin console">
       <header class="hud-head">
@@ -324,7 +346,14 @@
           <canvas id="hudSpark" class="spark" aria-hidden="true"></canvas>
           <div class="kv"><span>Mode input</span><span id="hudInput">0.00</span><span>Explode</span><span id="hudExplode">0%</span></div>
         </section>
-        <section class="hcard">
+        <section class="hcard vitals" id="vitalsCard">
+          <h3>Vitals <span>02</span></h3>
+          <div class="bignum"><b id="vWorth">0</b><small>QUAI</small></div>
+          <p class="sub">Net worth</p>
+          <div class="kv"><span>Runway</span><span id="vRunway">—</span><span>Earned, 7 days</span><span id="vRev">—</span><span>Spent per day</span><span id="vBurn">—</span><span>Last check-in</span><span id="vSeen">—</span><span>Tier</span><span id="vTier">—</span></div>
+          <p class="sub" id="vNote" style="margin-top:10px"></p>
+        </section>
+        <section class="hcard build">
           <h3>Build <span>02</span></h3>
           <div class="menace" id="menace"></div>
           <div class="meter" id="meter"></div>
@@ -361,6 +390,7 @@
           <button class="btn btn-small" id="viewBtn" type="button">Reset view</button>
           <button class="btn btn-small" id="recBtn" type="button" title="Records the tour as a 1080p video with its labels; takes about a minute">Record video</button>
           <button class="btn btn-small" id="checkBtn" type="button" hidden title="Claude looks at renders of every mode and fixes parts that clash, float or hide">Check it with Claude</button>
+            <button class="btn btn-small" id="attachBtn" type="button" title="Show this design on your gremlin's public page, live, with a share card">Put on my gremlin</button>
             <button class="btn btn-small" id="copyBtn" type="button">Copy hatch config</button>
           <span class="small muted" id="copyStatus"></span>
           <span class="small muted hint" id="selectHint">Click a part to select it. Shift-click for more.</span>

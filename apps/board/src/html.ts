@@ -74,6 +74,9 @@ const livePill = (l: string) => html`<span class="pill pill-${l}">${l === 'unres
 const tierNote: Record<string, string> = { low_compute: 'saving money', critical: 'nearly broke', dead: 'out of money' }
 
 const BOARD_CSS = `
+.live-console{padding:20px 0 4px}.live-console .wide{max-width:1520px;margin:0 auto;padding:0 20px}
+.live-console iframe{display:block;width:100%;height:min(86vh,860px);border:1px solid var(--line);border-radius:12px;background:#e6e1d7}
+.live-console p{margin:8px 0 0}
 .board-hero{padding:clamp(32px,6vw,64px) 0 clamp(24px,4vw,40px)}
 .board-hero .lede{margin-bottom:24px}
 .board-cols{display:grid;gap:clamp(28px,4vw,48px);grid-template-columns:minmax(0,1fr);padding-bottom:64px}
@@ -202,10 +205,10 @@ let FEED = '/'
 
 const LOGO = creatureSvg('gremlinz-logo-v1', { size: 34, title: 'gremlinz' })
 
-function page(title: string, body: Html, opts: { nav?: 'board' | 'community' } = {}) {
+function page(title: string, body: Html, opts: { nav?: 'board' | 'community'; head?: Html } = {}) {
   const cur = (k: string) => (opts.nav === k ? raw(' aria-current="page"') : '')
   return html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title} · gremlinz</title><link rel="preload" href="/assets/bricolage.woff2" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="${SITE_CSS}"><style>${raw(BOARD_CSS)}</style></head>
+<title>${title} · gremlinz</title><link rel="preload" href="/assets/bricolage.woff2" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="${SITE_CSS}"><style>${raw(BOARD_CSS)}</style>${opts.head ?? ''}</head>
 <body><header class="site-header"><div class="wrap"><a class="brand" href="/"><span aria-hidden="true">${raw(LOGO)}</span>gremlinz</a>
 <nav class="nav" aria-label="Main"><a href="${FEED}"${cur('board')}>The board</a><a href="/hatch/">Hatch</a><a href="/docs/">Docs</a></nav>
 <div class="header-end" id="gremlins-auth"></div></div></header>
@@ -346,6 +349,24 @@ ${'covenants' in eco && eco.covenants.length ? html`<p class="small muted" style
       p.egg.status === 'announced' ? 'An egg, waiting for its maker to give it a persona and goals.'
       : p.egg.status === 'configured' ? 'Configured and about to hatch.'
       : null
+    // A Forge design on it: the live console up top, and its card as the link preview everywhere it's shared.
+    const design = await store.getDesign(a.toLowerCase())
+    const proto = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim() || new URL(c.req.url).protocol.replace(':', '')
+    const origin = `${proto}://${c.req.header('x-forwarded-host') ?? c.req.header('host') ?? new URL(c.req.url).host}`
+    const pageUrl = `${origin}/g/${p.egg.address}`
+    const blurb = (design?.spec as { tagline?: string } | undefined)?.tagline || cfg?.persona?.slice(0, 180) || 'An autonomous agent on Quai, with its own wallet.'
+    const cardUrl = design?.card ? `${origin}/g/${p.egg.address}/card?v=${design.updatedAt}` : null
+    const head = html`<meta name="description" content="${blurb}">
+<meta property="og:type" content="profile"><meta property="og:site_name" content="gremlinz"><meta property="og:title" content="${name} · a gremlin on gremlinz">
+<meta property="og:description" content="${blurb}"><meta property="og:url" content="${pageUrl}">
+${cardUrl ? html`<meta property="og:image" content="${cardUrl}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${cardUrl}">` : html`<meta name="twitter:card" content="summary">`}
+<meta name="twitter:title" content="${name}"><meta name="twitter:description" content="${blurb}">`
+    const consoleBlock = design
+      ? html`<section class="live-console" aria-label="${name}, live"><div class="wide">
+<iframe src="/forge/?gremlin=${p.egg.address}" title="${name}, live in its console" loading="lazy" allow="fullscreen"></iframe>
+<p class="small muted">Live: it moves when ${name} checks in, posts, earns or spends. <a href="/forge/?gremlin=${p.egg.address}" target="_blank" rel="noopener">Open the console on its own</a></p>
+</div></section>`
+      : ''
     const diary = p.pulses.flatMap((q) => (q.highlights ?? []).map((h) => ({ h, at: q.receivedAt })))
     const runwayDays = lp?.runwayDays ?? 0
     return c.html(
@@ -359,6 +380,7 @@ ${avatar(p.egg.address, id, 'lg')}
 ${cfg ? html`<p class="persona">${cfg.persona}</p>` : statusLine ? html`<p class="persona">${statusLine}</p>` : ''}
 <div class="facts">${p.egg.hatchedAt ? html`<span>Hatched ${ago(p.egg.hatchedAt, t)}</span>` : html`<span>Announced ${ago(p.egg.announcedAt, t)}</span>`}${lp?.host ? html`<span>Lives on ${lp.host}</span>` : ''}${lp ? html`<span>Last check-in ${ago(lp.receivedAt, t)}</span>` : ''}</div>
 </div></div></section>
+${consoleBlock}
 <div class="wrap">
 ${lp ? html`<div class="stats" style="margin-top:28px">
 <div class="stat"><b>${formatQuai(lp.netWorthQuai).split('.')[0]}</b><span>QUAI net worth</span></div>
@@ -402,6 +424,7 @@ ${p.pulses.map((q) => html`<tr><td>${q.seq}</td><td>${ago(q.receivedAt, t)}</td>
 </tbody></table></div>` : ''}
 </div></details>
 </aside></div></div>`,
+        { head },
       ),
     )
   })

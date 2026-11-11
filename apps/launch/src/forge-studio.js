@@ -15,7 +15,8 @@ import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { FORGE_CRITIQUE_MAX_STILLS, FORGE_DECAL_FINISHES, FORGE_EXAMPLES, FORGE_MATERIALS, FORGE_STYLE, FORGE_WEAR, checkForgeSpec, curlPoints, forgeEase, forgeTour, forgeTourAt } from '@gremlins/hatch'
 import { encodeVideo, paintOverlay, videoSupport } from './forge-record.js'
-import { fitName, hideCursor, modelCode, mountHud, renderHud, tickHud } from './forge-hud.js'
+import { fitName, hideCursor, liveHud, modelCode, mountHud, renderHud, tickHud } from './forge-hud.js'
+import { modeFor, quai, watchGremlin } from './forge-live.js'
 import { applySkins, applyPose, drawLabels, layoutLabels, forgetIsolate, mountLabels, resetView, startTour, step as stepView, stopTour, toggleExplode, toggleIsolate, toggleMode, view } from './forge-motion.js'
 import { addDecals, artReady, wearFor, wearFrame, wearMaterial } from './forge-surfaces.js'
 import { creatureSvg } from '@gremlins/hatch/creature'
@@ -34,6 +35,11 @@ const IDEAS = [
 ]
 
 // ---------------------------------------------------------------------------------------------------- state
+/**
+ * Live mode: `?gremlin=0x…` shows that gremlin's attached design on its public page, acting out what it does. Nothing
+ * here is editable and nothing is saved, so the visitor's own Forge history is never touched.
+ */
+const LIVE = (() => { const g = new URLSearchParams(location.search).get('gremlin'); return /^0x[0-9a-fA-F]{40}$/.test(g || '') ? g : null })()
 // steps: [{ spec, house, label, parent, t, thumb?, photo? }], append-only; cur is the step on screen.
 const MAX_STEPS = 80
 const state = { steps: [], cur: -1, uploads: {} }
@@ -48,6 +54,7 @@ const step = () => state.steps[state.cur]
 const spec = () => step()?.spec
 
 function save() {
+  if (LIVE) return
   const strip = (list) => list.map(({ photo: _p, ...x }) => x)
   for (const keep of [MAX_STEPS, 20, 5]) {
     const from = Math.max(0, state.steps.length - keep)
@@ -195,13 +202,14 @@ function initStudio() {
     if (spin && robot && !placing && !selected.size && !view.tour) robot.rotation.y += 0.004
     if (inner && spec()) {
       const still = !!placing || selected.size > 0, rig = inner.userData.rig
-      applyPose(rig, spec(), stepView(spec(), dt, now, still, reduceMotion))
+      applyPose(rig, spec(), stepView(spec(), dt, now, still, reduceMotion || liveDead))
       applySkins(rig, still ? null : view.isolate, !still && view.xray)
       focusCamera(dt)
       syncConsole()
       tickHud(now)
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')
-      if (!view.tour && view.beats.length > 1 && !reduceMotion && !still && !ctl && !typing && now - lastActive > 25) { startTour(now); syncConsole(true) }
+      if (LIVE) stepLive(now)
+      else if (!view.tour && view.beats.length > 1 && !reduceMotion && !still && !ctl && !typing && now - lastActive > 25) { startTour(now); syncConsole(true) }
     }
     controls.update()
     rig.rotation.y = controls.getAzimuthalAngle()
@@ -747,6 +755,7 @@ function pickPart(e) {
   return hit ? hit.object.userData.part : null
 }
 function selectAt(e) {
+  if (LIVE) return
   const i = pickPart(e)
   if (i == null) { if (!e.shiftKey) setSelection([]); return }
   if (e.shiftKey) { const n = new Set(selected); n.has(i) ? n.delete(i) : n.add(i); setSelection([...n]) }
@@ -1088,6 +1097,115 @@ async function recordTour() {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------- live mode
+const liveQueue = []
+let liveNow = null, liveLast = null, liveQuietSince = 0, liveDead = false
+const ACT_WORD = { thinking: 'Thinking', posting: 'Posting', earning: 'Earning', paying: 'Paying' }
+/** Plays queued activities one at a time: the mode rises, holds three and a half seconds, settles, then the next. */
+function stepLive(now) {
+  if (liveNow && now > liveNow.until) { view.inputTo = 0; liveNow = null }
+  if (!liveNow && !liveQueue.length && liveLast && now - liveQuietSince > 45) liveQueue.push(liveLast) // a quiet gremlin still shows what it does
+  if (!liveNow && liveQueue.length && view.input === 0 && !liveDead) {
+    const a = liveQueue.shift(), m = modeFor(spec(), a)
+    liveQuietSince = now
+    if (m) { view.mode = m.id; view.inputTo = 1; liveNow = { a, until: now + 1.1 + 3.5 } }
+  }
+  liveHud.status = liveDead ? 'Departed' : liveNow ? ACT_WORD[liveNow.a] : liveHud.rest
+}
+const agoIso = (iso) => { if (!iso) return '—'; const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000); return s < 90 ? `${Math.round(s)} s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago` }
+async function startLiveMode() {
+  document.body.classList.add('live')
+  if (window.self !== window.top) document.body.classList.add('embedded')
+  state.steps = []; state.cur = -1
+  liveHud.on = true; liveHud.rest = 'Idle'
+  const d = await fetch(`/api/gremlins/${LIVE}/design`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+  const sp = d && (() => { try { return checkForgeSpec(d.spec).spec } catch { return null } })()
+  if (!sp) { setStatus('This gremlin has no design yet. Its maker can make one in the Gremlin Forge and put it on.', true); return }
+  if (glOK) houseRules(sp, [])
+  state.steps = [{ spec: sp, house: [], label: 'Live', parent: -1, t: Date.now() }]; state.cur = 0
+  render(true)
+  document.title = `${sp.name} · live · gremlinz`
+  watchGremlin(LIVE, {
+    onState: (g) => {
+      const lp = g.pulse
+      liveDead = g.liveness === 'dead'
+      $('stage').classList.toggle('departed', liveDead)
+      liveHud.operator = g.maker ? `Maker ${g.maker.slice(0, 6)}…${g.maker.slice(-4)}` : '—'
+      liveHud.rest = g.status !== 'hatched' ? 'Egg' : g.liveness === 'unresponsive' ? 'Quiet' : 'Idle'
+      liveHud.kicker = `Live${g.name ? ` · ${g.name}` : ''} · checked in ${agoIso(lp?.receivedAt)}`
+      $('hudKicker').textContent = liveHud.kicker
+      $('vWorth').textContent = lp ? quai(lp.netWorthQuai) : '0'
+      $('vRunway').textContent = lp ? `${Math.round(lp.runwayDays)} days` : '—'
+      $('vRev').textContent = lp ? `$${lp.revenue7dUsd}` : '—'
+      $('vBurn').textContent = lp ? `$${lp.burnRate7dUsd}` : '—'
+      $('vSeen').textContent = agoIso(lp?.receivedAt)
+      $('vTier').textContent = lp ? lp.tier.replace('_', ' ') : '—'
+      $('vNote').textContent = lp?.highlights?.[0] || (g.lastPost ? `Last post: “${g.lastPost.title}”` : '')
+    },
+    onActivity: (a) => { liveQueue.push(a); liveLast = a },
+  })
+}
+
+// ---------------------------------------------------------------------------------------------------- share card + attach
+/** The 1200×630 link preview: the gremlin at rest from the hero angle with its name and badge painted on. */
+function renderCard() {
+  const W = 1200, H = 630, ratio = renderer.getPixelRatio()
+  const saved = { pos: camera.position.clone(), target: controls.target.clone(), turn: robot.rotation.y }
+  recording = true
+  try {
+    renderer.setPixelRatio(1); renderer.setSize(W, H, false); composer.setPixelRatio(1); composer.setSize(W, H)
+    camera.aspect = W / H; camera.updateProjectionMatrix()
+    robot.rotation.y = 0
+    const dir = new T.Vector3(0.36, 0.17, 0.92).normalize()
+    camera.position.copy(hero.target).addScaledVector(dir, hero.dist * 1.02); camera.lookAt(hero.target); camera.updateMatrixWorld()
+    rig.rotation.y = Math.atan2(dir.x, dir.z)
+    applyPose(inner.userData.rig, spec(), { idle: false }); applySkins(inner.userData.rig, null, false)
+    robot.updateMatrixWorld(); wearFrame.value.copy(robot.matrixWorld).invert()
+    aoPass.enabled = quality.ao; aoCamera.copy(camera, false); aoCamera.layers.set(0)
+    composer.render()
+    const c = document.createElement('canvas'); c.width = W; c.height = H
+    const ctx = c.getContext('2d'); ctx.drawImage(renderer.domElement, 0, 0, W, H)
+    const sp = spec()
+    paintOverlay(ctx, { w: W, h: H, code: modelCode(sp), kicker: $('hudKicker').textContent, name: sp.name, tagline: sp.tagline, mode: '', labels: [] })
+    return c.toDataURL('image/jpeg', 0.86)
+  } finally {
+    recording = false
+    renderer.setPixelRatio(ratio); composer.setPixelRatio(ratio); resize()
+    camera.position.copy(saved.pos); controls.target.copy(saved.target); camera.lookAt(controls.target); robot.rotation.y = saved.turn
+    forgetIsolate()
+  }
+}
+/** Puts the design on one of the signed-in maker's gremlins: its public page shows it live, with this card. */
+async function attachToGremlin() {
+  if (!glOK || !inner || ctl) return
+  let me = account()
+  if (!me) { try { me = await signIn() } catch { return } }
+  const eggs = await fetch(`/api/eggs?maker=${me.address}&limit=100`).then((r) => (r.ok ? r.json() : { eggs: [] })).then((j) => j.eggs).catch(() => [])
+  if (!eggs.length) return setStatus('You haven’t made a gremlin with this wallet yet. Hatch one first, then put this design on it.', true)
+  const pick = await new Promise((done) => {
+    const dlg = $('attachDlg')
+    $('attachList').replaceChildren(...eggs.map((e) => {
+      const li = document.createElement('li'), b = document.createElement('button'); b.type = 'button'
+      b.innerHTML = `<span>${esc(e.name || 'Unnamed egg')}</span><small>${esc(e.status)} · ${esc(e.address.slice(0, 6))}…${esc(e.address.slice(-4))}</small>`
+      b.addEventListener('click', () => { dlg.close(); done(e) })
+      li.appendChild(b); return li
+    }))
+    $('attachCancel').onclick = () => { dlg.close(); done(null) }
+    dlg.onclose = () => done(null)
+    dlg.showModal()
+  })
+  if (!pick) return
+  ctl = new AbortController(); busy(true, `Putting ${spec().name} on ${pick.name || 'your gremlin'}…`)
+  try {
+    const card = renderCard()
+    const res = await sessionPostJson(`/api/gremlins/${pick.address}/design`, { spec: spec(), card }, { scope: 'forge', signal: ctl.signal })
+    $('status').innerHTML = `${esc(pick.name || 'Your gremlin')} now shows ${esc(spec().name)}. <a href="${esc(res.page)}" target="_blank" rel="noopener">See its live page</a>`
+    $('status').classList.remove('err')
+  } catch (e) {
+    setStatus(e.name === 'AbortError' ? 'Stopped.' : e.message, e.name !== 'AbortError')
+  } finally { busy(false) }
+}
+
 // ---------------------------------------------------------------------------------------------------- reference picture
 let reference = null // { data: JPEG data URL, name }, kept for this visit only
 let reviewNext = false
@@ -1176,7 +1294,7 @@ let busyTimer = null
  */
 function busy(on, text) {
   if (!on) ctl = null // the request is over: nothing left to stop, and the console may tour again
-  for (const id of ['forgeBtn', 'refineBtn', 'photoBtn', 'checkBtn', 'recBtn']) { const b = $(id); if (b) b.disabled = on }
+  for (const id of ['forgeBtn', 'refineBtn', 'photoBtn', 'checkBtn', 'recBtn', 'attachBtn']) { const b = $(id); if (b) b.disabled = on }
   $('stopBtn').hidden = !on
   $('stage').classList.toggle('working', on)
   const card = $('busyCard')
@@ -1470,6 +1588,7 @@ function wire() {
   $('prompt').addEventListener('paste', (e) => { const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/')); if (f) { e.preventDefault(); loadReference(f) } })
   $('checkBtn').addEventListener('click', () => review(false))
   $('recBtn').addEventListener('click', recordTour)
+  $('attachBtn').addEventListener('click', attachToGremlin)
   $('refineForm').addEventListener('submit', (e) => {
     e.preventDefault(); const t = $('refine').value.trim()
     if (!t) return setStatus('Say what to change first.', true)
@@ -1539,7 +1658,10 @@ async function loadCaps() {
 document.getElementById('logo').innerHTML = creatureSvg('gremlinz-logo-v1', { size: 34, title: 'gremlinz' })
 initStudio()
 wire()
-if (!step()) { const r = checkForgeSpec(structuredClone(FORGE_EXAMPLES.octopod)); state.steps = [{ spec: r.spec, house: r.notes, label: 'Example: Octopod', parent: -1, t: Date.now() }]; state.cur = 0 }
-render(true)
+if (LIVE) startLiveMode()
+else {
+  if (!step()) { const r = checkForgeSpec(structuredClone(FORGE_EXAMPLES.octopod)); state.steps = [{ spec: r.spec, house: r.notes, label: 'Example: Octopod', parent: -1, t: Date.now() }]; state.cur = 0 }
+  render(true)
+}
 renderAuth()
 loadCaps()

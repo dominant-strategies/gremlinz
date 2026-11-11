@@ -12,6 +12,8 @@ const CELLS = 24
 const MOVE_UNIT = { swing: '°', open: '°', curl: '°', spin: '°', slide: ' u', pulse: '%' }
 
 let sp = null, born = performance.now() / 1000, operator = () => undefined
+/** Live mode's overrides: what the gremlin is doing right now, and who made it. */
+export const liveHud = { on: false, status: '', operator: '', kicker: '' }
 const hist = new Float32Array(160)
 let histAt = 0, lastText = 0, shownBeat = -1
 
@@ -45,7 +47,7 @@ export function renderHud(spec) {
   $('hudCode').textContent = modelCode(spec)
   $('hudId').textContent = designId(spec)
   const kind = spec.menace >= 7 ? 'Hostile' : spec.menace >= 4 ? 'Working' : 'Friendly'
-  $('hudKicker').textContent = `${kind} gremlin · ${asms.length} assembl${asms.length === 1 ? 'y' : 'ies'} · ${modes.length} mode${modes.length === 1 ? '' : 's'}`
+  $('hudKicker').textContent = liveHud.on && liveHud.kicker ? liveHud.kicker : `${kind} gremlin · ${asms.length} assembl${asms.length === 1 ? 'y' : 'ies'} · ${modes.length} mode${modes.length === 1 ? '' : 's'}`
   $('hudJoints').innerHTML = jointed().length
     ? jointed().map((a) => `<li data-asm="${esc(a.id)}"><span class="n">${esc(a.name)}</span><span class="v">0</span><i><b></b></i></li>`).join('')
     : '<li class="none">No moving joints in this design.</li>'
@@ -69,12 +71,12 @@ export function tickHud(now) {
   $('hudLoad').textContent = `${pct}%`
   const lit = Math.round(load * CELLS)
   ;[...$('hudCells').children].forEach((c, i) => { c.className = i < lit ? (i >= CELLS * 0.8 ? 'hot' : 'on') : '' })
-  const status = $('stage').classList.contains('working') ? 'Working' : up ? mode?.name : view.explode > 0.02 ? 'Exploded' : view.isolate ? 'Isolated' : 'Idle'
+  const status = liveHud.on && liveHud.status ? liveHud.status : $('stage').classList.contains('working') ? 'Working' : up ? mode?.name : view.explode > 0.02 ? 'Exploded' : view.isolate ? 'Isolated' : 'Idle'
   $('hudStatus').lastChild.textContent = String(status).toUpperCase()
   $('hudStatus').classList.toggle('on', status !== 'Idle')
   $('hudClock').textContent = (() => { const t = now - born; return `${pad(t / 3600)}:${pad((t / 60) % 60)}:${pad(t % 60)}` })()
   const who = operator()
-  $('hudOperator').textContent = who ? `${who.slice(0, 6)}…${who.slice(-4)}` : 'Guest'
+  $('hudOperator').textContent = liveHud.on ? liveHud.operator : who ? `${who.slice(0, 6)}…${who.slice(-4)}` : 'Guest'
   // drive card
   $('hudDrive').textContent = String(up ? Math.round(view.input * 100) : pct)
   $('hudDriveMode').textContent = up ? `${mode?.name} · input` : 'Idle · drive load'

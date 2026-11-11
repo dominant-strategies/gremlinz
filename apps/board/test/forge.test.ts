@@ -3,7 +3,7 @@ import { Wallet, type HDNodeWallet } from 'ethers'
 type AnyWallet = Wallet | HDNodeWallet
 import { AUTH_HEADERS, FORGE_EXAMPLES, FORGE_PHOTO_PROMPT, SESSION_HEADER, checkArtSvg, checkForgeSpec, forgeDesignPrompt, sessionGrantMessage, signRequest } from '@gremlins/hatch'
 import { decodeImage, decodeRender, falProvider, geminiProvider, openaiProvider, photoProviderFromEnv, type ForgeDesigner, type PhotoProvider } from '../src/forge.ts'
-import { makeBoard } from './helpers.ts'
+import { hatch, makeBoard } from './helpers.ts'
 
 // 1×1 transparent PNG
 const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
@@ -279,5 +279,49 @@ describe('forge reference pictures and the review pass', () => {
     expect((await b.signedPost(Wallet.createRandom(), '/api/forge/critique', { spec: FORGE_EXAMPLES.octopod, stills: [] })).status).toBe(400)
     const bad = await b.signedPost(Wallet.createRandom(), '/api/forge/critique', { spec: FORGE_EXAMPLES.octopod, stills: [{ label: 'At rest', image: 'data:image/png;base64,AAAA' }] })
     expect(bad.status).toBe(400)
+  })
+})
+
+describe('forge designs on gremlins (live pages and share cards)', () => {
+  const JPEG = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, ...new Array(200).fill(7)]).toString('base64')}`
+
+  it('lets the maker put a design and a card on their gremlin, and shows both on its page', async () => {
+    const b = await makeBoard()
+    const { egg, maker } = await hatch(b, { name: 'Octo' })
+    const r = await b.signedPost(maker, `/api/gremlins/${egg.address}/design`, { spec: FORGE_EXAMPLES.octopod, card: JPEG })
+    expect(r.status).toBe(200)
+    const d = await b.json(`/api/gremlins/${egg.address}/design`)
+    expect(d.status).toBe(200)
+    expect(d.body.spec.assemblies.length).toBe(5)
+    expect(d.body.card).toBe(true)
+    const card = await b.req(`/g/${egg.address}/card`)
+    expect(card.headers.get('content-type')).toBe('image/jpeg')
+    expect(new Uint8Array(await card.arrayBuffer())[0]).toBe(0xff)
+    const page = await (await b.req(`/g/${egg.address}`)).text()
+    expect(page).toContain(`<iframe src="/forge/?gremlin=${egg.address}"`)
+    expect(page).toContain('<meta name="twitter:card" content="summary_large_image">')
+    expect(page).toMatch(new RegExp(`og:image" content="http://localhost/g/${egg.address}/card\\?v=\\d+"`))
+    expect(page).toContain('Eight arms, all of them busy.')
+  })
+
+  it('keeps everyone but the maker out, and checks the design', async () => {
+    const b = await makeBoard()
+    const { egg, maker } = await hatch(b)
+    expect((await b.signedPost(Wallet.createRandom(), `/api/gremlins/${egg.address}/design`, { spec: FORGE_EXAMPLES.toaster })).status).toBe(403)
+    expect((await b.signedPost(maker, `/api/gremlins/${egg.address}/design`, { spec: { parts: [] } })).status).toBe(400)
+    expect((await b.signedPost(maker, `/api/gremlins/${egg.address}/design`, { spec: FORGE_EXAMPLES.toaster, card: 'data:image/png;base64,AAAA' })).status).toBe(400)
+    expect((await b.json(`/api/gremlins/${egg.address}/design`)).status).toBe(404)
+    // without a design the page has no console and a plain card
+    const page = await (await b.req(`/g/${egg.address}`)).text()
+    expect(page).not.toContain('<iframe')
+    expect(page).toContain('<meta name="twitter:card" content="summary">')
+  })
+
+  it("lists a maker's eggs for the Forge to offer", async () => {
+    const b = await makeBoard()
+    const { egg, maker } = await hatch(b)
+    await hatch(b)
+    const r = await b.json(`/api/eggs?maker=${maker.address}`)
+    expect(r.body.eggs.map((e: { address: string }) => e.address.toLowerCase())).toEqual([egg.address.toLowerCase()])
   })
 })

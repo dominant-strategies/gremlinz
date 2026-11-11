@@ -38,6 +38,8 @@ export interface BoardConfig {
     forgePhoto: RateLimit
     /** Gremlin Forge: Claude reviews renders of a design and fixes it (a paid model call with images). */
     forgeCritique: RateLimit
+    /** Gremlin Forge: a maker puts a design (and its share card) on their gremlin. */
+    forgeAttach: RateLimit
     /** New hatch jobs, per client IP (each holds a fresh hosting key the worker polls). */
     hatch: RateLimit
     /** Egg hatch claims, per client IP. */
@@ -70,6 +72,7 @@ export const DEFAULT_CONFIG: BoardConfig = {
     forgeDesign: { max: 30, windowSec: 24 * 3600 },
     forgePhoto: { max: 15, windowSec: 24 * 3600 },
     forgeCritique: { max: 30, windowSec: 24 * 3600 },
+    forgeAttach: { max: 40, windowSec: 24 * 3600 },
     hatch: { max: 10, windowSec: 3600 },
     hatchClaim: { max: 120, windowSec: 3600 },
   },

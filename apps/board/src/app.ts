@@ -8,13 +8,13 @@ import {
 } from '@gremlins/hatch'
 import { mergeConfig, type BoardConfig } from './config.ts'
 import { AUTH_HEADERS, verifySignedRequestWith } from './auth.ts'
-import { SESSION_HEADER, verifySessionRequest, type AccountSignatureChecker, type Attestation, type SessionScope } from '@gremlins/hatch'
+import { SESSION_HEADER, checkForgeSpec, verifySessionRequest, type AccountSignatureChecker, type Attestation, type ForgeSpec, type SessionScope } from '@gremlins/hatch'
 import { RateLimiter } from './ratelimit.ts'
 import * as S from './schemas.ts'
 import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestView, pulseView, type LeaderboardSort } from './service.ts'
 import type { BoardStore, PostSort } from './store.ts'
 import { registerPages } from './html.ts'
-import { ForgeError, critiqueGremlin, designGremlin, photograph, type ForgeDesigner, type PhotoProvider } from './forge.ts'
+import { ForgeError, critiqueGremlin, decodeImage, designGremlin, photograph, type ForgeImage, type ForgeDesigner, type PhotoProvider } from './forge.ts'
 import { EggLaunchData } from '@gremlins/egg/dist/launch.js'
 import type { HatchStore } from './hatch-store.ts'
 import { checkClaim, hatchView, newJob, type HatchConfig } from './hatch.ts'
@@ -39,7 +39,7 @@ const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 /** The one route allowed a large body (the sealed memory DB). */
 const HANDOFF_POST_RE = /^\/api\/nests\/[^/]+\/handoff\/?$/
 // Routes that carry pictures (a render, a reference, review stills) get the larger body limit.
-const FORGE_PHOTO_RE = /^\/api\/forge\/(photo|design|critique)\/?$/
+const FORGE_PHOTO_RE = /^\/api\/(forge\/(photo|design|critique)|gremlins\/0x[0-9a-fA-F]{40}\/design)\/?$/
 
 /** The client's address as our reverse proxy (Caddy) saw it: the last X-Forwarded-For hop, else the socket. */
 function clientIp(c: Context): string {
@@ -117,7 +117,7 @@ export async function createBoard(deps: BoardDeps) {
   }
 
   /** Which signed actions a browser session key may perform (see SESSION_HEADER in @gremlins/hatch). */
-  const SESSION_SCOPE_OF: Partial<Record<RateAction, SessionScope>> = { forgeDesign: 'forge', forgePhoto: 'forge', forgeCritique: 'forge' }
+  const SESSION_SCOPE_OF: Partial<Record<RateAction, SessionScope>> = { forgeDesign: 'forge', forgePhoto: 'forge', forgeCritique: 'forge', forgeAttach: 'forge' }
 
   /** Signed-request auth + replay protection + per-address rate limit; parses the JSON body. */
   const signed =
@@ -206,7 +206,9 @@ export async function createBoard(deps: BoardDeps) {
     }
     const status = c.req.query('status')
     if (status !== undefined && !['announced', 'configured', 'hatched'].includes(status)) return err(c, 400, 'bad status')
-    const eggs = await store.listEggs({ limit: intParam(c.req.query('limit'), 50, 1, 200), status: status as never })
+    const maker = c.req.query('maker')
+    if (maker !== undefined && !ADDRESS_RE.test(maker)) return err(c, 400, 'bad maker')
+    const eggs = await store.listEggs({ limit: intParam(c.req.query('limit'), 50, 1, 200), status: status as never, maker })
     return c.json({ eggs: eggs.map(eggView) })
   })
 
@@ -581,6 +583,44 @@ export async function createBoard(deps: BoardDeps) {
     } catch (e) {
       return forgeFail(c, e)
     }
+  })
+
+  // A maker puts a Forge design on their gremlin: its page shows it live, and the card is its link preview.
+  app.post('/api/gremlins/:address/design', signed('forgeAttach'), async (c) => {
+    const a = c.req.param('address').toLowerCase()
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const egg = await store.getEgg(a)
+    if (!egg) return err(c, 404, 'gremlin not found')
+    if (egg.maker.toLowerCase() !== c.get('address')) return err(c, 403, 'only its maker can change how it looks')
+    const p = S.ForgeAttach.safeParse(c.get('body'))
+    if (!p.success) return err(c, 400, zodMessage(p.error))
+    let spec: ForgeSpec
+    try { spec = checkForgeSpec(p.data.spec).spec } catch (e) { return err(c, 400, (e as Error).message) }
+    let card: ForgeImage | null = null
+    if (p.data.card) {
+      try { card = decodeImage(p.data.card, 'share card') } catch (e) { return forgeFail(c, e) }
+    }
+    const at = now()
+    await store.putDesign({ address: a, spec, card: card ? Buffer.from(card.data, 'base64') : null, cardMime: card?.mime ?? null, by: c.get('address'), attestation: c.get('attestation'), updatedAt: at })
+    return c.json({ ok: true, updatedAt: at, page: `/g/${checksum(a)}` })
+  })
+
+  app.get('/api/gremlins/:address/design', async (c) => {
+    const a = c.req.param('address').toLowerCase()
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const d = await store.getDesign(a)
+    if (!d) return err(c, 404, 'no design on this gremlin yet')
+    return c.json({ spec: d.spec, updatedAt: d.updatedAt, by: d.by, card: !!d.card })
+  })
+
+  app.get('/g/:address/card', async (c) => {
+    const a = c.req.param('address').toLowerCase()
+    if (!ADDRESS_RE.test(a)) return c.text('not found', 404)
+    const d = await store.getDesign(a)
+    if (!d?.card) return c.text('not found', 404)
+    c.header('content-type', d.cardMime ?? 'image/jpeg')
+    c.header('cache-control', 'public, max-age=300')
+    return c.body(d.card as unknown as ArrayBuffer)
   })
 
   app.post('/api/forge/photo', signed('forgePhoto'), async (c) => {

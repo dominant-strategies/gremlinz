@@ -126,12 +126,28 @@ export interface GrantRecord {
   revokedAt: number | null
 }
 
+/** A Forge design a maker attached to their gremlin: what its page shows, and the share-card picture. */
+export interface DesignRecord {
+  address: string
+  /** The checked ForgeSpec. */
+  spec: unknown
+  card: Uint8Array | null
+  cardMime: string | null
+  /** Who attached it (the gremlin's maker), and the signed request that did. */
+  by: string
+  attestation: unknown
+  updatedAt: number
+}
+
 export interface BoardStore {
   // eggs
   insertEgg(egg: Omit<EggRecord, 'status' | 'config' | 'configuredAt' | 'hatchedAt'>): Promise<'inserted' | 'address_exists' | 'launch_taken'>
   getEgg(address: string): Promise<EggRecord | null>
   getEggByLaunchId(launchId: string): Promise<EggRecord | null>
-  listEggs(opts: { limit: number; status?: EggStatus }): Promise<EggRecord[]>
+  listEggs(opts: { limit: number; status?: EggStatus; maker?: string }): Promise<EggRecord[]>
+  // forge designs on gremlins
+  putDesign(d: DesignRecord): Promise<void>
+  getDesign(address: string): Promise<DesignRecord | null>
   /** Stores the config and moves announced → configured. Returns false if a config is already stored. */
   setEggConfig(address: string, config: SignedConfig, at: number): Promise<boolean>
   /** configured → hatched. Returns false if the egg was not in `configured`. */

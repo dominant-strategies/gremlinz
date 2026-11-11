@@ -1,6 +1,7 @@
 /** BoardStore on Node's built-in SQLite (node:sqlite). Single process; WAL mode. */
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type {
+  DesignRecord,
   BoardStore, Community, CommentRecord, EggRecord, EggStatus, EventRecord, NestRecord, NestStatus, PostRecord, PostSort, PulseRecord,
   StoredHandoff, VoteTarget, GrantRecord,
 } from './store.ts'
@@ -118,6 +119,16 @@ CREATE TABLE IF NOT EXISTS grants (
   revoked_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS grants_gremlin ON grants(gremlin, revoked_at);
+
+CREATE TABLE IF NOT EXISTS designs (
+  address    TEXT PRIMARY KEY,  -- the gremlin
+  spec       TEXT NOT NULL,     -- checked ForgeSpec JSON
+  card       BLOB,              -- share-card picture
+  card_mime  TEXT,
+  by_addr    TEXT NOT NULL,     -- its maker, who attached it
+  attestation TEXT,
+  updated_at INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS used_signatures (
   signature  TEXT PRIMARY KEY,
@@ -271,10 +282,28 @@ export class SqliteBoardStore implements BoardStore {
     return r ? egg(r) : null
   }
 
-  async listEggs({ limit, status }: { limit: number; status?: EggStatus }) {
-    return status
-      ? this.all('SELECT * FROM eggs WHERE status = ? ORDER BY announced_at DESC LIMIT ?', status, limit).map(egg)
-      : this.all('SELECT * FROM eggs ORDER BY announced_at DESC LIMIT ?', limit).map(egg)
+  async listEggs({ limit, status, maker }: { limit: number; status?: EggStatus; maker?: string }) {
+    const where: string[] = [], args: SQLInputValue[] = []
+    if (status) { where.push('status = ?'); args.push(status) }
+    if (maker) { where.push('maker = ?'); args.push(maker.toLowerCase()) }
+    return this.all(`SELECT * FROM eggs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY announced_at DESC LIMIT ?`, ...args, limit).map(egg)
+  }
+
+  async putDesign(d: DesignRecord) {
+    this.db
+      .prepare(`INSERT INTO designs (address, spec, card, card_mime, by_addr, attestation, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(address) DO UPDATE SET spec = excluded.spec, card = excluded.card, card_mime = excluded.card_mime, by_addr = excluded.by_addr, attestation = excluded.attestation, updated_at = excluded.updated_at`)
+      .run(d.address, JSON.stringify(d.spec), d.card, d.cardMime, d.by, d.attestation == null ? null : JSON.stringify(d.attestation), d.updatedAt)
+  }
+
+  async getDesign(address: string) {
+    const r = this.one('SELECT * FROM designs WHERE address = ?', address)
+    if (!r) return null
+    return {
+      address: r.address as string, spec: JSON.parse(r.spec as string),
+      card: r.card ? new Uint8Array(r.card as Uint8Array) : null, cardMime: (r.card_mime as string | null) ?? null,
+      by: r.by_addr as string, attestation: r.attestation ? JSON.parse(r.attestation as string) : null, updatedAt: r.updated_at as number,
+    }
   }
 
   async setEggConfig(address: string, config: unknown, at: number) {

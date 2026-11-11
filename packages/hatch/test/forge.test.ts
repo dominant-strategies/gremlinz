@@ -135,6 +135,15 @@ describe('forge prompts', () => {
   })
 })
 
+describe('mode activities', () => {
+  it('keeps one mode per live activity and drops unknown ones', () => {
+    const raw = { assemblies: [{ id: 'head', joint: { move: 'swing', axis: [0, 1, 0], range: 30 } }], parts: [{ kind: 'sphere', mat: 'enamel', size: [0.5], asm: 'head' }],
+      modes: [{ id: 'nod', drive: { head: 1 }, when: 'Thinking' }, { id: 'shake', drive: { head: -1 }, when: 'thinking' }, { id: 'wave', drive: { head: 0.5 }, when: 'dancing' }] }
+    const { spec } = checkForgeSpec(raw)
+    expect(spec.modes!.map((m) => [m.id, m.when])).toEqual([['idle', undefined], ['nod', 'thinking'], ['shake', undefined], ['wave', undefined]])
+  })
+})
+
 describe('per-part unwear', () => {
   it('keeps known whole-robot wear kinds a part opts out of, and drops the rest', () => {
     const raw = { wear: [{ kind: 'rust', amount: 0.4 }], parts: [{ kind: 'sphere', mat: 'enamel', size: [0.5], unwear: ['rust', 'rust', 'glitter', 'OIL'] }, { kind: 'eye', shape: 'dot', size: 0.05, unwear: ['rust'] }] }

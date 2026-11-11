@@ -66,7 +66,10 @@ export interface ForgeAssembly {
   house?: true
 }
 /** One operating mode: a single 0..1 input that drives several assemblies at once. */
-export interface ForgeMode { id: string; name: string; drive: Record<string, number>; focus?: string }
+/** What the live gremlin is doing, which a mode can stand for on its public page. */
+export const FORGE_ACTIVITIES = ['thinking', 'posting', 'earning', 'paying'] as const
+export type ForgeActivity = (typeof FORGE_ACTIVITIES)[number]
+export interface ForgeMode { id: string; name: string; drive: Record<string, number>; focus?: string; when?: ForgeActivity }
 export interface ForgePart {
   kind: Kind
   mat?: ForgeMaterial
@@ -167,7 +170,7 @@ SURFACES (optional; use them when the description asks for age, damage, dirt, ma
 ASSEMBLIES AND MODES (the gremlin is shown on a console where each assembly is a button that isolates, explodes and moves it):
 - "assemblies":[{"id":"arms","name":"Arm chains","role":"8 drum-link arms, 22 links each","states":["READY","CURLING"],"explode":[dx,dy,dz],"joint":{"move":m,"pivot":[x,y,z],"axis":[x,y,z],"range":r}}]. 3 to 8 of them, each a real subsystem (head, optics, shell, arms, legs, jaw, engine, tail). Every part names its assembly with "asm":"id"; parts without one join "body". "explode" is where the assembly flies to in an exploded view (about 0.4 to 0.9 away from the body, outward). "states" are short console status words at rest and when driven.
 - Joint moves: swing (rotates by up to "range" degrees about "axis" through "pivot": a jaw, a lid, an arm), open (like swing, and mirrored copies open the opposite way: shell halves, clamshells, beaks), curl (bends the assembly's tubes and chains progressively along their length by up to "range" degrees in total: tentacles, tails, trunks), spin (rotation: rotors, turrets, wheels), slide ("range" in model units along "axis": pistons, drawers, antennas), pulse ("range" 0-0.5 fractional swell: hearts, lamps, bellows). Put "pivot" where the hinge really is, so nothing passes through anything when it moves.
-- "modes":[{"id":"jaw-open","name":"Jaw open","drive":{"jaw":1,"head":0.3},"focus":"jaw"}] are 2 to 5 operating modes. Each drives one or more assemblies from -1 to 1 by a single input, so a mode moves the whole mechanism together. "focus" names the assembly the camera should study. The renderer adds idle motion on its own.
+- "modes":[{"id":"jaw-open","name":"Jaw open","drive":{"jaw":1,"head":0.3},"focus":"jaw"}] are 2 to 5 operating modes. Each drives one or more assemblies from -1 to 1 by a single input, so a mode moves the whole mechanism together. "focus" names the assembly the camera should study. The renderer adds idle motion on its own. "when" ties a mode to what the live agent is doing, and its public page plays that mode as it happens: "thinking" (it checks in, decides, runs inference), "posting" (it writes on the board), "earning" (money comes in), "paying" (it spends). Tag each of your modes with the one it fits best, each at most once.
 
 BEFORE YOU ANSWER, check the design the way a reviewer will check renders of it, at rest and at every mode's full drive:
 - Nothing passes through anything: a jaw opening into the body, an arm swinging through a leg, a lid lifting into an antenna. Move the pivot, the part or the range until it clears.
@@ -570,6 +573,8 @@ function checkModes(raw: unknown, assemblies: ForgeAssembly[], notes: string[]):
     if (!ASM_ID.test(id) || out.some((x) => x.id === id) || out.length >= MAX_MODES - 1 || !Object.keys(drive).length) { dropped++; continue }
     const q: ForgeMode = { id, name: label(m.name, 24, id), drive }
     if (typeof m.focus === 'string' && ids.has(m.focus)) q.focus = m.focus
+    const when = String(m.when ?? '').toLowerCase()
+    if ((FORGE_ACTIVITIES as readonly string[]).includes(when) && !out.some((x) => x.when === when)) q.when = when as ForgeActivity
     out.push(q)
   }
   if (dropped) notes.push(`${dropped} operating mode${dropped > 1 ? 's' : ''} that drove nothing removed.`)

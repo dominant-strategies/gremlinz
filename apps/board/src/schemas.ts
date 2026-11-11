@@ -156,6 +156,13 @@ export const ForgeDesign = z.object({
   reference: z.string().max(6 * 1024 * 1024).optional(),
 })
 
+export const ForgeAttach = z.object({
+  /** The design; re-checked server-side. */
+  spec: z.unknown(),
+  /** The 1200×630 share card, as a JPEG, PNG or WebP data URL. */
+  card: z.string().max(1_200_000).optional(),
+})
+
 export const ForgeCritique = z.object({
   /** The design under review; re-checked server-side. */
   spec: z.unknown(),
