@@ -350,10 +350,19 @@ async function stepFluence() {
   // Loaded on demand: it pulls in the Symbiosis SDK (large), which only Fluence eggs funded with QUAI need.
   show(`<p class="muted">Loading…</p>`)
   const { bridgeQuaiTo, followBridge, quaiNeededFor, fmtUsd } = await import('./fluence-egg.js')
+  // 2-of-2: the hosting key is generated with the board, one shard stays in this browser (hatch-mpc.ts).
+  const mpc = await import('./hatch-mpc.js')
 
-  s.hatch ??= await board.createHatch({ maker: s.maker!, configHash: configHash(s.config!), launchId: s.launchId, boardUrl: BOARD })
+  s.hatch ??= await board.createHatch({ maker: s.maker!, configHash: configHash(s.config!), launchId: s.launchId, boardUrl: BOARD, mpcAuth: await mpc.mpcAuthFor(s.launchId) })
   save()
-  const { jobId, hostingAddress, minUsd } = s.hatch
+  if (s.hatch.custody === 'mpc' && !s.hatch.hostingAddress) {
+    show(`<p class="muted">Generating the egg's hosting account with the hatch service (one key share stays in this browser)…</p>`)
+    s.hatch.hostingAddress = await mpc.ensureShard(BOARD, s.launchId, s.hatch)
+    save()
+  }
+  const { jobId, minUsd } = s.hatch
+  const hostingAddress = s.hatch.hostingAddress!
+  if (s.hatch.custody === 'mpc') mpc.keepCosigning({ board, boardUrl: BOARD, launchId: s.launchId, jobId, maker: s.maker!, configHash: configHash(s.config!), minUsd })
   const fund = progress.step('fund-egg'), bridge = progress.step('bridge'), swap = progress.step('swap'), start = progress.step('start')
   const target = BigInt(Math.round(minUsd * 1e6))
   let job = await board.hatchJob(jobId)
@@ -365,6 +374,7 @@ async function stepFluence() {
     if (!progress.isDone('fund-egg')) fund.start('Choose how to pay')
     show(`<h2>Fund the egg</h2>
       <p>The egg needs <b>${fmtUsd(target)}</b> of hosting credit. It goes to the egg's own hosting account, which the egg takes over once it runs: neither you nor gremlinz keeps it.</p>
+      ${s.hatch.custody === 'mpc' ? `<p class="small dev-note">${mpc.LOSS_WARNING}</p>` : ''}
       ${payWith === 'usdc' ? `<p><button id="usdc">Pay ${fmtUsd(target)} USDC on Base with ${WALLET_NAMES[account()!.kind]}</button></p>
       <p class="muted">One transfer to the egg's hosting address <code>${esc(hostingAddress)}</code>. You can also send it from any other wallet; this page continues once it arrives.</p>`
       : `<p><button id="quai">Pay ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI with Pelagus</button></p>
@@ -463,6 +473,8 @@ async function stepLaunch() {
 async function stepHatch() {
   const announce = progress.step('announce'), sign = progress.step('sign-config'), feed = progress.step('feed'), hatched = progress.step('hatched')
   void watchCustody()
+  // 2-of-2: keep co-signing and hand this browser's shard to the egg once it claims (no-op otherwise).
+  if (s.host === 'fluence' && s.hatch?.custody === 'mpc') void import('./hatch-mpc.js').then((mpc) => mpc.keepCosigning({ board, boardUrl: BOARD, launchId: s.launchId, jobId: s.hatch!.jobId, maker: s.maker!, configHash: configHash(s.config!), minUsd: s.hatch!.minUsd }))
   show(`<h2>Waiting for your egg to announce itself…</h2><p class="muted">The server installs and starts the egg, which generates its own keys and announces itself on the board. Usually a few minutes.</p>`)
   let egg = await board.findEgg(s.launchId)
   while (!egg) {

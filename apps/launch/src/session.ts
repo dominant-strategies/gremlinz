@@ -13,7 +13,7 @@ export interface Session {
   /** Where the egg server runs. */
   host?: 'fluence' | 'sporestack'
   /** Fluence: the board's hatch job, which holds the egg's hosting account until the egg takes it over. */
-  hatch?: { jobId: string; hostingAddress: string; minUsd: number }
+  hatch?: { jobId: string; custody?: 'local' | 'mpc'; hostingAddress: string | null; minUsd: number }
   bridgeTx?: string
   sporestackToken?: string
   invoiceUri?: string
