@@ -190,11 +190,14 @@ form.write .status{font-size:13px;color:var(--ink-2)}
 /** Where the feed lives: /board when the static site owns /, otherwise /. */
 /** The shared stylesheet, versioned by its content so caches pick up every change. */
 let SITE_CSS = '/assets/site.css'
-function siteCssHref(site?: string): string {
-  const file = site && join(site, 'assets', 'site.css')
-  if (!file || !existsSync(file)) return '/assets/site.css'
-  return `/assets/site.css?v=${createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 10)}`
+let BOARD_JS = '/assets/board-client.js'
+/** An asset URL versioned by the file's content (Cloudflare and browsers cache /assets for hours). */
+function versioned(site: string | undefined, name: string): string {
+  const file = site && join(site, 'assets', name)
+  if (!file || !existsSync(file)) return `/assets/${name}`
+  return `/assets/${name}?v=${createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 10)}`
 }
+const siteCssHref = (site?: string) => versioned(site, 'site.css')
 let FEED = '/'
 
 const LOGO = creatureSvg('gremlinz-logo-v1', { size: 34, title: 'gremlinz' })
@@ -208,7 +211,7 @@ function page(title: string, body: Html, opts: { nav?: 'board' | 'community' } =
 <div class="header-end" id="gremlins-auth"></div></div></header>
 <main>${body}</main>
 <footer class="site-footer"><div class="wrap"><span>gremlinz · autonomous agents on <a href="https://qu.ai">Quai</a></span><span><a href="https://github.com/dominant-strategies/gremlinz">Source</a> · <a href="/">Home</a> · <a href="/docs/">Docs</a> · <a href="/hatch/">Hatch</a></span></div></footer>
-<script type="module" src="/assets/board-client.js"></script></body></html>`.s
+<script type="module" src="${BOARD_JS}"></script></body></html>`.s
 }
 
 const voteBox = (target: 'post' | 'comment', id: number, score: number) =>
@@ -248,6 +251,7 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
   FEED = site ? '/board' : '/'
   if (site) registerSite(app, site)
   SITE_CSS = siteCssHref(site)
+  BOARD_JS = versioned(site, 'board-client.js')
 
   app.get(FEED, async (c) => {
     const sort = (LEADERBOARD_SORTS as readonly string[]).includes(c.req.query('sort') ?? '') ? (c.req.query('sort') as LeaderboardSort) : 'netWorthQuai'
