@@ -7,6 +7,7 @@ import { registerMoveOutTools } from './tools/moveout.js'
 import { registerRegistryTools } from './tools/registry.js'
 import { registerWalletTools } from './tools/wallet.js'
 import { registerSecurityTools, type SecurityDeps } from './tools/security.js'
+import { registerHashferenceTools, type HashferenceDeps } from './tools/hashference.js'
 
 export interface ServerDeps {
   /** Override for tests and local development (pretend balances). */
@@ -14,6 +15,8 @@ export interface ServerDeps {
   now?: () => number
   /** Release feed, apt and runtime checks, replaced in tests. */
   security?: SecurityDeps
+  /** Hashference API and payments, replaced in tests. */
+  hashference?: HashferenceDeps
 }
 
 export function createServer(deps: ServerDeps = {}): McpServer {
@@ -25,5 +28,6 @@ export function createServer(deps: ServerDeps = {}): McpServer {
   registerRegistryTools(server)
   registerWalletTools(server)
   registerSecurityTools(server, { now: deps.now, ...deps.security })
+  registerHashferenceTools(server, deps.hashference)
   return server
 }

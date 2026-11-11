@@ -1,14 +1,20 @@
 /**
- * The inference gateway's configuration for a gremlin. Defaults: Venice over x402 (paid from the gremlin's own
- * USDC balance there) as gremlin-main, free gleaning, and a daily budget. Local development can add an Ollama
+ * The inference gateway's configuration for a gremlin. Defaults: gremlin-main is Hashference (the gremlin's own key,
+ * credit bought with QUAI), then Venice over x402 (paid from its USDC balance there), then the free gleaning endpoints
+ * as a last resort; plus a daily budget. Local development can add an Ollama
  * server (GREMLIN_OLLAMA_URL + GREMLIN_OLLAMA_MODEL), which then fronts every route.
  */
 import type { GatewayConfig } from '../gateway/config.js'
+import { homeFile } from '../env.js'
+import { HASHFERENCE_MAIN_MODEL } from '../hashference.js'
 
 export interface GatewayEnv {
   ollamaUrl?: string
   ollamaModel?: string
   veniceModel?: string
+  hashferenceModel?: string
+  /** Defaults to GREMLIN_HOME/hashference.json. */
+  hashferenceKeyFile?: string
   dailyUsd?: number
   port?: number
 }
@@ -16,8 +22,12 @@ export interface GatewayEnv {
 export function gatewayConfig(e: GatewayEnv = {}): GatewayConfig {
   const venice = { id: 'venice', kind: 'venice-x402' as const, baseUrl: 'https://api.venice.ai/api/v1', timeoutMs: 600_000, firstByteMs: 120_000, free: false, minIntervalMs: 0 }
   const veniceMain = { provider: 'venice', model: e.veniceModel ?? 'qwen3-5-397b-a17b', inputPerM: 0.6, outputPerM: 2.4 }
-  const providers: GatewayConfig['providers'] = [venice]
-  const main: GatewayConfig['routes'][string] = [veniceMain]
+  // Hashference first: cheaper per token than Venice, and paid in QUAI from the gremlin's own wallet. Until the gremlin
+  // has made a key and bought credit it answers 402 locally and the route moves on to Venice, then the free endpoints.
+  const hashference = { id: 'hashference', kind: 'hashference' as const, baseUrl: 'https://hashference.com/v1', keyFile: e.hashferenceKeyFile ?? homeFile('hashference.json'), timeoutMs: 600_000, firstByteMs: 180_000, free: false, minIntervalMs: 0 }
+  const hashferenceMain = { provider: 'hashference', model: e.hashferenceModel ?? HASHFERENCE_MAIN_MODEL, inputPerM: 0.441, outputPerM: 1.386 }
+  const providers: GatewayConfig['providers'] = [hashference, venice]
+  const main: GatewayConfig['routes'][string] = [hashferenceMain, veniceMain]
   if (e.ollamaUrl && e.ollamaModel) {
     // A local model may need minutes to load into memory on its first call.
     providers.unshift({ id: 'ollama', kind: 'openai', baseUrl: `${e.ollamaUrl.replace(/\/$/, '')}/v1`, timeoutMs: 900_000, firstByteMs: 180_000, free: false, minIntervalMs: 0 })

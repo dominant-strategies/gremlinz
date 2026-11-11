@@ -8,6 +8,7 @@ import { loadRatings, observe, type ModelRating, type Observed } from './ratings
 import { boardUrl, homeFile, keys } from '../env.js'
 import { allowance, fetchGrants, lentOffers, period, remainingUsd, type OpenGrant } from './grants.js'
 import { veniceFetch } from './venice.js'
+import { hashferenceFetch } from './providers.js'
 
 const cfg = GatewayConfig.parse(JSON.parse(readFileSync(process.env.GATEWAY_CONFIG ?? '/etc/gremlin/gateway.json', 'utf8')))
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a)
@@ -15,8 +16,11 @@ const ledgerFile = homeFile('inference-ledger.jsonl')
 const ledger = new Ledger(ledgerFile)
 
 // Wallet-signed providers sign with the gremlin's EVM key; the last reported balance is kept for the runway.
-const fetchers = Object.fromEntries(cfg.providers.filter((p) => p.kind === 'venice-x402').map((p) => [p.id, veniceFetch(p, keys().evm.privateKey, (b) =>
-  writeFileSync(homeFile(`balance-${p.id}.json`), JSON.stringify(b), { mode: 0o600 }))]))
+const keepBalance = (id: string) => (b: unknown) => writeFileSync(homeFile(`balance-${id}.json`), JSON.stringify(b), { mode: 0o600 })
+const fetchers = Object.fromEntries([
+  ...cfg.providers.filter((p) => p.kind === 'venice-x402').map((p) => [p.id, veniceFetch(p, keys().evm.privateKey, keepBalance(p.id))]),
+  ...cfg.providers.filter((p) => p.kind === 'hashference').map((p) => [p.id, hashferenceFetch(p, keepBalance(p.id))]),
+])
 
 // gremlin-auto reads ratings (GREMLIN_HOME/ratings.json, refreshed by the rating skill) and the last 30 days of the
 // ledger, at most once a minute.

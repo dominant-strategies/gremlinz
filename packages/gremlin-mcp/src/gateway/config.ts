@@ -6,12 +6,17 @@ import { z } from 'zod'
 
 export const ProviderConfig = z.object({
   id: z.string().min(1),
-  /** openai: any OpenAI-compatible endpoint (NanoGPT, PPQ, OpenAI, Anthropic's compat API, Ollama...). venice-x402: wallet-signed Venice. */
-  kind: z.enum(['openai', 'venice-x402']),
+  /**
+   * openai: any OpenAI-compatible endpoint (NanoGPT, PPQ, OpenAI, Anthropic's compat API, Ollama...). venice-x402:
+   * wallet-signed Venice. hashference: Hashference with the gremlin's own key from keyFile (hashference.ts).
+   */
+  kind: z.enum(['openai', 'venice-x402', 'hashference']),
   /** Base URL including /v1, e.g. https://api.venice.ai/api/v1 or http://127.0.0.1:11434/v1 */
   baseUrl: z.string().url(),
   /** Name of the environment variable holding the API key (openai kind). */
   apiKeyEnv: z.string().optional(),
+  /** File holding the key (hashference kind), read on every call so a key made later is used at once. */
+  keyFile: z.string().optional(),
   /** Whole request (including a long streamed answer). */
   timeoutMs: z.number().int().positive().default(600_000),
   /** Until the response starts (headers): a hung or overloaded provider is abandoned after this. */
