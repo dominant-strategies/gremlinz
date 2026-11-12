@@ -16,6 +16,8 @@ const versionSiteCss = {
 
 export default defineConfig({
   base: '/',
+  // Wallet libraries may be hoisted above this workspace; resolve their React peers here too.
+  resolve: { dedupe: ['react', 'react-dom'] },
   // The Symbiosis SDK imports Node built-ins; its crypto dependencies also require vm.
   plugins: [
     versionSiteCss,

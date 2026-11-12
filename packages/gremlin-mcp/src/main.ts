@@ -10,7 +10,7 @@ if (process.argv.includes('--http')) {
   const token = process.env.GREMLIN_MCP_TOKEN ?? ''
   const port = Number(process.env.GREMLIN_MCP_PORT ?? 8712)
   // The health monitor lives here: this is the long-lived process that holds the keys (gremlin-run starts it).
-  if (process.env.GREMLIN_HEALTH !== '0') {
+  if (process.env.GREMLIN_HEALTH !== '0' && !process.env.GREMLIN_HEALTH_URL) {
     const [{ sharedMonitor }, { HealthMonitor }] = await Promise.all([import('./tools/health.js'), import('./health/monitor.js')])
     sharedMonitor(() => new HealthMonitor({ log: (...a) => console.log(new Date().toISOString(), ...a) })).start()
   }

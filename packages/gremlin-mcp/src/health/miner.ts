@@ -13,6 +13,7 @@ import { cpus, totalmem } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { HEALTH } from './policy.js'
+import { writeJsonDurable } from '@gremlins/hatch/node'
 
 export const POOL = 'stratum+tcp://mine.hashference.com:4337'
 export const XMRIG_API_PORT = 18_088
@@ -77,9 +78,12 @@ export class Miner {
     try { return { strategy: false, auto: false, ...JSON.parse(readFileSync(this.d.stateFile, 'utf8')) } } catch { return { strategy: false, auto: false } }
   }
 
-  private save(s: MiningState) { writeFileSync(this.d.stateFile, JSON.stringify(s, null, 2), { mode: 0o600 }) }
+  private save(s: MiningState) { writeJsonDurable(this.d.stateFile, s) }
 
   running(): boolean { return !!this.child && this.child.exitCode === null && !this.child.signalCode }
+
+  /** Stop this process without forgetting the gremlin's chosen strategy across a service restart. */
+  stop(): void { this.child?.kill('SIGTERM'); this.child = undefined }
 
   /** Wanted on (by strategy or the monitor) but not running: start it. Needs the pool login. */
   ensure(user: string | undefined, worker: string): string | undefined {
@@ -93,7 +97,10 @@ export class Miner {
     this.child = c
     mkdirSync(dirname(this.d.pidFile), { recursive: true })
     if (c.pid) writeFileSync(this.d.pidFile, String(c.pid), { mode: 0o600 })
-    c.on('exit', (code) => { this.d.log(`miner exited (${code})`); if (this.child === c) this.child = undefined; rmSync(this.d.pidFile, { force: true }) })
+    c.on('exit', (code) => {
+      this.d.log(`miner exited (${code})`)
+      if (this.child === c) { this.child = undefined; rmSync(this.d.pidFile, { force: true }) }
+    })
     this.d.log(`miner started: ${minerThreads(this.d.cores())} thread(s) at nice 19 as ${this.d.helperUser}`)
     return undefined
   }

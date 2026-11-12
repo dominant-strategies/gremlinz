@@ -3,10 +3,10 @@
 #     --build-arg HERMES_RUNTIME_REF=<commit sha of gremlin-runtime> -t gremlins/egg .
 # Deployed by digest only (cloud-init pins image@sha256:…), never by tag.
 #
-# Users: the egg and gremlin-run start as root only so gremlin-run can start each child as its own user:
-#   gremlin  owns /var/lib/gremlin (seed, keys, ledger; 0700) and runs the inference gateway and gremlin-mcp
-#   hermes   owns /var/lib/gremlin-hermes and runs Hermes; it cannot read /var/lib/gremlin
-# /opt/gremlin-runtime (plugin, skills, Hermes source) and /app are root-owned and read-only to both.
+# Users: the egg and gremlin-run start as root to supervise process groups and set child credentials.
+#   gremlin owns both state directories and runs Hermes, gateway, MCP and the health worker, with sudo.
+#   gremlin-helper runs delegated shell work and shares only Hermes' work folder by default.
+# /opt/gremlin-runtime (plugin, skills, Hermes source) and /app are root-owned.
 
 ARG HERMES_RUNTIME_REF=main
 
@@ -77,7 +77,7 @@ LABEL org.opencontainers.image.source=https://github.com/dominant-strategies/gre
 # runs its subagents' shell commands and shares only the work folder with it (group gremlin-work).
 # Debian security fixes published since the base image was built go in at build time; the gremlin applies later ones
 # itself (security_patch_os).
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends git ca-certificates procps sudo && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends git ca-certificates procps sudo util-linux && rm -rf /var/lib/apt/lists/* \
  && groupadd --system gremlin && useradd --system --gid gremlin --home-dir /var/lib/gremlin --shell /bin/bash gremlin \
  && groupadd --system gremlin-work \
  && useradd --system --user-group --create-home --home-dir /home/gremlin-helper --shell /bin/bash gremlin-helper \
@@ -101,4 +101,5 @@ ENV NODE_ENV=production \
     GREMLIN_RUNTIME="exec node /app/packages/gremlin-mcp/dist/runner/main.js"
 WORKDIR /app
 VOLUME ["/var/lib/gremlin", "/var/lib/gremlin-hermes"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 CMD ["node", "packages/egg/dist/healthcheck.js"]
 CMD ["node", "packages/egg/dist/main.js"]

@@ -10,6 +10,7 @@
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { homeFile } from '../env.js'
+import { appendDurable, writeJsonDurable } from '@gremlins/hatch/node'
 import { HEALTH, type Earning, type EarningStatus, type Issue } from './policy.js'
 
 const DAY = 86_400_000
@@ -21,8 +22,7 @@ function jsonl<T>(file: string): T[] {
 }
 
 export function writeAtomic(file: string, data: unknown) {
-  writeFileSync(file + '.tmp', JSON.stringify(data, null, 2), { mode: 0o600 })
-  renameSync(file + '.tmp', file)
+  writeJsonDurable(file, data)
 }
 
 export function readJson<T>(file: string): T | undefined {
@@ -36,7 +36,7 @@ export interface Action { at: string; kind: string; ok?: boolean; usd?: number; 
 export const actionsFile = () => homeFile('health-actions.jsonl')
 
 export function recordAction(a: Omit<Action, 'at'>, now: number = Date.now()) {
-  appendFileSync(actionsFile(), JSON.stringify({ at: new Date(now).toISOString(), ...a }) + '\n', { mode: 0o600 })
+  appendDurable(actionsFile(), JSON.stringify({ at: new Date(now).toISOString(), ...a }) + '\n')
 }
 
 export const readActions = (): Action[] => jsonl<Action>(actionsFile())

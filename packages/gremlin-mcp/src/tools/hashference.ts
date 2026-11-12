@@ -84,12 +84,12 @@ export function registerHashferenceTools(server: McpServer, deps: HashferenceDep
     if (!k) return fail('No Hashference account yet; run hashference_setup first.')
     let p: Purchase
     try {
-      p = await buyCredit(k, usd, { ...opts, pay, sleep })
+      p = await buyCredit(k, usd, { ...opts, pay, sleep, journalFile: homeFile('inference-purchase.json') })
     } catch (e) {
-      return fail(`Top-up failed before any credit was added: ${(e as Error).message.slice(0, 300)}`)
+      return fail(`Top-up could not complete; check the invoice outcome before retrying: ${(e as Error).message.slice(0, 300)}`)
     }
     const quai = formatUnits(p.quaiWei, 18)
-    if (p.status === 'paid') return text(`Paid ${quai} QUAI (${p.tx}); Hashference credited $${usd}.`)
+    if (p.status === 'paid') return text(`Paid ${quai} QUAI (${p.tx}); Hashference credited $${p.usd ?? usd}.`)
     return text(`Paid ${quai} QUAI (${p.tx}). Hashference has it as "${p.status}" (invoice ${p.invoiceId}); credit appears once it confirms. Check later with hashference_balance.`)
   })
 }

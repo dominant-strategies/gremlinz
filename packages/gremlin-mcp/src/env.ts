@@ -2,7 +2,7 @@
  * Where the gremlin's files are and who it is. This server is the only process that reads the seed; Hermes and its
  * terminal never see it (the egg passes GREMLIN_HOME only to this server).
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Wallet as EvmWallet, type HDNodeWallet } from 'ethers'
 import { Mnemonic, QuaiHDWallet, Zone } from 'quais'
@@ -13,7 +13,8 @@ export const homeFile = (name: string) => join(home(), name)
 
 export function boardUrl(): string {
   if (process.env.GREMLIN_BOARD_URL) return process.env.GREMLIN_BOARD_URL
-  const launch = JSON.parse(readFileSync(process.env.GREMLIN_LAUNCH ?? '/etc/gremlin/launch.json', 'utf8'))
+  const moved = homeFile('launch.json')
+  const launch = JSON.parse(readFileSync(existsSync(moved) ? moved : process.env.GREMLIN_LAUNCH ?? '/etc/gremlin/launch.json', 'utf8'))
   return launch.boardUrl
 }
 

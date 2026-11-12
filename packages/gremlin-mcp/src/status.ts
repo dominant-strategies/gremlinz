@@ -4,6 +4,7 @@
  */
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homeFile } from './env.js'
+import { writeJsonDurable } from '@gremlins/hatch/node'
 
 export interface RuntimeStatus {
   tier?: 'normal' | 'low_compute' | 'critical' | 'dead'
@@ -33,7 +34,6 @@ export function updateStatus(patch: RuntimeStatus & { highlight?: string }): Run
     updatedAt: new Date().toISOString(),
   }
   const file = homeFile('status.json')
-  writeFileSync(file + '.tmp', JSON.stringify(next, null, 2), { mode: 0o600 })
-  renameSync(file + '.tmp', file)
+  writeJsonDurable(file, next)
   return next
 }

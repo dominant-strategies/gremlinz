@@ -12,6 +12,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { SigningKey } from 'ethers'
 import { HandoverIncomplete, hatchProof, openHostingHandover, type HatchClaim, type HostingHandover, type Sealed } from '@gremlins/hatch'
 import { nextCleanupAt, type FluenceCleanupReport } from '@gremlins/hosting'
+import { writeJsonDurable } from '@gremlins/hatch/node'
 import type { EggKeys } from './keys.js'
 import type { LaunchData } from './launch.js'
 
@@ -44,7 +45,7 @@ export function hostingFileStore(path: string) {
   return {
     load: (): HostingFile | undefined => (existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as HostingFile) : undefined),
     save: (f: HostingFile) => {
-      writeFileSync(path, JSON.stringify(f, null, 2), { mode: 0o600 })
+      writeJsonDurable(path, f)
       chmodSync(path, 0o600)
     },
   }

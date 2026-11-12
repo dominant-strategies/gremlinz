@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { writeJsonDurable } from '@gremlins/hatch/node'
 import type { EggState, StateStore } from './egg.js'
 
 /** JSON file store with atomic replace, so a crash mid-write never corrupts state. */
@@ -6,8 +7,7 @@ export function fileStore(path: string): StateStore {
   return {
     load: () => (existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as EggState) : undefined),
     save: (state) => {
-      writeFileSync(path + '.tmp', JSON.stringify(state, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2), { mode: 0o600 })
-      renameSync(path + '.tmp', path)
+      writeJsonDurable(path, state)
     },
   }
 }

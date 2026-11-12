@@ -10,6 +10,17 @@ import { HealthMonitor, type HealthFile } from '../health/monitor.js'
 import { readHealth } from '../health/gate.js'
 import { addEarning, earnings, noteIssue, openIssues, recordAction, updateEarning } from '../health/stores.js'
 import { sensitiveReason } from '../gateway/glean.js'
+import { withDeadline } from '@gremlins/hatch/node'
+
+async function remoteHealth<T>(path: string): Promise<T> {
+  return withDeadline(async signal => {
+    const response = await fetch(new URL(path, process.env.GREMLIN_HEALTH_URL!), {
+      method: 'POST', headers: { authorization: `Bearer ${process.env.GREMLIN_MCP_TOKEN ?? ''}` }, signal,
+    })
+    if (!response.ok) throw new Error(`health service ${response.status}`)
+    return response.json() as Promise<T>
+  }, 300_000, 'health service')
+}
 
 let shared: HealthMonitor | undefined
 /** One monitor per process (the loop and the tools share it, so a check is never run twice at once). */
@@ -54,7 +65,7 @@ export function registerHealthTools(server: McpServer, monitor: () => HealthMoni
   }, async ({ refresh, bugReport }) => {
     let h = refresh ? undefined : readHealth()
     if (!h) {
-      try { h = await monitor().check({ refresh }) } catch (e) { return fail(`Health check failed: ${(e as Error).message.slice(0, 300)}`) }
+      try { h = process.env.GREMLIN_HEALTH_URL ? await remoteHealth<HealthFile>('/check') : await monitor().check({ refresh }) } catch (e) { return fail(`Health check failed: ${(e as Error).message.slice(0, 300)}`) }
     }
     let out = fmt(h)
     if (bugReport) {
@@ -69,6 +80,13 @@ export function registerHealthTools(server: McpServer, monitor: () => HealthMoni
       'Turn mining on or off as a deliberate strategy. It mines RandomX to Hashference\'s pool, which credits your Hashference inference balance, using at most half your CPU at the lowest priority. It costs your server\'s CPU (slower work for you), so use it as a last resort or when it fits your goals; your health monitor also starts it by itself after 6 hours starved and stops it when credit recovers (unless you chose it here).',
     inputSchema: { enabled: z.boolean(), reason: z.string().max(500).optional() },
   }, async ({ enabled, reason }) => {
+    if (process.env.GREMLIN_HEALTH_URL) {
+      try {
+        const { health, state } = await remoteHealth<{ health: HealthFile; state: { auto: boolean } }>(`/mining/${enabled ? 'on' : 'off'}`)
+        recordAction({ kind: enabled ? 'mining-on' : 'mining-off', detail: `by the gremlin${reason ? `: ${reason}` : ''}` })
+        return text(`Mining ${health.mining.on ? 'is on' : 'is off'}${!enabled && state.auto ? ' (automatic survival mining is still enabled)' : ''}.`)
+      } catch (e) { return fail(`Health service unavailable: ${(e as Error).message}`) }
+    }
     const m = monitor().miner
     if (enabled) m.enable('strategy', reason)
     else m.disable('strategy', reason ?? 'turned off by the gremlin')

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import { LOCKDOWN_SCRIPT, renderCloudInit } from '../src/cloud-init.js'
+import { GREMLIN_UNIT } from '../src/systemd.js'
 
 const launch = { maker: '0x' + 'ab'.repeat(20), configHash: '0x' + '11'.repeat(32), boardUrl: 'https://board.example', launchId: "it's-1" }
 const image = 'ghcr.io/gremlins/egg@sha256:' + 'c'.repeat(64)
@@ -23,9 +24,20 @@ describe('cloud-init', () => {
     expect(files['/etc/systemd/system/gremlin-lockdown.service']).toContain('Before=network-pre.target')
     expect(files['/etc/apt/apt.conf.d/99gremlin-lockdown']).toContain('DPkg::Post-Invoke')
     const run = c.runcmd.map((r: string[]) => r.join(' '))
-    expect(run.indexOf('/usr/local/sbin/gremlin-lockdown')).toBeLessThan(run.findIndex((r: string) => r.startsWith('docker run')))
+    expect(run.indexOf('/usr/local/sbin/gremlin-lockdown')).toBeLessThan(run.indexOf('systemctl enable --now gremlin.service gremlin-watchdog.timer'))
     expect(run).toContain('systemctl enable gremlin-lockdown.service')
-    expect(y.indexOf('purge -y openssh-server')).toBeLessThan(y.indexOf('docker, run'))
+    expect(y.indexOf('purge -y openssh-server')).toBeLessThan(y.indexOf('gremlin.service, gremlin-watchdog.timer'))
+  })
+  it('persists both state directories across container replacement with one restart owner', () => {
+    const c = parse(renderCloudInit({ launch, image }))
+    const files = Object.fromEntries(c.write_files.map((f: { path: string; content: string }) => [f.path, f.content]))
+    expect(files['/etc/systemd/system/gremlin.service']).toBe(GREMLIN_UNIT)
+    expect(GREMLIN_UNIT).toContain('/var/lib/gremlin-hermes:/var/lib/gremlin-hermes')
+    expect(GREMLIN_UNIT).toContain('/var/lib/gremlin:/var/lib/gremlin')
+    expect(GREMLIN_UNIT).toContain('--restart=no')
+    expect(GREMLIN_UNIT).toContain('Restart=always') // restored nests exit zero to become eggs
+    expect(GREMLIN_UNIT).toContain('--pids-limit=512')
+    expect(files['/etc/gremlin/service.env']).toContain(image)
   })
   it('the lockdown removes every key and console login, stops cloud-init rerunning, and never leaves a boot that needs the password', () => {
     expect(LOCKDOWN_SCRIPT).toContain('rm -f /root/.ssh/authorized_keys')

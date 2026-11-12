@@ -1,5 +1,6 @@
 import type { EggAnnouncement, HandoffWire, NestAnnouncement, Pulse, Sealed, Signed, SignedConfig } from '@gremlins/hatch'
 import type { HatchBoardClient } from './hosting.js'
+import { withDeadline } from '@gremlins/hatch/node'
 
 export interface BoardClient {
   announce(signed: Signed<EggAnnouncement>): Promise<void>
@@ -20,18 +21,21 @@ export interface NestBoardClient {
 /** SignedConfig carries a bigint (issuedAt); JSON has none, so it travels as a decimal string. */
 const replacer = (_k: string, v: unknown) => (typeof v === 'bigint' ? v.toString() : v)
 
-export function httpBoardClient(baseUrl: string, fetchImpl: typeof fetch = fetch): BoardClient & NestBoardClient & HatchBoardClient {
+export function httpBoardClient(baseUrl: string, fetchImpl: typeof fetch = fetch, opts: { timeoutMs?: number; handoffTimeoutMs?: number } = {}): BoardClient & NestBoardClient & HatchBoardClient {
   const url = (p: string) => new URL(p, baseUrl).toString()
-  const post = async (path: string, body: unknown) => {
-    const res = await fetchImpl(url(path), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body, replacer) })
+  const request = <T>(path: string, run: (signal: AbortSignal) => Promise<T>) =>
+    withDeadline(run, path.endsWith('/handoff') ? opts.handoffTimeoutMs ?? 90_000 : opts.timeoutMs ?? 15_000, `board ${path}`)
+  const post = (path: string, body: unknown) => request(path, async (signal) => {
+    const res = await fetchImpl(url(path), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body, replacer), signal })
     if (!res.ok) throw new Error(`board ${path} ${res.status}: ${(await res.text()).slice(0, 200)}`)
-  }
-  const getOptional = async <T>(path: string): Promise<T | undefined> => {
-    const res = await fetchImpl(url(path))
+    await res.body?.cancel()
+  })
+  const getOptional = <T>(path: string): Promise<T | undefined> => request(path, async (signal) => {
+    const res = await fetchImpl(url(path), { signal })
     if (res.status === 404 || res.status === 410) return undefined
     if (!res.ok) throw new Error(`board ${path} ${res.status}`)
     return (await res.json()) as T
-  }
+  })
   return {
     announceNest: (signed) => post('/api/nests', signed),
     async findNest(launchId) {
@@ -54,10 +58,8 @@ export function httpBoardClient(baseUrl: string, fetchImpl: typeof fetch = fetch
     announce: (signed) => post('/api/eggs', signed),
     postPulse: (signed) => post('/api/pulses', signed),
     async fetchConfig(eggAddress) {
-      const res = await fetchImpl(url(`/api/eggs/${eggAddress}/config`))
-      if (res.status === 404) return undefined
-      if (!res.ok) throw new Error(`board config ${res.status}`)
-      const body = (await res.json()) as SignedConfig & { message: { issuedAt: string | bigint } }
+      const body = await getOptional<SignedConfig & { message: { issuedAt: string | bigint } }>(`/api/eggs/${eggAddress}/config`)
+      if (!body) return undefined
       return { ...body, message: { ...body.message, issuedAt: BigInt(body.message.issuedAt) } }
     },
   }

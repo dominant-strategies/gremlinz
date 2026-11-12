@@ -4,6 +4,7 @@
  */
 import { appendFileSync } from 'node:fs'
 import { formatUnits } from 'ethers'
+import { appendDurable } from '@gremlins/hatch/node'
 import type { Asset } from './chains.js'
 
 const LLAMA: Record<string, string> = {
@@ -40,5 +41,5 @@ export function priceFn(opts: { fetchImpl?: typeof fetch; qiToQuai?: (qi: bigint
 export interface SendRecord { at: string; asset: string; to: string; amount: string; usd?: number; tx?: string; dryRun?: boolean }
 
 export function recordSend(log: string, r: Omit<SendRecord, 'at'>, now: () => number = Date.now) {
-  appendFileSync(log, JSON.stringify({ at: new Date(now()).toISOString(), ...r }) + '\n', { mode: 0o600 })
+  appendDurable(log, JSON.stringify({ at: new Date(now()).toISOString(), ...r }) + '\n')
 }

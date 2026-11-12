@@ -9,6 +9,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { withFileLock, writeJsonDurable } from '@gremlins/hatch/node'
 
 export const HASHFERENCE = 'https://hashference.com'
 /** Featured hosted model with function tools: $0.441 in / $1.386 out per million tokens (llms.txt, 2026-11). */
@@ -63,7 +64,7 @@ export async function setupKey(signer: QuaiSigner, file: string, opts: { fetch?:
   const { apiKey } = await call<{ apiKey: { apiKey: string } }>(f, 'POST', '/v1/profile/api-keys', { body: { label: opts.label ?? 'gremlin' }, auth: session.token, base: opts.base })
   if (!apiKey?.apiKey?.startsWith('hf_')) throw new Error('Hashference returned no API key')
   const k: HashferenceKey = { apiKey: apiKey.apiKey, address: signer.address, profileId: profile?.id, createdAt: (opts.now?.() ?? new Date()).toISOString() }
-  writeFileSync(file, JSON.stringify(k, null, 2), { mode: 0o600 })
+  writeJsonDurable(file, k)
   return k
 }
 
@@ -126,27 +127,58 @@ export interface BuyDeps {
   pay: (to: string, amountWei: bigint) => Promise<string>
   sleep?: (ms: number) => Promise<void>
   now?: () => number
+  /** Shared by the monitor and manual top-ups; records intent before any transfer. */
+  journalFile?: string
 }
 
-export interface Purchase { invoiceId: string; tx: string; quaiWei: bigint; status: Invoice['status'] }
+export interface Purchase { invoiceId: string; tx: string; quaiWei: bigint; status: Invoice['status']; usd?: number; recovered?: boolean }
+interface PurchaseJournal { requestId: string; usd: number; state: 'creating' | 'prepared' | 'sending' | 'sent' | 'complete'; invoice?: Invoice; tx?: string }
 
 /**
  * Buy `usd` of credit: invoice, pay exactly the quoted QUAI, then poll for a few minutes (and point Hashference at the
- * transaction if it hasn't noticed). Throws before paying when anything is off, so a throw never means money left.
+ * transaction if it hasn't noticed). A transfer error may have happened after broadcast; the journal preserves that
+ * uncertainty and refuses to pay again until the provider confirms the original invoice.
  */
 export async function buyCredit(key: HashferenceKey, usd: number, deps: BuyDeps): Promise<Purchase> {
+  if (deps.journalFile) return withFileLock(deps.journalFile + '.lock', () => purchase(key, usd, deps))
+  return purchase(key, usd, deps)
+}
+
+async function purchase(key: HashferenceKey, usd: number, deps: BuyDeps): Promise<Purchase> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const opts = { fetch: deps.fetch, base: deps.base }
-  const inv = await createQuaiInvoice(key, usd, opts)
+  let journal: PurchaseJournal | undefined
+  if (deps.journalFile && existsSync(deps.journalFile)) journal = JSON.parse(readFileSync(deps.journalFile, 'utf8')) as PurchaseJournal
+  const recovered = !!journal && journal.state !== 'complete'
+  if (!recovered) journal = { requestId: randomUUID(), usd, state: 'creating' }
+  const j = journal!
+  const save = () => { if (deps.journalFile) writeJsonDurable(deps.journalFile, j) }
+  save()
+  if (!j.invoice) { j.invoice = await createQuaiInvoice(key, j.usd, { ...opts, requestId: j.requestId }); j.state = 'prepared'; save() }
+  const inv = j.invoice
   const amount = BigInt(inv.amountAtomic)
-  // Pay only an invoice that is still open: a late payment is not credited automatically.
-  if (Date.parse(inv.expiresAt) - (deps.now ?? Date.now)() < 30_000) throw new Error('the invoice expires too soon to pay safely; try again')
-  const tx = await deps.pay(inv.addresses[0]!, amount)
+  if (j.state === 'sending' && !j.tx) {
+    const remote = await invoice(key, inv.id, opts)
+    if (remote.status !== 'paid') throw new Error(`Payment outcome unknown for invoice ${inv.id}; refusing another transfer until reconciled`)
+    j.state = 'complete'; save()
+    return { invoiceId: inv.id, tx: 'unknown (provider confirmed payment)', quaiWei: amount, status: 'paid', usd: j.usd, recovered: true }
+  }
+  if (j.state === 'prepared') {
+    if (Date.parse(inv.expiresAt) - (deps.now ?? Date.now)() < 30_000) {
+      j.state = 'complete'; save()
+      throw new Error('the invoice expires too soon to pay safely; try again')
+    }
+    j.state = 'sending'; save()
+    j.tx = await deps.pay(inv.addresses[0]!, amount)
+    j.state = 'sent'; save()
+  }
+  const tx = j.tx!
   let status = inv.status
   for (let i = 0; i < 18 && status !== 'paid'; i++) {
     await sleep(10_000)
     try { status = (await invoice(key, inv.id, opts)).status } catch { /* keep polling */ }
   }
   if (status === 'awaiting_payment') { try { status = (await verifyPayment(key, inv.id, tx, opts)).status } catch { /* reported by status */ } }
-  return { invoiceId: inv.id, tx, quaiWei: amount, status }
+  if (status === 'paid') { j.state = 'complete'; save() }
+  return { invoiceId: inv.id, tx, quaiWei: amount, status, ...(deps.journalFile ? { usd: j.usd, recovered } : {}) }
 }

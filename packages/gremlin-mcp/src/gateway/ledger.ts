@@ -5,6 +5,7 @@
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import type { RouteTarget } from './config.js'
 import type { CallRecord } from './server.js'
+import { appendDurable } from '@gremlins/hatch/node'
 
 export interface LedgerEntry extends CallRecord { usd: number; priced: boolean; grantId?: string }
 
@@ -47,7 +48,7 @@ export class Ledger {
     const entry: LedgerEntry = { ...r, usd, priced: t.inputPerM > 0 || t.outputPerM > 0, ...(t.grantId ? { grantId: t.grantId } : {}) }
     // A lent key's calls are the lender's money: valued for repayment, not counted against the gremlin's budget.
     if (day(r.at) === this.today && !t.grantId) this.spentToday += usd
-    appendFileSync(this.file, JSON.stringify(entry) + '\n', { mode: 0o600 })
+    appendDurable(this.file, JSON.stringify(entry) + '\n')
   }
 
   /** Value used on a lent key since `sinceMs` (for its allowance and for repaying the lender). */

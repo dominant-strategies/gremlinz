@@ -34,7 +34,13 @@ export function boardApi(baseUrl: string) {
   const u = (p: string) => new URL(p, baseUrl).toString()
   return {
     async createHatch(launch: { maker: string; configHash: string; launchId: string; boardUrl: string; mpcAuth?: string }): Promise<{ jobId: string; custody?: 'local' | 'mpc'; hostingAddress: string | null; minUsd: number }> {
-      const res = await fetch(u('/api/hatch/fluence'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(launch) })
+      // The browser may reach the board through localhost while the egg needs its public callback URL.
+      // Read it at job creation so changing a tunnel does not require rebuilding the frontend.
+      const configRes = await fetch(u('/api/hatch/config'), { cache: 'no-store' })
+      if (!configRes.ok) throw new Error(`could not read hatch configuration: ${configRes.status}`)
+      const { fluence } = await configRes.json() as { fluence: { boardUrl: string } | null }
+      if (!fluence) throw new Error('hatching on Fluence is not configured here')
+      const res = await fetch(u('/api/hatch/fluence'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...launch, boardUrl: fluence.boardUrl }) })
       if (!res.ok) throw new Error(`the hatch service refused: ${((await res.json().catch(() => ({}))) as { error?: string }).error ?? res.status}`)
       return res.json()
     },

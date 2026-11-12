@@ -22,8 +22,9 @@ function readJson(req: IncomingMessage): Promise<unknown> {
 export function createHttpServer(opts: { token: string; deps?: ServerDeps }): Server {
   if (opts.token.length < 32) throw new Error('GREMLIN_MCP_TOKEN must be at least 32 characters')
   return createHttp(async (req, res) => {
-    if (req.url !== '/mcp') { res.statusCode = 404; return res.end() }
     if (!same(req.headers.authorization ?? '', `Bearer ${opts.token}`)) { res.statusCode = 401; return res.end('unauthorized') }
+    if (req.url === '/healthz' && req.method === 'GET') { res.setHeader('cache-control', 'no-store'); return res.end('{"alive":true}') }
+    if (req.url !== '/mcp') { res.statusCode = 404; return res.end() }
     try {
       const body = req.method === 'POST' ? await readJson(req) : undefined
       const server = createServer(opts.deps)

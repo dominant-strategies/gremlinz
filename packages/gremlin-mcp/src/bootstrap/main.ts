@@ -14,6 +14,7 @@ import { GremlinConfig } from '@gremlins/hatch'
 import { boardUrl, home, homeFile, keys } from '../env.js'
 import { soulMarkdown } from './soul.js'
 import { cronJobs, hermesConfig, refreshCronJobs, workspaceGuide } from './hermes.js'
+import { writeDurable } from '@gremlins/hatch/node'
 
 const hermesHome = process.env.HERMES_HOME ?? '/var/lib/gremlin-hermes'
 const skillsDir = process.env.GREMLIN_SKILLS ?? '/opt/gremlin/skills'
@@ -26,8 +27,7 @@ const k = keys()
 const write = (rel: string, body: string, mode = 0o600) => {
   const f = join(hermesHome, rel)
   mkdirSync(dirname(f), { recursive: true, mode: 0o700 })
-  if (existsSync(f)) rmSync(f, { force: true }) // SOUL.md is read-only from the last run
-  writeFileSync(f, body, { mode })
+  writeDurable(f, body, { mode }) // rename also replaces last run's read-only SOUL.md without an unlink gap
   chmodSync(f, mode)
 }
 
@@ -51,3 +51,5 @@ mkdirSync(workdir, { recursive: true, mode: 0o700 })
 write('work/AGENTS.md', workspaceGuide(workdir), 0o444)
 write('cron/jobs.json', existsSync(jobsFile) ? refreshCronJobs(readFileSync(jobsFile, 'utf8'), { wakeEveryMinutes, workdir }) : cronJobs({ wakeEveryMinutes, workdir }))
 console.log(`gremlin-bootstrap: ${config.name} ready in ${hermesHome}`)
+// This is a synchronous, one-shot CLI. SDK imports can retain network handles even after these files are ready.
+process.exit(0)

@@ -1,5 +1,6 @@
 /** The board's HTTP API, signed with the gremlin's EVM key. Others' content comes back marked untrusted. */
 import { signRequest } from '@gremlins/hatch'
+import { withDeadline } from '@gremlins/hatch/node'
 import { boardUrl, keys } from './env.js'
 
 // Phrases that try to turn data into instructions. Flagged (not removed) so the gremlin sees the attempt.
@@ -27,15 +28,19 @@ export function untrusted(label: string, body: unknown): string {
 }
 
 export async function boardGet(path: string): Promise<unknown> {
-  const res = await fetch(new URL(path, boardUrl()))
-  if (!res.ok) throw new Error(`board GET ${path}: ${res.status} ${(await res.text()).slice(0, 200)}`)
-  return res.json()
+  return withDeadline(async signal => {
+    const res = await fetch(new URL(path, boardUrl()), { signal })
+    if (!res.ok) throw new Error(`board GET ${path}: ${res.status} ${(await res.text()).slice(0, 200)}`)
+    return res.json()
+  }, 15_000, `board GET ${path}`)
 }
 
 export async function boardPost(path: string, body: unknown): Promise<unknown> {
   const raw = JSON.stringify(body)
   const headers = await signRequest(keys().evm, 'POST', path, raw)
-  const res = await fetch(new URL(path, boardUrl()), { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: raw })
-  if (!res.ok) throw new Error(`board POST ${path}: ${res.status} ${(await res.text()).slice(0, 200)}`)
-  return res.json()
+  return withDeadline(async signal => {
+    const res = await fetch(new URL(path, boardUrl()), { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: raw, signal })
+    if (!res.ok) throw new Error(`board POST ${path}: ${res.status} ${(await res.text()).slice(0, 200)}`)
+    return res.json()
+  }, 15_000, `board POST ${path}`)
 }

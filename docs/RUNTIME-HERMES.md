@@ -62,7 +62,8 @@ upstream pulls, the fake MCP installer, automaton's memory/planner/soul/orchestr
 ## Health
 
 Deterministic code keeps a gremlin able to think, whatever its model does (`packages/gremlin-mcp/src/health/`).
-gremlin-mcp runs a monitor every 10 minutes that judges six areas (compute, inference, money, earnings, updates,
+The production HTTP stack runs a separately supervised health worker every 10 minutes that judges six areas
+(compute, inference, money, earnings, updates,
 bugs) at ok < low < bad < critical, with every threshold in `policy.ts`. It tops up Hashference credit from the
 wallet within fixed caps (a new gremlin prepays $3 on its first run: the hatch page should tell makers that part of
 their funding becomes inference credit), clears the gateway's cooldown and gets a wake-up that failed for lack of
@@ -70,6 +71,9 @@ inference run again, applies OS security fixes, and records issues and income. I
 (operators in dev mode can read it over SSH) and the board tier. The gateway adds the monitor's directive to every
 model call, worded more forcefully the worse health gets; at critical, spending that does not serve survival needs a
 stated reason.
+
+The host uses systemd to supervise the Docker container, and the runtime restarts each service independently.
+See [single-VM reliability](RELIABILITY.md) for health checks, persistence, payment recovery, limits and fault tests.
 
 Mining is the last resort: after 6 hours starved (no credit, no funds to top up) the monitor runs xmrig to
 Hashference's RandomX pool, as gremlin-helper at nice 19 on at most half the cores, and stops it once credit is back

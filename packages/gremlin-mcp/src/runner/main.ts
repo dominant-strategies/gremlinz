@@ -2,8 +2,8 @@
 /**
  * gremlin-run: the one command the egg supervises (GREMLIN_RUNTIME). Bootstraps the Hermes home from the signed
  * config, installs the gremlin plugin, starts the inference gateway, waits for it, then runs Hermes' gateway
- * (cron wake-ups, no chat platforms). If any child exits, the others are stopped and gremlin-run exits, so the egg
- * restarts everything with its backoff.
+ * (cron wake-ups, no chat platforms). Each service has its own liveness checks and restart backoff; the egg
+ * restarts this supervisor if it fails.
  *
  * OS users (GREMLIN_SEPARATE_USERS=1, as root in the egg image): the gateway, gremlin-mcp and Hermes (the gremlin's
  * main agent) all run as the gremlin user, which owns the seed and everything else and has passwordless sudo: the
@@ -22,8 +22,12 @@ import { appendFileSync, chmodSync, chownSync, cpSync, existsSync, mkdirSync, re
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gatewayConfig } from '../bootstrap/gateway-config.js'
-import { home, homeFile } from '../env.js'
+import { boardUrl, home, homeFile } from '../env.js'
 import { GremlinConfig } from '@gremlins/hatch'
+import { writeJsonDurable } from '@gremlins/hatch/node'
+import { Supervisor } from './supervisor.js'
+import { schedulerResponsive } from './progress.js'
+import { processIdentity, sameProcess } from './identity.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), '[gremlin-run]', ...a)
@@ -52,13 +56,40 @@ const hermesIds = gremlinIds // the main agent is the gremlin
 // through its setgid group (group rw).
 if (separate) process.umask(0o007)
 const mcpHttp = separate || process.env.GREMLIN_MCP_HTTP === '1'
+const independentHealth = mcpHttp && process.env.GREMLIN_HEALTH !== '0'
 const mcpPort = Number(process.env.GREMLIN_MCP_PORT ?? 8712)
 const mcpToken = mcpHttp ? randomBytes(32).toString('hex') : undefined
 
+// Children of a previous gremlin-run that was itself killed outright (SIGKILL leaves them running): stop them, but
+// only if the pid still belongs to the same program (pids get reused).
+const runDir = join(home(), 'run')
+mkdirSync(runDir, { recursive: true, mode: 0o700 })
+// The miner's pid is written by gremlin-mcp (the gremlin user), so it lives in GREMLIN_HOME, not in this root-owned folder.
+const pidFile = (name: string) => (name === 'miner' ? join(home(), 'miner.pid') : join(runDir, `${name}.pid`))
+let stoppedLeftovers = false
+// The miner is gremlin-mcp's child (as gremlin-helper, via sudo); it outlives an mcp that was killed outright.
+for (const [name, marker] of [['gateway', 'gateway/main.js'], ['mcp', 'main.js --http'], ['health', 'health/main.js'], ['hermes', 'gateway run'], ['miner', 'xmrig']] as const) {
+  if (!existsSync(pidFile(name))) continue
+  const raw = readFileSync(pidFile(name), 'utf8')
+  const record = raw.startsWith('{') ? JSON.parse(raw) as ReturnType<typeof processIdentity> : undefined
+  const pid = record?.pid ?? Number(raw)
+  try {
+    if (record && !sameProcess(record)) { rmSync(pidFile(name), { force: true }); continue }
+    const cmdline = execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' })
+    if (cmdline.includes(marker)) { process.kill(record ? -pid : pid, 'SIGKILL'); stoppedLeftovers = true; log(`stopped leftover ${name} (pid ${pid}) from a previous run`) }
+  } catch { /* not running */ }
+  rmSync(pidFile(name), { force: true })
+}
+if (stoppedLeftovers) await new Promise((r) => setTimeout(r, 3_000)) // let them release ports and locks
+
 // 1. Hermes home from the signed config
-const env = { ...process.env, HERMES_HOME: hermesHome, GREMLIN_SKILLS: skillsDir }
+const healthPort = Number(process.env.GREMLIN_HEALTH_PORT ?? 8713)
+const env = { ...process.env, HERMES_HOME: hermesHome, GREMLIN_SKILLS: skillsDir, GREMLIN_BOARD_URL: boardUrl(),
+  ...(mcpHttp ? { GREMLIN_MCP_TOKEN: mcpToken! } : {}),
+  ...(independentHealth ? { GREMLIN_HEALTH_URL: `http://127.0.0.1:${healthPort}` } : {}) }
 const bootEnv = { ...env, ...(mcpHttp ? { GREMLIN_MCP_URL: `http://127.0.0.1:${mcpPort}/mcp`, GREMLIN_MCP_TOKEN: mcpToken! } : {}) }
-const boot = spawnSync(process.execPath, [resolve(here, '..', 'bootstrap', 'main.js')], { env: bootEnv, stdio: 'inherit' })
+const boot = spawnSync(process.execPath, [resolve(here, '..', 'bootstrap', 'main.js')], { env: bootEnv, stdio: 'inherit', timeout: 60_000, killSignal: 'SIGKILL' })
+if (boot.error) log('bootstrap failed:', boot.error.message)
 if (boot.status !== 0) process.exit(boot.status ?? 1)
 
 // 2. the plugin, fresh every start (the agent cannot keep a modified copy)
@@ -113,75 +144,54 @@ if (!gatewayConfigPath || !existsSync(gatewayConfigPath)) {
   if (gremlinIds) chownSync(gatewayConfigPath, gremlinIds.uid, gremlinIds.gid)
 }
 
-// Children of a previous gremlin-run that was itself killed outright (SIGKILL leaves them running): stop them, but
-// only if the pid still belongs to the same program (pids get reused).
-const runDir = join(home(), 'run')
-mkdirSync(runDir, { recursive: true, mode: 0o700 })
-// The miner's pid is written by gremlin-mcp (the gremlin user), so it lives in GREMLIN_HOME, not in this root-owned folder.
-const pidFile = (name: string) => (name === 'miner' ? join(home(), 'miner.pid') : join(runDir, `${name}.pid`))
-let stoppedLeftovers = false
-// The miner is gremlin-mcp's child (as gremlin-helper, via sudo); it outlives an mcp that was killed outright.
-for (const [name, marker] of [['gateway', 'gateway/main.js'], ['mcp', 'main.js --http'], ['hermes', 'gateway run'], ['miner', 'xmrig']] as const) {
-  if (!existsSync(pidFile(name))) continue
-  const pid = Number(readFileSync(pidFile(name), 'utf8'))
-  try {
-    const cmdline = execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' })
-    if (cmdline.includes(marker)) { process.kill(pid, 'SIGTERM'); stoppedLeftovers = true; log(`stopped leftover ${name} (pid ${pid}) from a previous run`) }
-  } catch { /* not running */ }
-  rmSync(pidFile(name), { force: true })
-}
-if (stoppedLeftovers) await new Promise((r) => setTimeout(r, 3_000)) // let them release ports and locks
-
-const children: ChildProcess[] = []
+// Each service recovers independently; provider/network errors are handled by the gateway, not by restarting Hermes.
+const supervisor = new Supervisor(e => {
+  if (e.event === 'service-start' && typeof e.pid === 'number') {
+    const identity = processIdentity(e.pid)
+    if (identity) writeJsonDurable(pidFile(String(e.child)), identity)
+  } else if (e.event === 'exit') rmSync(pidFile(String(e.child)), { force: true })
+  event(e); log(e.event, e.child, e.error ?? '')
+})
+const heartbeat = setInterval(() => {
+  try { writeJsonDurable(join(home(), 'runtime-health.json'), supervisor.snapshot()) } catch (e) { log('heartbeat write failed:', (e as Error).message) }
+}, 5_000)
 let stopping = false
-let exitCode = 0
-const stopAll = (code: number) => {
-  if (!stopping) {
-    stopping = true
-    exitCode = code
-    for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill('SIGTERM')
-    setTimeout(() => { for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL') }, 10_000).unref()
+const stop = async (code: number) => {
+  if (stopping) return
+  stopping = true
+  clearInterval(heartbeat)
+  await supervisor.stop()
+  process.exit(code)
+}
+for (const sig of ['SIGTERM', 'SIGINT'] as const) process.once(sig, () => { void stop(0) })
+const httpProbe = (url: string, token?: string) => async (signal: AbortSignal) => {
+  const response = await fetch(url, { signal, headers: token ? { authorization: `Bearer ${token}` } : {} })
+  const ok = response.ok
+  await response.body?.cancel()
+  return ok
+}
+try {
+  event({ event: 'start' })
+  const port = (JSON.parse(readFileSync(gatewayConfigPath, 'utf8')) as { port?: number }).port ?? 8711
+  await supervisor.start({ name: 'gateway', command: process.execPath, args: [resolve(here, '..', 'gateway', 'main.js')], env: { ...env, GATEWAY_CONFIG: gatewayConfigPath }, ...gremlinIds,
+    probe: httpProbe(`http://127.0.0.1:${port}/health`) })
+  if (mcpHttp) {
+    // Health has its own process and payment ownership: a broken tool server cannot stop survival checks.
+    if (independentHealth) await supervisor.start({ name: 'health', command: process.execPath, args: [resolve(here, '..', 'health', 'main.js')], env: { ...env, GREMLIN_HEALTH_PORT: String(healthPort), GREMLIN_GATEWAY_ADMIN: `http://127.0.0.1:${port}` }, ...gremlinIds,
+      probe: httpProbe(`http://127.0.0.1:${healthPort}/healthz`, mcpToken) })
+    await supervisor.start({ name: 'mcp', command: process.execPath, args: [resolve(here, '..', 'main.js'), '--http'], env: { ...env, GREMLIN_MCP_PORT: String(mcpPort) }, ...gremlinIds,
+      probe: httpProbe(`http://127.0.0.1:${mcpPort}/healthz`, mcpToken) })
   }
-  // Exit once every child is gone, with the first failure's code (so the egg knows it failed).
-  if (children.every((c) => c.exitCode !== null || c.signalCode !== null)) process.exit(exitCode)
+  const subagentEnv = { GREMLIN_PROTECTED_DIRS: home(), GREMLIN_SUBAGENT_ROOTS: `${workDir}:/tmp` }
+  const hermesEnv: NodeJS.ProcessEnv = separate
+    ? { PATH: process.env.PATH, LANG: process.env.LANG ?? 'C.UTF-8', HOME: hermesHome, HERMES_HOME: hermesHome, GREMLIN_HOME: home(), ...subagentEnv }
+    : { ...env, ...subagentEnv }
+  const startedAt = Date.now()
+  await supervisor.start({ name: 'hermes', command: hermesBin, args: ['gateway', 'run', '--external-supervisor', '--replace'], env: hermesEnv, ...hermesIds,
+    probe: async () => schedulerResponsive(hermesHome, startedAt) })
+  writeJsonDurable(join(home(), 'runtime-health.json'), supervisor.snapshot())
+  log(`running: gateway ${port}, MCP ${mcpHttp ? mcpPort : 'stdio'}, independent health ${mcpHttp ? healthPort : 'on-demand'}`)
+} catch (error) {
+  log('runtime startup failed:', (error as Error).message)
+  await stop(1)
 }
-const start = (name: string, cmd: string, args: string[], childEnv: NodeJS.ProcessEnv, ids?: Ids) => {
-  const c = spawn(cmd, args, { env: childEnv, stdio: 'inherit', ...(ids ?? {}) })
-  writeFileSync(pidFile(name), String(c.pid), { mode: 0o600 })
-  c.on('exit', (code, signal) => {
-    log(`${name} exited (code ${code}, signal ${signal})`)
-    if (!stopping) event({ event: 'exit', child: name, code, signal })
-    rmSync(pidFile(name), { force: true })
-    stopAll(code ?? (signal === 'SIGTERM' && stopping ? exitCode : 1))
-  })
-  children.push(c)
-  return c
-}
-const waitHealthy = async (name: string, url: string, ok: (r: Response) => boolean) => {
-  for (let i = 0; i < 40; i++) {
-    if (await fetch(url).then(ok).catch(() => false)) return
-    await new Promise((r) => setTimeout(r, 500))
-  }
-  log(`${name} did not come up`)
-  stopAll(1)
-}
-
-event({ event: 'start' })
-start('gateway', process.execPath, [resolve(here, '..', 'gateway', 'main.js')], { ...env, GATEWAY_CONFIG: gatewayConfigPath }, gremlinIds)
-const port = (JSON.parse(readFileSync(gatewayConfigPath, 'utf8')) as { port?: number }).port ?? 8711
-await waitHealthy('inference gateway', `http://127.0.0.1:${port}/health`, (r) => r.ok)
-
-if (mcpHttp) {
-  start('mcp', process.execPath, [resolve(here, '..', 'main.js'), '--http'], { ...env, GREMLIN_MCP_TOKEN: mcpToken!, GREMLIN_MCP_PORT: String(mcpPort), GREMLIN_GATEWAY_ADMIN: `http://127.0.0.1:${port}` }, gremlinIds)
-  await waitHealthy('gremlin-mcp', `http://127.0.0.1:${mcpPort}/mcp`, (r) => r.status === 401) // up, and asking for the token
-}
-
-// 4. Hermes: the main agent (cron wake-ups; no chat platforms). GREMLIN_PROTECTED_DIRS and GREMLIN_SUBAGENT_ROOTS
-// tell the plugin what its subagents may not touch and where their files may go.
-const subagentEnv = { GREMLIN_PROTECTED_DIRS: home(), GREMLIN_SUBAGENT_ROOTS: `${workDir}:/tmp` }
-const hermesEnv: NodeJS.ProcessEnv = separate
-  ? { PATH: process.env.PATH, LANG: process.env.LANG ?? 'C.UTF-8', HOME: hermesHome, HERMES_HOME: hermesHome, GREMLIN_HOME: home(), ...subagentEnv }
-  : { ...env, ...subagentEnv }
-start('hermes', hermesBin, ['gateway', 'run', '--external-supervisor', '--replace'], hermesEnv, hermesIds)
-log(`running: gateway on ${port}${mcpHttp ? `, gremlin-mcp on ${mcpPort}` : ''}, hermes home ${hermesHome}${separate ? ' (as the gremlin user; subagents as gremlin-helper)' : ''}`)
-for (const sig of ['SIGTERM', 'SIGINT'] as const) process.on(sig, () => stopAll(0))

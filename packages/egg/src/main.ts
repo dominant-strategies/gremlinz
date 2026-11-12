@@ -20,7 +20,7 @@ import { renderCloudInit } from './cloud-init.js'
 import { httpBoardClient } from './board-client.js'
 import { rpcBalanceReader } from '@gremlins/treasury'
 import { cleanupFluenceAccount, fluence, localSigner, sporestack, unusableSshKey, type Provider } from '@gremlins/hosting'
-import { step } from './egg.js'
+import { step, type RuntimeStatus } from './egg.js'
 import { loadOrCreateKeys } from './keys.js'
 import { readLaunchData, EggLaunchData, type NestLaunchData } from './launch.js'
 import { fileStore } from './store.js'
@@ -28,6 +28,8 @@ import { loadOrCreateTransportKey, nestStep, type NestState } from './nest.js'
 import { moveOutStep, nestBuild, startMoveOut, isQuiet, type MoveOutDeps, type MoveOutState } from './moveout.js'
 import { collectPayload, restorePayload } from './payload.js'
 import { hostingFileStore, hostingStep } from './hosting.js'
+import { writeJsonDurable } from '@gremlins/hatch/node'
+import { restartPlan } from './restart.js'
 
 const home = process.env.GREMLIN_HOME ?? '/var/lib/gremlin'
 const runtimeDir = process.env.AUTOMATON_DIR ?? join(homedir(), '.automaton')
@@ -37,7 +39,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const readJson = <T>(p: string): T | undefined => {
   try { return JSON.parse(readFileSync(p, 'utf8')) as T } catch { return undefined }
 }
-const writeJson = (p: string, v: unknown) => writeFileSync(p, JSON.stringify(v, null, 2), { mode: 0o600 })
+const writeJson = writeJsonDurable
+const heartbeat = (extra: object = {}) => writeJson(join(home, 'egg-heartbeat.json'), { at: new Date().toISOString(), ...extra })
 
 // A server that received a gremlin keeps that gremlin's launch data in GREMLIN_HOME; it takes precedence.
 const movedLaunch = join(home, 'launch.json')
@@ -45,7 +48,7 @@ const launch = readLaunchData(existsSync(movedLaunch) ? movedLaunch : process.en
 
 if (existsSync(join(home, 'MOVED'))) {
   log('this gremlin moved to a new home:', readFileSync(join(home, 'MOVED'), 'utf8').trim(), '— idling')
-  for (;;) await sleep(24 * 60 * 60_000)
+  for (;;) { heartbeat({ mode: 'moved', runtimeWanted: false }); await sleep(tickMs) }
 }
 
 if (launch.mode === 'nest') await runNest(launch)
@@ -72,6 +75,7 @@ async function runNest(nl: NestLaunchData) {
   let state: NestState = readJson(statePath) ?? { stage: 'booted', bootedAt: new Date().toISOString(), log: [] }
   log('nest for', nl.forGremlin, 'launch', nl.launchId)
   while (state.stage !== 'restored') {
+    heartbeat({ mode: 'nest', runtimeWanted: false })
     try {
       state = await nestStep(deps, state)
       writeJson(statePath, state)
@@ -113,20 +117,25 @@ async function runEgg() {
 
   // Supervise the agent runtime: (re)start whenever initialized/hatched, with backoff; pausable for move-out.
   let runtime: ChildProcess | undefined
-  let restarts = 0
-  let nextStartAt = 0
+  const restartPath = join(home, 'runtime-restarts.json')
+  const previous = readJson<{ failures: number; nextStartAt: number }>(restartPath)
+  let restarts = previous?.failures ?? 0
+  let nextStartAt = previous?.nextStartAt ?? 0
   let paused = false
   const startRuntime = () => {
     const cmd = process.env.GREMLIN_RUNTIME
     if (paused || !cmd || runtime || Date.now() < nextStartAt) return
-    runtime = spawn(cmd, { shell: true, stdio: 'inherit', env: { ...process.env, GREMLIN_CONFIG: configPath, GREMLIN_HOME: home } })
+    runtime = spawn(cmd, { shell: true, detached: true, stdio: 'inherit', env: { ...process.env, GREMLIN_CONFIG: configPath, GREMLIN_HOME: home } })
     log('runtime started:', cmd)
     const startedAt = Date.now()
-    runtime.on('exit', (code, signal) => {
+    runtime.once('error', error => log('runtime spawn failed:', error.message))
+    runtime.on('close', (code, signal) => {
       runtime = undefined
       if (paused) return
-      restarts = Date.now() - startedAt > 10 * 60_000 ? 0 : restarts + 1
-      nextStartAt = Date.now() + Math.min(60_000 * 2 ** restarts, 60 * 60_000)
+      const plan = restartPlan(restarts, Date.now() - startedAt, Date.now())
+      restarts = plan.failures
+      nextStartAt = plan.nextStartAt
+      writeJson(restartPath, plan)
       log(`runtime exited (code ${code}, signal ${signal}); restarting in ${Math.round((nextStartAt - Date.now()) / 1000)}s`)
     })
   }
@@ -134,8 +143,14 @@ async function runEgg() {
     paused = true
     if (!runtime) return
     const r = runtime
-    await new Promise<void>((resolve) => { r.once('exit', () => resolve()); r.kill('SIGTERM'); setTimeout(() => { r.kill('SIGKILL'); resolve() }, 30_000) })
+    const signal = (sig: NodeJS.Signals) => { try { if (r.pid) process.kill(-r.pid, sig) } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e } }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => { signal('SIGKILL'); resolve() }, 15_000)
+      r.once('close', () => { clearTimeout(timer); resolve() })
+      signal('SIGTERM')
+    })
   }
+  for (const sig of ['SIGTERM', 'SIGINT'] as const) process.once(sig, () => { void stopRuntime().finally(() => process.exit(0)) })
   if (!process.env.GREMLIN_RUNTIME) log('no GREMLIN_RUNTIME set; the egg will pulse on its own after hatching')
 
   const deps = {
@@ -146,10 +161,14 @@ async function runEgg() {
     store,
     now: () => new Date(),
     pulseEveryMs: Number(process.env.GREMLIN_PULSE_MS ?? 60 * 60_000),
-    readStatus: () => readJson(join(home, 'status.json')) ?? {},
+    readStatus: () => {
+      const status = readJson<RuntimeStatus>(join(home, 'status.json')) ?? {}
+      const health = readJson<{ tier: RuntimeStatus['tier']; at: string }>(join(home, 'health-tier.json'))
+      return { ...status, ...(health && Date.now() - Date.parse(health.at) < 45 * 60_000 ? { tier: health.tier } : {}) }
+    },
     async onInitialized(config: unknown, signed: unknown) {
       writeJson(configPath, config)
-      writeFileSync(join(home, 'signed-config.json'), JSON.stringify(signed, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2), { mode: 0o600 })
+      writeJson(join(home, 'signed-config.json'), signed)
       startRuntime()
     },
   }
@@ -193,6 +212,9 @@ async function runEgg() {
 
   let last = ''
   for (;;) {
+    const stage = store.load()?.stage
+    if (!isQuiet(moveOut) && (stage === 'initialized' || stage === 'hatched')) startRuntime()
+    heartbeat({ mode: 'egg', runtimeWanted: !paused && !!process.env.GREMLIN_RUNTIME && (stage === 'initialized' || stage === 'hatched'), nextStartAt })
     try {
       const req = readJson<MoveOutRequest>(requestPath)
       if (req && (!moveOut || moveOut.stage === 'reverted' || moveOut.stage === 'moved') && store.load()?.stage === 'hatched') {
@@ -209,7 +231,7 @@ async function runEgg() {
         writeJson(moveOutPath, moveOut)
         if (moveOut.stage === 'moved') {
           log('moved to', moveOut.nestAddress, '— this server no longer holds the gremlin; idling')
-          for (;;) await sleep(24 * 60 * 60_000)
+          for (;;) { heartbeat({ mode: 'moved', runtimeWanted: false }); await sleep(tickMs) }
         }
       }
       if (!isQuiet(moveOut)) {

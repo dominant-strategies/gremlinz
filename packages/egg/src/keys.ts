@@ -7,6 +7,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { writeDurable } from '@gremlins/hatch/node'
 import { HDNodeWallet, Mnemonic as EthMnemonic, randomBytes } from 'ethers'
 import { Mnemonic, QiHDWallet, QuaiHDWallet, Wallet as QuaiWallet, Zone } from 'quais'
 
@@ -40,7 +41,7 @@ export function loadOrCreateKeys(path: string): EggKeys {
   if (existsSync(path)) return keysFromPhrase(readFileSync(path, 'utf8').trim())
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const phrase = generatePhrase()
-  writeFileSync(path, phrase + '\n', { mode: 0o600, flag: 'wx' })
+  writeDurable(path, phrase + '\n', { exclusive: true })
   chmodSync(path, 0o600)
   return keysFromPhrase(phrase)
 }

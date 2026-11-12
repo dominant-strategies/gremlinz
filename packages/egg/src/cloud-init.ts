@@ -15,6 +15,7 @@
  * fix needs it (the egg container restarts with the server).
  */
 import type { z } from 'zod'
+import { GREMLIN_UNIT, WATCHDOG_SCRIPT, WATCHDOG_TIMER, WATCHDOG_UNIT } from './systemd.js'
 import type { EggLaunchData, NestLaunchData } from './launch.js'
 
 export interface CloudInitOptions {
@@ -147,7 +148,7 @@ packages: [docker.io, unattended-upgrades]
 ssh_pwauth: false
 disable_root: true
 ${access}write_files:
-${file('/usr/local/sbin/gremlin-lockdown', '0755', LOCKDOWN_SCRIPT)}${file('/etc/systemd/system/gremlin-lockdown.service', '0644', LOCKDOWN_UNIT)}${file('/etc/apt/apt.conf.d/99gremlin-lockdown', '0644', 'DPkg::Post-Invoke { "/usr/local/sbin/gremlin-lockdown >/dev/null 2>&1 || true"; };\n')}${devFiles}  - path: /etc/apt/apt.conf.d/52gremlin-auto-upgrades
+${file('/usr/local/sbin/gremlin-lockdown', '0755', LOCKDOWN_SCRIPT)}${file('/etc/systemd/system/gremlin-lockdown.service', '0644', LOCKDOWN_UNIT)}${file('/etc/systemd/system/gremlin.service', '0644', GREMLIN_UNIT)}${file('/etc/systemd/system/gremlin-watchdog.service', '0644', WATCHDOG_UNIT)}${file('/etc/systemd/system/gremlin-watchdog.timer', '0644', WATCHDOG_TIMER)}${file('/usr/local/sbin/gremlin-watchdog', '0755', WATCHDOG_SCRIPT)}${file('/etc/gremlin/service.env', '0600', `GREMLIN_IMAGE=${opts.image}\n`)}${file('/etc/apt/apt.conf.d/99gremlin-lockdown', '0644', 'DPkg::Post-Invoke { "/usr/local/sbin/gremlin-lockdown >/dev/null 2>&1 || true"; };\n')}${devFiles}  - path: /etc/apt/apt.conf.d/52gremlin-auto-upgrades
     permissions: '0644'
     content: |
       APT::Periodic::Update-Package-Lists "1";
@@ -163,6 +164,9 @@ ${lockdown}
   - [mkdir, -p, /var/lib/gremlin]
   - [chown, '1000:1000', /var/lib/gremlin]
   - [chmod, '700', /var/lib/gremlin]
-  - [docker, run, -d, --name, egg, --restart, always, -v, '/var/lib/gremlin:/var/lib/gremlin', -v, '/etc/gremlin:/etc/gremlin:ro', '${opts.image}']
+  - [mkdir, -p, /var/lib/gremlin-hermes]
+  - [chmod, '700', /var/lib/gremlin-hermes]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, gremlin.service, gremlin-watchdog.timer]
 `
 }

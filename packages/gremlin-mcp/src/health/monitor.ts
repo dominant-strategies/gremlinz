@@ -1,6 +1,6 @@
 /**
  * The health monitor: deterministic code that keeps the gremlin able to think and tells it, in numbers, what needs
- * attention. It runs inside gremlin-mcp (which holds the keys) every 10 minutes and on demand (health_status):
+ * attention. Production runs it in a separately supervised worker every 10 minutes and on demand (health_status):
  *
  * 1. measure: Hashference and Venice credit, inference burn (ledger), wallet value, hosting runway, machine resources,
  *    the wake-up job's last result, security state, recorded issues and earnings;
@@ -18,6 +18,7 @@
  */
 import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { withDeadline } from '@gremlins/hatch/node'
 import { homeFile, keys } from '../env.js'
 import { readStatus, updateStatus } from '../status.js'
 import { account, buyCredit, readKey, setupKey, type HashferenceKey } from '../hashference.js'
@@ -33,6 +34,7 @@ import {
 } from './stores.js'
 import type { HostingInfo, WalletSnapshot } from './probes.js'
 import { Miner } from './miner.js'
+import { renewHosting } from './hosting.js'
 
 export interface HealthFile {
   at: string
@@ -173,10 +175,12 @@ export class HealthMonitor {
     let bought = 0
     if (plan.usd > 0 && key) {
       try {
-        const p = await buyCredit(key, plan.usd, { ...this.hf(), pay: this.d.hashference?.pay ?? (await import('../tools/hashference.js')).payQuai, now: this.d.now })
-        bought = plan.usd
-        act('inference', 'topup', `bought $${plan.usd.toFixed(2)} of Hashference credit (${plan.why}); invoice ${p.status}`, { ok: true, usd: plan.usd, status: p.status, tx: p.tx })
-        if (wallet) { wallet.totalUsd -= plan.usd; if (wallet.quaiUsd !== undefined) wallet.quaiUsd -= plan.usd; wallet.byAsset['quai:quai'] = (wallet.byAsset['quai:quai'] ?? 0) - plan.usd }
+        const p = await buyCredit(key, plan.usd, { ...this.hf(), pay: this.d.hashference?.pay ?? (await import('../tools/hashference.js')).payQuai, now: this.d.now, journalFile: homeFile('inference-purchase.json') })
+        const paidUsd = p.usd ?? plan.usd
+        bought = p.status === 'paid' ? paidUsd : 0
+        if (!readActions().some(a => a.kind === 'topup' && a.invoiceId === p.invoiceId))
+          act('inference', 'topup', `bought $${paidUsd.toFixed(2)} of Hashference credit (${plan.why}); invoice ${p.status}`, { ok: true, usd: paidUsd, status: p.status, tx: p.tx, invoiceId: p.invoiceId })
+        if (wallet && !p.recovered) { wallet.totalUsd -= paidUsd; if (wallet.quaiUsd !== undefined) wallet.quaiUsd -= paidUsd; wallet.byAsset['quai:quai'] = (wallet.byAsset['quai:quai'] ?? 0) - paidUsd }
       } catch (e) {
         act('inference', 'topup', `top-up of $${plan.usd.toFixed(2)} failed: ${(e as Error).message.slice(0, 160)}`, { ok: false, usd: plan.usd })
       }
@@ -192,6 +196,15 @@ export class HealthMonitor {
       } catch (e) { notes.push(`gateway cooldown reset failed: ${(e as Error).message.slice(0, 100)}`) }
       if (wake.forInference) await this.rerun(wake, st, now, act, notes)
     }
+
+    // Hosting payments do not need a model turn. Only USDC already in the owned hosting account is used.
+    try {
+      const renewed = await renewHosting(hosting)
+      if (renewed.state === 'paid') {
+        act('compute', 'hosting-topup', renewed.detail!, { usd: renewed.usd, ok: true })
+        st.hosting = undefined // re-read actual provider credit next cycle
+      } else if (renewed.detail) notes.push(renewed.detail)
+    } catch (error) { notes.push(`hosting renewal unavailable: ${(error as Error).message.slice(0, 160)}`) }
 
     // ── updates: OS security fixes are free and safe, so apply them ──
     let sec: SecurityResult | undefined
@@ -266,7 +279,8 @@ export class HealthMonitor {
     writeAtomic(homeFile('health.json'), health)
     writeAtomic(homeFile('health-state.json'), st)
     const tier = tierFor(sev, inference.status)
-    if (readStatus().tier !== tier) updateStatus({ tier })
+    if (process.env.GREMLIN_HEALTH_EXTERNAL === '1') writeAtomic(homeFile('health-tier.json'), { tier, at: iso })
+    else if (readStatus().tier !== tier) updateStatus({ tier })
     return health
   }
 
@@ -294,7 +308,7 @@ export class HealthMonitor {
     const c = st[k] as { at: number; snap?: WalletSnapshot; info?: HostingInfo } | undefined
     if (!refresh && c && now - c.at < everyMs) return (k === 'wallet' ? c.snap : c.info) as K extends 'wallet' ? WalletSnapshot | undefined : HostingInfo | undefined
     try {
-      const v = await read()
+      const v = await withDeadline(() => read(), 30_000, `${k} probe`)
       ;(st as Record<string, unknown>)[k] = k === 'wallet' ? { at: now, snap: v } : { at: now, info: v }
       return v as K extends 'wallet' ? WalletSnapshot | undefined : HostingInfo | undefined
     } catch (e) {

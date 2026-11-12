@@ -26,6 +26,17 @@ describe('move-out payload', () => {
     expect([...readFileSync(join(rt2, 'state.db'))]).toEqual([0, 1, 2, 255])
   })
 
+  it('keeps API access, pending payments and spending history, leaving process locks behind', () => {
+    const home = dir(), runtimeDir = dir()
+    const files = ['hashference.json', 'inference-purchase.json', 'hosting-renewal.json', 'inference-ledger.jsonl', 'health-actions.jsonl', 'sends.jsonl']
+    for (const file of [...files, 'inference-purchase.json.lock', 'runtime-health.json']) writeFileSync(join(home, file), file)
+    const payload = collectPayload({ phrase: 'test phrase', gremlinHome: home, runtimeDir })
+    const target = dir()
+    restorePayload(payload, { gremlinHome: target, runtimeDir: dir() })
+    for (const file of files) expect(readFileSync(join(target, file), 'utf8')).toBe(file)
+    expect(Object.keys(payload.files)).toHaveLength(files.length)
+  })
+
   it('refuses path traversal', () => {
     expect(() => restorePayload({ v: 1, phrase: 'x', files: { 'runtime/../../etc/passwd': '' } }, { gremlinHome: dir(), runtimeDir: dir() })).toThrow(/unsafe path/)
     expect(() => restorePayload({ v: 1, phrase: 'x', files: { 'elsewhere/a': '' } }, { gremlinHome: dir(), runtimeDir: dir() })).toThrow(/unknown area/)

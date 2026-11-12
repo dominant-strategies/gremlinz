@@ -1,6 +1,7 @@
 /** Entry point: PORT (default 8787), BOARD_DB (default ./data/board.db, or ':memory:'). */
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { loadEnvFile } from 'node:process'
 import { constants as zlibConstants } from 'node:zlib'
 import { serve } from '@hono/node-server'
 import { createBoard } from './app.ts'
@@ -9,6 +10,9 @@ import { SqliteBoardStore } from './sqlite-store.ts'
 import { claudeDesigner, photoProviderFromEnv, type ForgeDesigner } from './forge.ts'
 import { hatchWorker } from './hatch.ts'
 import { hatchFromEnv, liveHatchDeps } from './hatch-live.ts'
+
+// Local settings live beside the board package; exported environment variables take precedence.
+if (existsSync('.env')) loadEnvFile('.env')
 
 // CVE-2026-111497 (Node2Shell): Node's Brotli decoder could be made to write out of bounds by untrusted input. The fix
 // (22.23.4, 24.22.1, 26.12.1) is a cherry-pick that also added this constant, so its absence means an unpatched Node.

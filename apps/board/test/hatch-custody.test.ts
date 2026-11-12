@@ -157,6 +157,15 @@ async function eggBoots(s: Awaited<ReturnType<typeof setup>>, jobId: string, egg
 }
 
 describe('hatch custody: jobs', () => {
+  it('publishes only the public callback URL, without caching or exposing hatch secrets', async () => {
+    const s = await setup()
+    const response = await s.b.req('/api/hatch/config')
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.json()).toEqual({ fluence: { boardUrl: cfg.publicUrl } })
+    const disabled = await makeBoard()
+    expect((await disabled.json('/api/hatch/config')).body).toEqual({ fluence: null })
+  })
+
   it('creates a job with a fresh hosting key, renders the cloud-init itself, and never returns a secret', async () => {
     const s = await setup()
     const r = await s.b.postJson('/api/hatch/fluence', s.body)

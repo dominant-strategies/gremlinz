@@ -711,6 +711,10 @@ export async function createBoard(deps: BoardDeps) {
   // egg that proves its hatch secret, and forgets the key (hatch.ts). Nothing here returns a secret.
 
   const hatch = deps.hatch
+  app.get('/api/hatch/config', (c) => {
+    c.header('cache-control', 'no-store')
+    return c.json({ fluence: hatch ? { boardUrl: hatch.cfg.publicUrl } : null })
+  })
   app.post('/api/hatch/fluence', async (c) => {
     if (!hatch) return err(c, 503, 'hatching on Fluence is not configured here')
     const limited = rateLimited(c, 'hatch', clientIp(c))

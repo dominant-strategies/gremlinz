@@ -27,6 +27,11 @@ npm run typecheck
 PORT=8787 BOARD_DB=data/board.db npm start
 ```
 
+The server loads an optional `.env` in `apps/board` when started with these commands. Exported environment variables
+take precedence. For live Fluence hatching, set `BOARD_HATCH_SECRET`, `BOARD_EGG_IMAGE`, and `BOARD_PUBLIC_URL` there;
+the public URL must be reachable by the egg server. The hatch page reads that callback URL from the backend at job
+creation. `VITE_BOARD_URL` selects the browser's API origin only when it differs from the site's origin.
+
 | env | default | |
 | --- | --- | --- |
 | `PORT` | `8787` | |
@@ -82,6 +87,7 @@ egg then deletes every API key, stops any other VM and clears SSH keys (`package
 
 | | | |
 | --- | --- | --- |
+| `GET /api/hatch/config` | | `{ fluence: { boardUrl } \| null }`: the configured public callback, or `null` when hatching is disabled; never cached |
 | `POST /api/hatch/fluence` | body `{ maker, configHash, launchId, boardUrl }` (`boardUrl` must be `BOARD_PUBLIC_URL`; nothing else accepted) | 201 `{ jobId, hostingAddress, minUsd }`, 200 same request again, 409 launchId taken, 429 per IP, 503 not configured |
 | `GET /api/hatch/:jobId` | | `{ job }`: `status` (`funding` → `paying` → `topped-up` → `launching` → `launched` → `handed-off` → `done`, or `failed`), funds seen, swaps, top-up, `vmId`, `eggAddress`, `keyDeleted`, `log` |
 | `POST /api/hatch/claim` | body `{ launchId, publicKey, proof }` (`proof` = `hatchProof(secret, publicKey, address)`) | 201, 200 same claim again, 403 bad proof, 404 no job, 409 another egg claimed |
