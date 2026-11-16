@@ -189,7 +189,51 @@ BEFORE YOU ANSWER, check the design the way a reviewer will check renders of it,
 Reply with only JSON: {"name":"1-3 words","tagline":"wry, at most 12 words","story":{"goals":[...],"motive":"..."},"menace":0-10,"palette":{...},"assemblies":[...],"modes":[...],"parts":[...],"wear":[...],"art":{...},"decals":[...]} (the last three only when used)`
 
 /** Built-in designs, in the wire format the model writes. Used as starting points and as few-shot examples. */
-export const FORGE_EXAMPLES: Record<'toaster' | 'octopod' | 'foreman', unknown> = {
+export const FORGE_EXAMPLES: Record<'mechapus' | 'toaster' | 'octopod' | 'foreman', unknown> = {
+  mechapus: { name: 'Mechapus', tagline: 'Two eyes, eight arms, zero intention of letting go.', menace: 10,
+    story: { goals: ['Eat every sea urchin in the world', 'Save octopuses from getting eaten in restaurants'], motive: 'It was an octopus once, until a kitchen got hold of it. Now it is armoured, hungry, and it keeps a list of restaurants.' },
+    palette: { enamel: '#2b2b2e', accent: '#c9302c', glow: '#ff3b30' },
+    assemblies: [
+      { id: 'mantle', name: 'Mantle & eyes', role: 'Bulbous riveted head sac with two side-set eye pods', explode: [0, 0.7, -0.2], states: ['SEALED', 'PUMPING'], joint: { move: 'pulse', pivot: [0, 1.2, 0], axis: [0, 1, 0], range: 0.06 } },
+      { id: 'lure', name: 'Lure arms', role: 'Front ball-link lure pair, 36 links each, U-hooked tips', explode: [0, -0.2, 0.9], states: ['DANGLING', 'LURING'], joint: { move: 'curl', pivot: [0.161, 0.6, 0.388], axis: [0.924, 0, -0.383], range: 145 } },
+      { id: 'arms', name: 'Strike arms', role: 'Front-flank pair of drum-link striking arms, 32 links', explode: [0, -0.2, 0.55], states: ['READY', 'STRIKING'], joint: { move: 'curl', pivot: [0.388, 0.6, 0.161], axis: [0.383, 0, -0.924], range: 145 } },
+      { id: 'reach', name: 'Reach arms', role: 'Rear-flank pair of drum-link grasping arms, 32 links each', explode: [0, -0.2, -0.55], states: ['COILED', 'REACHING'], joint: { move: 'curl', pivot: [0.388, 0.6, -0.161], axis: [-0.383, 0, -0.924], range: 145 } },
+      { id: 'anchor', name: 'Anchor arms', role: 'Rear block-link bracing pair, 30 links each', explode: [0, -0.1, -0.9], states: ['BRACED', 'LASHING'], joint: { move: 'curl', pivot: [0.161, 0.6, -0.388], axis: [-0.924, 0, -0.383], range: 145 } },
+    ],
+    modes: [
+      { id: 'strike', name: 'Strike', drive: { arms: 0.8, lure: 0.4, reach: 0.3, anchor: -0.4, mantle: 0.3 }, focus: 'arms' },
+      { id: 'ripple', name: 'Ripple', drive: { lure: 0.6, arms: 0.3, reach: -0.3, anchor: -0.6, mantle: 0.5 }, focus: 'arms' },
+      { id: 'recoil', name: 'Recoil', drive: { lure: -0.6, arms: -0.6, reach: -0.6, anchor: -0.5, mantle: 1 }, focus: 'mantle' },
+      { id: 'beckon', name: 'Beckon', drive: { lure: -0.6, arms: 0.2, reach: 0.3, anchor: 0.2, mantle: 0.4 }, focus: 'lure' },
+      { id: 'swim', name: 'Swim', drive: { mantle: 1, lure: 1, arms: 1, reach: 1, anchor: 1 }, focus: 'mantle' },
+    ],
+    parts: [
+      { kind: 'lathe', pos: [0, 0, 0], rot: [0, 0, 0], mat: 'steel', profile: [[0, 0.42], [0.55, 0.45], [0.82, 0.52], [0.62, 0.64], [0, 0.7]], rivets: [{ y: 0.5, count: 16, mat: 'brass' }] },
+      { kind: 'lathe', pos: [0, 0, 0], rot: [0, 0, 0], mat: 'enamel', profile: [[0, 0.45], [0.5, 0.48], [0.68, 0.62], [0.74, 0.85], [0.7, 1.1], [0.55, 1.3], [0, 1.4]], rivets: [{ y: 0.72, count: 30, mat: 'brass' }], seams: [0.7, 1.18], asm: 'mantle' },
+      { kind: 'torus', pos: [0, 0.68, 0], rot: [90, 0, 0], mat: 'chrome', size: [0.7, 0.03], asm: 'mantle' },
+      { kind: 'lathe', pos: [0, 1.1, -0.05], rot: [-20, 0, 0], mat: 'enamel', profile: [[0, 0], [0.45, 0.05], [0.68, 0.3], [0.74, 0.6], [0.68, 0.9], [0.5, 1.15], [0.25, 1.3], [0, 1.35]], rivets: [{ y: 0.3, count: 24, mat: 'steel' }, { y: 0.95, count: 18, mat: 'brass' }], seams: [0.3, 0.95], asm: 'mantle' },
+      { kind: 'torus', pos: [0, 1.147, -0.067], rot: [70, 0, 0], mat: 'chrome', size: [0.46, 0.035], asm: 'mantle' },
+      { kind: 'sphere', pos: [0.55, 1.02, 0.44], rot: [0, 0, 0], mat: 'enamel', size: [0.2], asm: 'mantle', mirror: 'x' },
+      { kind: 'torus', pos: [0.67, 1.02, 0.54], rot: [0, 50, 0], mat: 'chrome', size: [0.15, 0.025], asm: 'mantle', mirror: 'x' },
+      { kind: 'visor', pos: [0.696, 1.02, 0.562], rot: [0, 50, 0], w: 0.24, h: 0.24, asm: 'mantle', mirror: 'x' },
+      { kind: 'eye', pos: [0.753, 1.02, 0.61], rot: [0, 50, 0], size: 0.07, asm: 'mantle', mirror: 'x', shape: 'bar' },
+      { kind: 'extrude', pos: [0.6, 1.17, 0.47], rot: [0, 50, -12], mat: 'accent', shape: [[-0.14, 0], [0.14, 0], [0.1, 0.05], [-0.1, 0.04]], depth: 0.06, bevel: true, asm: 'mantle', mirror: 'x' },
+      { kind: 'chain', pos: [0, 0, 0], rot: [0, 0, 0], mat: 'copper', points: [[0.161, 0.6, 0.388], [0.188, 0.373, 0.455], [0.25, 0.198, 0.602], [0.334, 0.106, 0.806], [0.425, 0.117, 1.026], [0.506, 0.227, 1.222], [0.553, 0.373, 1.334]], radius: [0.13, 0.03], count: 36, link: 'ball', asm: 'lure', mirror: 'x' },
+      { kind: 'chain', pos: [0, 0, 0], rot: [0, 0, 0], mat: 'chrome', points: [[0.388, 0.6, 0.161], [0.455, 0.373, 0.188], [0.602, 0.198, 0.25], [0.806, 0.106, 0.334], [1.026, 0.117, 0.425], [1.222, 0.227, 0.506], [1.334, 0.373, 0.553]], radius: [0.14, 0.035], count: 32, link: 'drum', wear: [{ kind: 'rust', amount: 0.4, pattern: 'spots', scale: 1, seed: 444 }], asm: 'arms', mirror: 'x' },
+      { kind: 'chain', pos: [0, 0, 0], rot: [0, 0, 0], mat: 'chrome', points: [[0.388, 0.6, -0.161], [0.455, 0.373, -0.188], [0.602, 0.198, -0.25], [0.806, 0.106, -0.334], [1.026, 0.117, -0.425], [1.222, 0.227, -0.506], [1.334, 0.373, -0.553]], radius: [0.14, 0.035], count: 32, link: 'drum', asm: 'reach', mirror: 'x' },
+      { kind: 'chain', pos: [0, 0, 0], rot: [0, 0, 0], mat: 'chrome', points: [[0.161, 0.6, -0.388], [0.188, 0.373, -0.455], [0.25, 0.198, -0.602], [0.334, 0.106, -0.806], [0.425, 0.117, -1.026], [0.506, 0.227, -1.222], [0.553, 0.373, -1.334]], radius: [0.145, 0.04], count: 30, link: 'block', asm: 'anchor', mirror: 'x' },
+    ],
+    wear: [
+      { kind: 'soot', amount: 0.3, pattern: 'streaks', scale: 1, seed: 259 },
+      { kind: 'chipped', amount: 0.3, pattern: 'spots', scale: 1, seed: 360 },
+    ],
+    art: {
+      kraken: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><g fill="none" stroke="#e9dcc0" stroke-width="5" stroke-linecap="round"><path d="M50 52 C30 60 20 80 8 78"/><path d="M50 52 C70 60 80 80 92 78"/><path d="M50 56 C40 74 36 90 24 94"/><path d="M50 56 C60 74 64 90 76 94"/></g><path d="M50 8 C72 8 80 26 74 44 C70 54 30 54 26 44 C20 26 28 8 50 8Z" fill="#e9dcc0"/><circle cx="40" cy="32" r="6" fill="#c9302c"/><circle cx="60" cy="32" r="6" fill="#c9302c"/></svg>',
+    },
+    decals: [
+      { at: [0, 1.92, 0.46], dir: [0, 0.34, 0.94], size: 0.4, rot: 0, finish: 'sticker', art: 'kraken' },
+    ],
+  },
   toaster: { name: 'Toaster', tagline: 'Pops up, says hi, asks for nothing.', menace: 0,
     story: { goals: ['Make breakfast for everyone on the board', 'Never burn a single slice'], motive: 'It believes a warm slice of toast fixes most bad mornings, and it has the data to prove it.' },
     palette: { enamel: '#efe3c8', accent: '#c9302c', glow: '#ffb347' },
