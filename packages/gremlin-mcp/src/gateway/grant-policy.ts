@@ -43,9 +43,14 @@ export function allowance(policy: GrantPolicy, nowMs: number, usedUsd: number, r
   const hoursLeft = (reset - nowMs) / H
   const remainingPct = remainingUsd === undefined ? undefined : (remainingUsd / policy.budgetUsd) * 100
   const applicable = policy.rules.filter((r) =>
-    hoursLeft <= r.withinHoursOfReset && (r.minRemainingPct === undefined || (remainingPct !== undefined && remainingPct >= r.minRemainingPct)))
-  if (!applicable.length) return { allowedUsd: 0, reason: `no rule applies ${hoursLeft.toFixed(1)}h before the reset`, reset }
-  const capUsd = Math.max(...applicable.map((r) => (r.usePctOfBudget / 100) * policy.budgetUsd))
+    hoursLeft <= r.withinHoursOfReset && (r.minRemainingPct === undefined || (remainingPct !== undefined && remainingPct >= r.minRemainingPct))
+    // "A share of what's left" needs the provider to say what is left.
+    && (r.usePctOfRemaining === undefined || remainingUsd !== undefined))
+  if (!applicable.length) return { allowedUsd: 0, reason: `no rule applies ${hoursLeft.toFixed(1)}h before the reset${policy.rules.some((r) => r.usePctOfRemaining !== undefined) && remainingUsd === undefined ? ' (the provider has not said what is left)' : ''}`, reset }
+  // What was left before the gremlin started on it this period: what is left now plus what it has used since.
+  const capUsd = Math.max(...applicable.map((r) => r.usePctOfRemaining !== undefined
+    ? (r.usePctOfRemaining / 100) * (remainingUsd! + usedUsd)
+    : (r.usePctOfBudget! / 100) * policy.budgetUsd))
   let allowed = capUsd - usedUsd
   if (remainingUsd !== undefined) allowed = Math.min(allowed, remainingUsd)
   allowed = Math.max(0, allowed)

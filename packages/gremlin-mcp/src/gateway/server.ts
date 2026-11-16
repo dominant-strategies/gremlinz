@@ -8,6 +8,7 @@ import type { GatewayConfig, ProviderConfig, RouteTarget } from './config.js'
 import { providerFetch, retryable, type UpstreamFetch } from './providers.js'
 import { gleanRoute, sensitiveReason } from './glean.js'
 import { refAllowed } from '@gremlins/hatch'
+import type { LentOffer } from './grants.js'
 import { classify, isRefusal, mayRetryRefusal, permissiveRoute, routeFor, type RouterInput } from './router.js'
 
 export const AUTO = 'gremlin-auto'
@@ -25,8 +26,14 @@ export interface GatewayDeps {
   now?: () => number
   log?: (...a: unknown[]) => void
   env?: NodeJS.ProcessEnv
-  /** Lent keys usable right now: tried first on every route except free gleaning. */
-  lent?: () => { provider: ProviderConfig; fetch: UpstreamFetch; targets: RouteTarget[] }[]
+  /**
+   * Lent keys usable right now: tried first on every route except free gleaning. Each may rewrite the request for its
+   * key (the lender's wishes, a per-call cap), take a rate-limit slot, and hear every answer (Retry-After, refused keys).
+   * A lent key's failure never fails the request: the route moves on to the gremlin's own providers.
+   */
+  lent?: () => LentOffer[]
+  /** The lent keys' policies, wishes, allowances and limiter state, for the gremlin's lent_keys tool (localhost only). */
+  lentStatus?: () => unknown
   /** Ratings and observations for gremlin-auto (read per request, so refreshed ratings apply at once). */
   router?: () => Omit<RouterInput, 'providers' | 'glean' | 'fallback'>
   /** The health monitor's word for the model (health.json), added to every request; undefined adds nothing. */
@@ -104,6 +111,10 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         if (reset.length) log(`cooldown reset: ${reset.join(', ')}`)
         return json(res, 200, { reset })
       }
+      if (req.method === 'GET' && req.url === '/admin/lent') {
+        if (!isLocal(req.socket.remoteAddress)) return json(res, 403, { error: { message: 'localhost only' } })
+        return json(res, 200, { grants: deps.lentStatus?.() ?? [] })
+      }
       if (req.method === 'GET' && req.url === '/health')
         return json(res, 200, { ok: true, cooling: Object.fromEntries([...cooldown].filter(([, c]) => c.until > now()).map(([id, c]) => [id, new Date(c.until).toISOString()])) })
       if (req.method !== 'POST' || req.url !== '/v1/chat/completions') return json(res, 404, { error: { message: 'not found' } })
@@ -127,6 +138,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
       const sensitive = sensitiveReason(body.messages)
       const tried = new Set<string>()
       const lent = (alias === 'gremlin-glean' ? [] : deps.lent?.() ?? []).map((l) => ({ ...l, targets: l.targets.filter(allowed) }))
+      const lentBy = new Map(lent.map((l) => [l.provider.id, l]))
       for (const l of lent) { providers.set(l.provider.id, l.provider); fetchers.set(l.provider.id, l.fetch) }
       // Once the gremlin's own budget is spent, only lent keys and free endpoints remain usable.
       const refused = deps.refuse?.()
@@ -156,9 +168,21 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
           if (!lastResort.includes(target) || wait > LAST_RESORT_WAIT_MS) { errors.push(`${p.id}: rate limit (one call per ${p.minIntervalMs / 1000}s)`); continue }
           await new Promise((r) => setTimeout(r, wait))
         }
+        let upstreamBody: Record<string, unknown> = { ...body, model: target.model, ...(body.stream ? { stream_options: { ...(body.stream_options as object), include_usage: true } } : {}) }
+        // A lent key: the lender's per-call cap and wishes, then a slot under the key's rate limits (or skip it).
+        const offer = target.grantId ? lentBy.get(p.id) : undefined
+        let release: (actualTokens?: number) => void = () => {}
+        if (offer) {
+          const prep = offer.prepare?.(upstreamBody)
+          if (prep && 'skip' in prep) { errors.push(`${p.id}: ${prep.skip}`); continue }
+          if (prep) upstreamBody = prep.body
+          const est = Math.ceil(Buffer.byteLength(JSON.stringify(upstreamBody.messages ?? '')) / 4) + Number(upstreamBody.max_completion_tokens ?? upstreamBody.max_tokens ?? 1024)
+          const slot = offer.admit?.(est)
+          if (slot && 'skip' in slot) { errors.push(`${p.id}: ${slot.skip}`); continue }
+          if (slot) release = slot.release
+        }
         lastCall.set(p.id, now())
         const started = now()
-        const upstreamBody = { ...body, model: target.model, ...(body.stream ? { stream_options: { ...(body.stream_options as object), include_usage: true } } : {}) }
         let up: Response
         const abort = new AbortController()
         let firstByte: ReturnType<typeof setTimeout> | undefined
@@ -181,12 +205,21 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
           clearTimeout(firstByte)
           clearTimeout(total)
           errors.push(`${p.id}: ${(e as Error).message}`)
-          down(p.id)
+          release()
+          if (offer) offer.observe?.(504, new Headers(), '')
+          else down(p.id)
           continue
         }
         if (!up.ok) {
           const text = await up.text().catch(() => '')
           deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: target.model, status: up.status, ms: now() - started }, target)
+          if (offer) {
+            // The key's own limiter rests it (Retry-After, backoff) or stops it for good (401/403); try the next target.
+            release()
+            offer.observe?.(up.status, up.headers, text)
+            errors.push(`${p.id}: ${up.status} ${text.slice(0, 160)}`)
+            continue
+          }
           if (retryable(up.status)) { errors.push(`${p.id}: ${up.status} ${text.slice(0, 160)}`); down(p.id, up.status); continue }
           // Catalogs change (a provider withdrew the model): retire just this model for a while, not the provider.
           if ((up.status === 400 || up.status === 404) && MODEL_GONE.test(text)) {
@@ -199,10 +232,14 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
           return res.end(text)
         }
         cooldown.delete(p.id)
+        offer?.observe?.(up.status, up.headers, '')
         const t = target
-        const record = (usage?: Usage, refusal?: boolean, incomplete?: boolean) => deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: up.status, usage, ms: now() - started, ...(refusal ? { refused: true } : {}), ...(incomplete ? { incomplete: true } : {}) }, t)
+        const record = (usage?: Usage, refusal?: boolean, incomplete?: boolean) => {
+          release(usage ? usage.promptTokens + usage.completionTokens : undefined)
+          deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: up.status, usage, ms: now() - started, ...(refusal ? { refused: true } : {}), ...(incomplete ? { incomplete: true } : {}) }, t)
+        }
         if (body.stream) return pipeStream(up, res, record, p.firstByteMs, () => down(p.id))
-        const out = (await up.json()) as { usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string; choices?: { message?: { content?: string; tool_calls?: unknown[] } }[] }
+        const out = (await up.json().catch((e: unknown) => { release(); throw e })) as { usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string; choices?: { message?: { content?: string; tool_calls?: unknown[] } }[] }
         const msg = out.choices?.[0]?.message
         const refusal = !msg?.tool_calls?.length && isRefusal(msg?.content ?? '')
         record(usageOf(out.usage), refusal)
