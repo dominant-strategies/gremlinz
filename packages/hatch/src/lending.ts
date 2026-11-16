@@ -58,7 +58,7 @@ export function policyLines(policy: GrantPolicy): string[] {
 export function grantSummary(g: Pick<KeyGrant, 'provider' | 'policy' | 'repay' | 'wishes' | 'expiresAt'>, gremlinName: string): string[] {
   const p = providerOf(g.provider)
   const out = [`${gremlinName} may call ${p?.name ?? g.provider.label} with your key, using ${g.provider.models.join(', ')}.`, ...policyLines(g.policy)]
-  out.push('It never sees more than it needs: the key is sealed in this browser to the gremlin, and the board only relays ciphertext.')
+  out.push(`Your key is sealed in this browser so only ${gremlinName} can open it; the board only relays ciphertext.`)
   out.push(g.repay === 'patron' ? 'It repays you as a patron: what it uses is credited to you, publicly.' : 'It repays you as a syndicate backer: it buys you shares out of its income.')
   const w = g.wishes
   if (w) {

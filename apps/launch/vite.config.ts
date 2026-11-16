@@ -39,6 +39,7 @@ export default defineConfig({
         forge: resolve(__dirname, 'forge/index.html'),
         me: resolve(__dirname, 'me/index.html'),
         'docs-economics': resolve(__dirname, 'docs/economics/index.html'),
+        lend: resolve(__dirname, 'lend/index.html'),
         'board-client': resolve(__dirname, 'src/board-client.ts'),
       },
       output: {
