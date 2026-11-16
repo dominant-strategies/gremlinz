@@ -22,7 +22,8 @@ export function releaseChecks(env, clean) {
     const makers = String(env.BOARD_CANARY_MAKERS ?? '').split(/[,\n]+/).map(s => s.trim()).filter(Boolean)
     checks.push({ name: 'candidate image pinned by digest', ok: digest.test(env.BOARD_CANARY_EGG_IMAGE) })
     checks.push({ name: 'candidate restricted to approved maker wallets', ok: makers.length > 0 && makers.every(a => /^0x[0-9a-fA-F]{40}$/.test(a)) })
-    checks.push({ name: 'candidate dev SSH monitoring configured', ok: !!(env.BOARD_CANARY_DEV_SSH_KEYS || env.BOARD_EGG_DEV_SSH_KEYS) })
+    const devKeys = String(env.BOARD_CANARY_DEV_SSH_KEYS || env.BOARD_EGG_DEV_SSH_KEYS || 'team').trim()
+    checks.push({ name: 'candidate dev SSH monitoring configured', ok: devKeys === 'team' || devKeys.split(/[,\n]+/).every(k => /^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+( [^\n']*)?$/.test(k.trim())) })
     const url = env.BOARD_CANARY_ARTIFACT_URL, sum = env.BOARD_CANARY_ARTIFACT_SHA256
     checks.push({ name: 'candidate bundle metadata paired', ok: (!url && !sum) || (!!url && /^[a-f0-9]{64}$/.test(sum ?? '') && (() => { try { const u = new URL(url); return u.protocol === 'https:' && !u.username && !u.password } catch { return false } })()) })
   }

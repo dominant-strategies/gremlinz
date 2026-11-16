@@ -46,7 +46,7 @@ creation. `VITE_BOARD_URL` selects the browser's API origin only when it differs
 | `BOARD_HATCH_SECRET` | unset | Hatch custody (Fluence eggs) on when this, `BOARD_EGG_IMAGE` and `BOARD_PUBLIC_URL` are set. ≥32 chars; encrypts hosting keys at rest until they are sealed to their eggs |
 | `BOARD_EGG_IMAGE` | unset | egg image the board launches, pinned by digest |
 | `BOARD_PUBLIC_URL` | unset | this board's public origin; every hatched egg talks to it |
-| `BOARD_EGG_DEV_SSH_KEYS` | unset | dev phase: team SSH keys on every egg (newline- or comma-separated); while set, `GET /api/hatch/:jobId` also shows `eggIp`, the address the egg claimed from |
+| `BOARD_EGG_DEV_SSH_KEYS` | unset | dev SSH keys on every egg; `team` selects both bundled team keys, or supply newline/comma-separated public keys; dev jobs also expose `eggIp` for SSH monitoring |
 | `BOARD_EGG_ARTIFACT_URL` / `_SHA256` | unset | release bundle of the same egg build |
 | `BOARD_HATCH_DB` | `hatch.db` next to `BOARD_DB` | hatch jobs (mode 0600) |
 | `BOARD_HATCH_TOPUP_USD` | `10` | Fluence top-up per egg |
@@ -231,9 +231,9 @@ src/nft.ts           NFT ownership (JSON-RPC) and metadata/picture fetches
 
 ## Restricted candidate launches
 
-`BOARD_CANARY_EGG_IMAGE` (digest-pinned), `BOARD_CANARY_MAKERS` (comma-separated existing maker wallet addresses),
-and `BOARD_CANARY_DEV_SSH_KEYS` enable `/hatch/?canary=1` for the Fluence flow. Candidate keys fall back to
-`BOARD_EGG_DEV_SSH_KEYS` when unset. Optional `BOARD_CANARY_ARTIFACT_URL` and `BOARD_CANARY_ARTIFACT_SHA256` must be
+`BOARD_CANARY_EGG_IMAGE` (digest-pinned) and `BOARD_CANARY_MAKERS` (comma-separated existing maker wallet addresses)
+enable `/hatch/?canary=1` for the Fluence flow. `BOARD_CANARY_DEV_SSH_KEYS` falls back to
+`BOARD_EGG_DEV_SSH_KEYS`, then the bundled `team` keys, when unset. Optional `BOARD_CANARY_ARTIFACT_URL` and `BOARD_CANARY_ARTIFACT_SHA256` must be
 provided together. Normal launches keep `BOARD_EGG_IMAGE`; candidates are selected only through the signed
 `POST /api/hatch/fluence/canary` route. The verified signer must match the requested maker and the allowlist.
 MPC browser/session authentication is still required for the existing signing/handoff routes.

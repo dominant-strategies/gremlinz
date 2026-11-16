@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Wallet } from 'ethers'
+import { hatchProof } from '@gremlins/hatch'
 import { HatchStore } from '../src/hatch-store.ts'
 import { eggCloudInit, newJob, type HatchConfig } from '../src/hatch.ts'
 import { hatchFromEnv } from '../src/hatch-live.ts'
+import { TEAM_DEV_SSH_KEYS } from '@gremlins/egg/dist/dev-ssh.js'
 import { makeBoard, type Board } from './helpers.ts'
 
 const stable = 'ghcr.io/gremlins/egg@sha256:' + 'a'.repeat(64)
@@ -21,6 +23,18 @@ async function setup() {
 }
 
 describe('signed website canaries', () => {
+  it('keeps the SSH host IP for a saved dev canary even when current dev settings are disabled', async () => {
+    const { b, maker, store, body, cfg } = await setup()
+    const created = await b.signedPost(maker, '/api/hatch/fluence/canary', body)
+    expect(created.status).toBe(201)
+    const job = store.get(created.body.jobId)!
+    delete cfg.canary
+    const egg = Wallet.createRandom()
+    const claim = { launchId: body.launchId, publicKey: egg.signingKey.publicKey, proof: hatchProof(job.secret!, egg.signingKey.publicKey, egg.address) }
+    const result = await b.json('/api/hatch/claim', { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': '203.0.113.7' }, body: JSON.stringify(claim) })
+    expect(result.status).toBe(201)
+    expect((await b.json(`/api/hatch/${job.id}`)).body.job.eggIp).toBe('203.0.113.7')
+  })
   it('keeps ordinary website launches on the stable image and dev access unchanged', async () => {
     const { b, store, body } = await setup()
     const result = await b.postJson('/api/hatch/fluence', body)
@@ -67,7 +81,14 @@ describe('signed website canaries', () => {
     const env = { BOARD_HATCH_SECRET: 'test-hatch-secret-0123456789abcdef-0123456789', BOARD_EGG_IMAGE: stable, BOARD_PUBLIC_URL: 'https://board.example', BOARD_CANARY_EGG_IMAGE: candidate }
     expect(() => hatchFromEnv(env, ':memory:')).toThrow(/MAKERS/)
     const maker = Wallet.createRandom()
-    expect(() => hatchFromEnv({ ...env, BOARD_CANARY_MAKERS: maker.address }, ':memory:')).toThrow(/SSH/)
+    const team = hatchFromEnv({ ...env, BOARD_CANARY_MAKERS: maker.address }, ':memory:')!
+    cleanup.push(() => team.store.close())
+    expect(team.cfg.devSshKeys).toEqual([])
+    expect(team.cfg.canary?.devSshKeys).toEqual(TEAM_DEV_SSH_KEYS)
+    const canaryCfg = { ...team.cfg, ...team.cfg.canary! }
+    const job = newJob(canaryCfg, { maker: maker.address, configHash: '0x' + 'c'.repeat(64), launchId: 'team-access', boardUrl: team.cfg.publicUrl, canary: true, mpcAuth: 'a'.repeat(64) }, Date.now())
+    const cloudInit = eggCloudInit(team.cfg, job, job.secret!)
+    for (const publicKey of TEAM_DEV_SSH_KEYS) expect(cloudInit).toContain(publicKey)
     expect(() => hatchFromEnv({ ...env, BOARD_CANARY_MAKERS: maker.address, BOARD_CANARY_DEV_SSH_KEYS: 'not-a-public-key' }, ':memory:')).toThrow(/SSH/)
     const h = hatchFromEnv({ ...env, BOARD_CANARY_MAKERS: maker.address, BOARD_CANARY_DEV_SSH_KEYS: key }, ':memory:')!
     cleanup.push(() => h.store.close())

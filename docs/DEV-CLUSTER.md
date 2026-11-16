@@ -39,14 +39,18 @@ Configure these public release/access values alongside the existing secret setti
 ```sh
 BOARD_CANARY_EGG_IMAGE='ghcr.io/dominant-strategies/gremlinz-egg@sha256:<manifest-digest>'
 BOARD_CANARY_MAKERS='0x<existing-maker-wallet>'
-BOARD_CANARY_DEV_SSH_KEYS='ssh-ed25519 <operator-public-key>'
+BOARD_CANARY_DEV_SSH_KEYS='team'
 BOARD_CANARY_ARTIFACT_URL='https://github.com/<owner>/<repo>/releases/download/<tag>/gremlin-linux-amd64.tgz'
 BOARD_CANARY_ARTIFACT_SHA256='<bundle-sha256>'
 ```
 
 The artifact pair is optional when testing Docker-only hosting. `BOARD_EGG_DEV_SSH_KEYS` is the fallback operator
-key source if candidate-specific keys are unset; using candidate-specific keys leaves ordinary launches' dev-access
-policy unchanged. The operator's private SSH key stays on their machine. Store settings containing secrets as mode
+key source if candidate-specific keys are unset; when both are unset, canaries use the two public keys bundled in
+`packages/egg/src/dev-ssh.ts` (Karl Kreder and gameofpointers). `team` explicitly selects those keys; an explicit
+public-key list replaces them. Normal launches keep SSH off unless `BOARD_EGG_DEV_SSH_KEYS` is configured; use
+`team` there for normal Fluence dev launches, or `VITE_EGG_DEV_SSH_KEYS=team` for SporeStack dev launches.
+The dev cloud-init installs/enables the host SSH server, authorizes both keys for `gremlinz-dev` with sudo, and
+carries the selected keys into migration launch data. The operator's private SSH key stays on their machine. Store settings containing secrets as mode
 0600 outside Git, as described in `deploy/board.env.example`.
 
 `BOARD_EGG_IMAGE` and the normal frontend `VITE_EGG_IMAGE` keep the stable default. Configure their matching bundle

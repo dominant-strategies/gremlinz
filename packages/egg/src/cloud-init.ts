@@ -139,12 +139,13 @@ export function renderCloudInit(opts: CloudInitOptions): string {
   - [systemctl, enable, gremlin-lockdown.service]
   - [/usr/local/sbin/gremlin-lockdown]
 ${dev
-    ? `  - [sh, -c, 'systemctl reload ssh.service 2>/dev/null || systemctl reload sshd.service 2>/dev/null || true']`
+    ? `  - [sh, -c, 'systemctl enable --now ssh.service 2>/dev/null || systemctl enable --now sshd.service']
+  - [sh, -c, 'systemctl reload ssh.service 2>/dev/null || systemctl reload sshd.service']`
     : `  - [sh, -c, 'systemctl disable --now ssh.service ssh.socket sshd.service 2>/dev/null || true']
   - [sh, -c, 'apt-get purge -y openssh-server || true']`}`
   return `#cloud-config
 package_update: true
-packages: [docker.io, unattended-upgrades]
+packages: [docker.io, unattended-upgrades${dev ? ', openssh-server' : ''}]
 ssh_pwauth: false
 disable_root: true
 ${access}write_files:

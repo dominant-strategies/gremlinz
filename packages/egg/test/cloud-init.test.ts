@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import { LOCKDOWN_SCRIPT, renderCloudInit } from '../src/cloud-init.js'
 import { GREMLIN_UNIT } from '../src/systemd.js'
+import { TEAM_DEV_SSH_KEYS, devSshKeys } from '../src/dev-ssh.js'
 
 const launch = { maker: '0x' + 'ab'.repeat(20), configHash: '0x' + '11'.repeat(32), boardUrl: 'https://board.example', launchId: "it's-1" }
 const image = 'ghcr.io/gremlins/egg@sha256:' + 'c'.repeat(64)
@@ -72,6 +73,22 @@ describe('cloud-init', () => {
   })
   it('refuses a dev key that could break out of the YAML', () => {
     expect(() => renderCloudInit({ launch: { ...launch, dev: { sshKeys: ["ssh-ed25519 AAAA'\nruncmd: [rm]"] } }, image })).toThrow()
+  })
+  it('installs and starts host SSH with both bundled keys when the team dev profile is selected', () => {
+    expect(devSshKeys()).toEqual([])
+    expect(devSshKeys('')).toEqual([])
+    expect(devSshKeys('ssh-ed25519 AAAATEST custom')).toEqual(['ssh-ed25519 AAAATEST custom'])
+    const keys = devSshKeys('team')
+    expect(keys).toEqual(TEAM_DEV_SSH_KEYS)
+    keys.pop()
+    expect(devSshKeys('team')).toHaveLength(2)
+    const c = parse(renderCloudInit({ launch: { ...launch, dev: { sshKeys: devSshKeys('team') } }, image }))
+    expect(c.packages).toContain('openssh-server')
+    const files = Object.fromEntries(c.write_files.map((f: { path: string; content: string }) => [f.path, f.content]))
+    expect(files['/etc/ssh/gremlinz_dev_keys']).toBe(TEAM_DEV_SSH_KEYS.join('\n') + '\n')
+    expect(JSON.parse(files['/etc/gremlin/launch.json']).dev.sshKeys).toEqual(TEAM_DEV_SSH_KEYS)
+    expect(c.runcmd.some((r: string[]) => r.join(' ').includes('systemctl enable --now ssh.service'))).toBe(true)
+    expect(parse(renderCloudInit({ launch, image })).packages).not.toContain('openssh-server')
   })
   it('embeds launch data safely in single quotes', () => {
     expect(renderCloudInit({ launch, image })).toContain(`"launchId":"it''s-1"`)

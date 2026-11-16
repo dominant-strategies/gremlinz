@@ -920,7 +920,7 @@ export async function createBoard(deps: BoardDeps) {
     if (job.claim) return c.json({ claimed: true, created: false }, 200)
     // Dev phase (the egg carries the team's SSH keys): keep the IP it claimed from, so the team can reach its server.
     // Only a claim that proved the hatch secret gets here, so it is the egg's own server (or its egress).
-    const ip = hatch.cfg.devSshKeys.length ? originIp(c) : undefined
+    const ip = (job.release?.devSshKeys ?? hatch.cfg.devSshKeys).length ? originIp(c) : undefined
     if (!hatch.store.setClaim(job.id, { address: r.address, publicKey: p.data.publicKey.toLowerCase(), at: now(), ...(ip ? { ip } : {}) })) {
       const again = hatch.store.get(job.id)!
       return again.claim?.address === r.address ? c.json({ claimed: true, created: false }, 200) : err(c, 409, 'another egg already claimed this hatch')

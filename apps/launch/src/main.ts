@@ -8,6 +8,7 @@
 import { GremlinConfig as GremlinConfigSchema, ModelPolicy, MODEL_FAMILIES, MODEL_PROVIDERS, MODEL_TRAITS, classifyModel, describeRule, namedModels, type CatalogModel, type ModelRule, type ModelTrait, CONSTITUTION_SECTIONS, COVENANTS, DEFAULT_VAULT_TERMS, ECONOMIC_MODELS, MODEL_INFO, configHash, economicsOf, type Covenant, type Economics, type GremlinConfig } from '@gremlins/hatch'
 import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
 import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
+import { devSshKeys } from '@gremlins/egg/dist/dev-ssh.js'
 import { sporestack, newToken, unusableSshKey, type Currency, type Provider } from '@gremlins/hosting'
 import { account, mountAuth, signedPostJson } from './auth.js'
 import { boardApi } from './board.js'
@@ -25,9 +26,9 @@ const BOARD = (env.VITE_BOARD_URL as string) || window.location.origin
 const IMAGE = env.VITE_EGG_IMAGE as string
 // Same build as a release bundle, recorded in the egg so the gremlin can later move to Docker-less hosts.
 const ARTIFACT = env.VITE_EGG_ARTIFACT_URL && env.VITE_EGG_ARTIFACT_SHA256 ? { url: env.VITE_EGG_ARTIFACT_URL as string, sha256: env.VITE_EGG_ARTIFACT_SHA256 as string } : undefined
-// Dev phase: the gremlinz team's SSH public keys (newline- or comma-separated). Every egg launched from this site keeps
+// Dev phase: 'team' for bundled public keys, or newline/comma-separated public keys. SporeStack eggs keep
 // SSH for these keys only, so the team can monitor and control it; the hatch page says so.
-const DEV_KEYS = String(env.VITE_EGG_DEV_SSH_KEYS ?? '').split(/[\n,]+/).map((k) => k.trim()).filter(Boolean)
+const DEV_KEYS = devSshKeys(env.VITE_EGG_DEV_SSH_KEYS as string | undefined)
 const DEV = DEV_KEYS.length ? { sshKeys: DEV_KEYS } : undefined
 const FLAVOR = (env.VITE_EGG_FLAVOR as string) || 'vps-1vcpu-1gb'
 const PROVIDER = ((env.VITE_EGG_PROVIDER as string) || 'digitalocean') as Provider

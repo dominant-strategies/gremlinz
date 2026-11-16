@@ -23,5 +23,8 @@ describe('cluster operator scripts', () => {
     expect(releaseChecks(env, true).every((c: { ok: boolean }) => c.ok)).toBe(true)
     for (const changed of [{ HERMES_RUNTIME_REF: 'main' }, { VITE_EGG_IMAGE: image.replace('aaa', 'bbb') }, { BOARD_PUBLIC_URL: 'https://old.trycloudflare.com' }]) expect(releaseChecks({ ...env, ...changed }, true).some((c: { ok: boolean }) => !c.ok)).toBe(true)
     expect(releaseChecks(env, false).some((c: { ok: boolean }) => !c.ok)).toBe(true)
+    const canary = { ...env, BOARD_CANARY_EGG_IMAGE: image, BOARD_CANARY_MAKERS: '0x' + 'a'.repeat(40) }
+    expect(releaseChecks(canary, true).every((c: { ok: boolean }) => c.ok)).toBe(true)
+    expect(releaseChecks({ ...canary, BOARD_CANARY_DEV_SSH_KEYS: 'invalid-public-key' }, true).some((c: { ok: boolean }) => !c.ok)).toBe(true)
   })
 })
