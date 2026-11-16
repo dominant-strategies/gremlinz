@@ -350,6 +350,8 @@ export function hatchView(job: HatchJob) {
     eggAddress: job.claim ? computeAddress(job.claim.publicKey) : null,
     /** The key the maker's page seals its shard to (2-of-2). */
     eggPublicKey: job.claim?.publicKey ?? null,
+    /** Dev phase only: the address the egg claimed from, i.e. its server's public IP (for the team's SSH). */
+    ...(job.claim?.ip ? { eggIp: job.claim.ip } : {}),
     browserHandoff: !!job.browserHandoff,
     mpcAborted: !!job.mpcAbortedAt,
     handedOffAt: job.handedOffAt ? new Date(job.handedOffAt).toISOString() : null,

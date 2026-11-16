@@ -122,12 +122,12 @@ function world(clock: { now: number }) {
   return { w, deps }
 }
 
-async function setup(path = ':memory:') {
+async function setup(path = ':memory:', c: HatchConfig = cfg) {
   const hatchStore = new HatchStore(path, SECRET)
-  const b = await makeBoard({}, { hatch: { store: hatchStore, cfg } })
+  const b = await makeBoard({}, { hatch: { store: hatchStore, cfg: c } })
   const { w, deps } = world(b.clock)
   const d = deps(b)
-  const worker = hatchWorker({ store: hatchStore, cfg, deps: d, log: () => {} })
+  const worker = hatchWorker({ store: hatchStore, cfg: c, deps: d, log: () => {} })
   const maker = Wallet.createRandom()
   const config = makeConfig(maker.address)
   const launchId = 'launch-' + hexlify(randomBytes(6)).slice(2)
@@ -206,6 +206,39 @@ describe('hatch custody: jobs', () => {
   it('answers 503 when hatching is not configured', async () => {
     const b = await makeBoard()
     expect((await b.postJson('/api/hatch/fluence', {})).status).toBe(503)
+  })
+})
+
+describe('hatch custody: dev phase', () => {
+  /** The egg's claim, sent through Cloudflare and our proxy (headers as they arrive at the board). */
+  async function claimVia(s: Awaited<ReturnType<typeof setup>>, jobId: string, headers: Record<string, string>) {
+    const launching = await until(s, jobId, 'launching')
+    s.w.vms.get(launching.vmId!)!.status = 'launched'
+    await until(s, jobId, 'launched')
+    const egg = Wallet.createRandom()
+    expect((await s.b.postJson('/api/eggs', await signMessage(egg, announcement(egg, s.maker.address, s.body.configHash, s.launchId)))).status).toBe(201)
+    const secret = s.hatchStore.get(jobId)!.secret!
+    const claim = { launchId: s.launchId, publicKey: egg.signingKey.publicKey, proof: hatchProof(secret, egg.signingKey.publicKey, egg.address) }
+    const r = await s.b.json('/api/hatch/claim', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(claim) })
+    expect(r.status).toBe(201)
+    return (await s.b.json(`/api/hatch/${jobId}`)).body.job
+  }
+
+  it("shows a dev egg's server IP (where it claimed from) in the job, so the team can reach it", async () => {
+    const s = await setup(':memory:', { ...cfg, devSshKeys: ['ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDev gremlinz-dev'] })
+    const { jobId, hostingAddress } = (await s.b.postJson('/api/hatch/fluence', s.body)).body
+    s.w.usdc.set(hostingAddress, 10n * MICRO)
+    const job = await claimVia(s, jobId, { 'cf-connecting-ip': '203.0.113.7', 'x-forwarded-for': '203.0.113.7, 172.68.1.1' })
+    expect(job.eggIp).toBe('203.0.113.7')
+  })
+
+  it('keeps no IP for eggs launched without dev keys', async () => {
+    const s = await setup()
+    const { jobId, hostingAddress } = (await s.b.postJson('/api/hatch/fluence', s.body)).body
+    s.w.usdc.set(hostingAddress, 10n * MICRO)
+    const job = await claimVia(s, jobId, { 'x-forwarded-for': '203.0.113.7' })
+    expect(job).not.toHaveProperty('eggIp')
+    expect(s.hatchStore.get(jobId)!.claim).not.toHaveProperty('ip')
   })
 })
 

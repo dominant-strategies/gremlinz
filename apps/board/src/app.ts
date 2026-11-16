@@ -52,6 +52,18 @@ const FORGE_PHOTO_RE = /^\/api\/(forge\/(photo|design|critique)|gremlins\/0x[0-9
 const LOOK_RE = /^\/api\/gremlins\/[^/]+\/look\/?$/
 
 /** The client's address as our reverse proxy (Caddy) saw it: the last X-Forwarded-For hop, else the socket. */
+/**
+ * Where a request really came from, through Cloudflare and our proxy: Cloudflare's header, else the first
+ * X-Forwarded-For hop, else the socket. Only for recording (spoofable where no proxy overwrites it); rate limits use clientIp.
+ */
+function originIp(c: Context): string | undefined {
+  const cf = c.req.header('cf-connecting-ip')?.trim()
+  if (cf) return cf
+  const first = c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
+  if (first) return first
+  return (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress
+}
+
 function clientIp(c: Context): string {
   const xff = c.req.header('x-forwarded-for')
   if (xff) return xff.split(',').pop()!.trim()
@@ -756,7 +768,10 @@ export async function createBoard(deps: BoardDeps) {
     const r = checkClaim(job, p.data)
     if (!r.ok) return err(c, r.status, r.reason)
     if (job.claim) return c.json({ claimed: true, created: false }, 200)
-    if (!hatch.store.setClaim(job.id, { address: r.address, publicKey: p.data.publicKey.toLowerCase(), at: now() })) {
+    // Dev phase (the egg carries the team's SSH keys): keep the IP it claimed from, so the team can reach its server.
+    // Only a claim that proved the hatch secret gets here, so it is the egg's own server (or its egress).
+    const ip = hatch.cfg.devSshKeys.length ? originIp(c) : undefined
+    if (!hatch.store.setClaim(job.id, { address: r.address, publicKey: p.data.publicKey.toLowerCase(), at: now(), ...(ip ? { ip } : {}) })) {
       const again = hatch.store.get(job.id)!
       return again.claim?.address === r.address ? c.json({ claimed: true, created: false }, 200) : err(c, 409, 'another egg already claimed this hatch')
     }

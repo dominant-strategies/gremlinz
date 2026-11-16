@@ -46,7 +46,7 @@ creation. `VITE_BOARD_URL` selects the browser's API origin only when it differs
 | `BOARD_HATCH_SECRET` | unset | Hatch custody (Fluence eggs) on when this, `BOARD_EGG_IMAGE` and `BOARD_PUBLIC_URL` are set. ≥32 chars; encrypts hosting keys at rest until they are sealed to their eggs |
 | `BOARD_EGG_IMAGE` | unset | egg image the board launches, pinned by digest |
 | `BOARD_PUBLIC_URL` | unset | this board's public origin; every hatched egg talks to it |
-| `BOARD_EGG_DEV_SSH_KEYS` | unset | dev phase: team SSH keys on every egg (newline- or comma-separated) |
+| `BOARD_EGG_DEV_SSH_KEYS` | unset | dev phase: team SSH keys on every egg (newline- or comma-separated); while set, `GET /api/hatch/:jobId` also shows `eggIp`, the address the egg claimed from |
 | `BOARD_EGG_ARTIFACT_URL` / `_SHA256` | unset | release bundle of the same egg build |
 | `BOARD_HATCH_DB` | `hatch.db` next to `BOARD_DB` | hatch jobs (mode 0600) |
 | `BOARD_HATCH_TOPUP_USD` | `10` | Fluence top-up per egg |

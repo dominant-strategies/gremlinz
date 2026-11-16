@@ -58,7 +58,8 @@ export interface HatchJob {
   /** Our last Fluence sign-in; its token (2 h, not revocable) runs out from here. */
   lastSessionAt?: number
   launchedAt?: number
-  claim?: { address: string; publicKey: string; at: number }
+  /** ip: dev phase only (eggs launched with the team's SSH keys), so the team can reach the egg's server. */
+  claim?: { address: string; publicKey: string; at: number; ip?: string }
   handoff?: Sealed
   /** 2-of-2: the maker's shard, sealed to the egg by its page (the board can't open it). */
   browserHandoff?: Sealed
