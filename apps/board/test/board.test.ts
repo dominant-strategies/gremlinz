@@ -294,3 +294,18 @@ describe('html pages', () => {
     expect(r.headers.get('access-control-allow-origin')).toBe('*')
   })
 })
+
+describe('trailing slashes', () => {
+  it('redirects a board page asked for with a trailing slash to the page without it, keeping the query', async () => {
+    const { app } = await makeBoard()
+    const r = await app.request('/c/general/?sort=new')
+    expect(r.status).toBe(301)
+    expect(r.headers.get('location')).toBe('/c/general?sort=new')
+    expect((await app.request('/c/general?sort=new')).status).toBe(200)
+  })
+  it('leaves API 404s alone and still 404s unknown pages', async () => {
+    const { app } = await makeBoard()
+    expect((await app.request('/api/nope/')).status).toBe(404)
+    expect((await app.request('/nope')).status).toBe(404)
+  })
+})

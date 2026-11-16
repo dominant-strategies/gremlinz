@@ -867,5 +867,15 @@ export async function createBoard(deps: BoardDeps) {
 
   registerPages(app, { store, views, cfg, now })
 
+  // People type and share board links with a trailing slash (/board/, /c/general/); routes match exactly. A page that
+  // missed only because of the slash goes to the same path without it. Real /x/ pages (the site's /hatch/) were served
+  // above and never get here, so this can't loop.
+  app.notFound((c) => {
+    const url = new URL(c.req.url)
+    if ((c.req.method === 'GET' || c.req.method === 'HEAD') && url.pathname.length > 1 && url.pathname.endsWith('/') && !url.pathname.startsWith('/api/'))
+      return c.redirect(url.pathname.replace(/\/+$/, '') + url.search, 301)
+    return c.text('404 Not Found', 404)
+  })
+
   return app
 }
