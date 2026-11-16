@@ -21,6 +21,9 @@ export interface HashferenceKey { apiKey: string; address: string; profileId?: s
 export interface QuaiSigner { address: string; signMessage(message: string): Promise<string> }
 
 type Fetch = typeof fetch
+export class HashferenceError extends Error {
+  constructor(public status: number, message: string) { super(message) }
+}
 
 export function readKey(file: string): HashferenceKey | undefined {
   try {
@@ -43,7 +46,7 @@ async function call<T>(f: Fetch, method: string, path: string, opts: { body?: un
   try { json = text ? JSON.parse(text) : {} } catch { json = { raw: text.slice(0, 200) } }
   if (!res.ok) {
     const msg = (json as { error?: { message?: string } | string })?.error
-    throw new Error(`Hashference ${method} ${path} ${res.status}: ${typeof msg === 'string' ? msg : msg?.message ?? text.slice(0, 200)}`)
+    throw new HashferenceError(res.status, `Hashference ${method} ${path} ${res.status}: ${typeof msg === 'string' ? msg : msg?.message ?? text.slice(0, 200)}`)
   }
   return json as T
 }
@@ -52,20 +55,31 @@ async function call<T>(f: Fetch, method: string, path: string, opts: { body?: un
  * Sign in with the gremlin's Quai wallet and create an API key; stores it in `file`. Signing in again with the same
  * address returns the same workspace, so a lost key file only costs a new key, never the balance.
  */
-export async function setupKey(signer: QuaiSigner, file: string, opts: { fetch?: Fetch; base?: string; label?: string; now?: () => Date } = {}): Promise<HashferenceKey> {
-  const existing = readKey(file)
-  if (existing) return existing
-  if (!/^0x00[0-9a-fA-F]{38}$/.test(signer.address)) throw new Error(`Hashference needs a cyprus1 Quai address (0x00…), not ${signer.address}`)
-  const f = opts.fetch ?? fetch
-  const ch = await call<{ nonce: string; message: string }>(f, 'POST', '/v1/auth/wallet/challenge', { body: { address: signer.address }, base: opts.base })
-  // The message proves who we are; it can never authorize a transfer.
-  const signature = await signer.signMessage(ch.message)
-  const { session, profile } = await call<{ session: { token: string }; profile?: { id?: string } }>(f, 'POST', '/v1/auth/wallet', { body: { nonce: ch.nonce, signature }, base: opts.base })
-  const { apiKey } = await call<{ apiKey: { apiKey: string } }>(f, 'POST', '/v1/profile/api-keys', { body: { label: opts.label ?? 'gremlin' }, auth: session.token, base: opts.base })
-  if (!apiKey?.apiKey?.startsWith('hf_')) throw new Error('Hashference returned no API key')
-  const k: HashferenceKey = { apiKey: apiKey.apiKey, address: signer.address, profileId: profile?.id, createdAt: (opts.now?.() ?? new Date()).toISOString() }
-  writeJsonDurable(file, k)
-  return k
+export async function setupKey(signer: QuaiSigner, file: string, opts: { fetch?: Fetch; base?: string; label?: string; now?: () => Date; repair?: boolean } = {}): Promise<HashferenceKey> {
+  return withFileLock(`${file}.key.lock`, async () => {
+    const existing = readKey(file)
+    if (existing) {
+      if (!opts.repair) return existing
+      if (existing.address.toLowerCase() !== signer.address.toLowerCase()) throw new Error('Hashference key belongs to a different wallet')
+      try { await account(existing, opts); return existing }
+      catch (e) {
+        // Only invalid authentication justifies replacement. Rate limits, empty credit, permission denial and outages do not.
+        if (!(e instanceof HashferenceError) || e.status !== 401) throw e
+      }
+    }
+    if (!/^0x00[0-9a-fA-F]{38}$/.test(signer.address)) throw new Error(`Hashference needs a cyprus1 Quai address (0x00…), not ${signer.address}`)
+    const f = opts.fetch ?? fetch
+    const ch = await call<{ nonce: string; message: string }>(f, 'POST', '/v1/auth/wallet/challenge', { body: { address: signer.address }, base: opts.base })
+    // The message proves who we are; it can never authorize a transfer.
+    const signature = await signer.signMessage(ch.message)
+    const { session, profile } = await call<{ session: { token: string }; profile?: { id?: string } }>(f, 'POST', '/v1/auth/wallet', { body: { nonce: ch.nonce, signature }, base: opts.base })
+    const { apiKey } = await call<{ apiKey: { apiKey: string } }>(f, 'POST', '/v1/profile/api-keys', { body: { label: opts.label ?? 'gremlin' }, auth: session.token, base: opts.base })
+    if (!apiKey?.apiKey?.startsWith('hf_')) throw new Error('Hashference returned no API key')
+    const k: HashferenceKey = { apiKey: apiKey.apiKey, address: signer.address, profileId: profile?.id, createdAt: (opts.now?.() ?? new Date()).toISOString() }
+    await account(k, opts) // Validate before atomically replacing the only working local credential.
+    writeJsonDurable(file, k)
+    return k
+  })
 }
 
 export interface HashferenceBalance { availableUsd: number; reservedUsd: number; pendingUsd: number }

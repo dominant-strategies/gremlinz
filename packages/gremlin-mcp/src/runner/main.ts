@@ -139,6 +139,7 @@ if (!gatewayConfigPath || !existsSync(gatewayConfigPath)) {
     ollamaUrl: process.env.GREMLIN_OLLAMA_URL,
     ollamaModel: process.env.GREMLIN_OLLAMA_MODEL,
     dailyUsd: process.env.GREMLIN_DAILY_USD ? Number(process.env.GREMLIN_DAILY_USD) : undefined,
+    emergencyUsd: process.env.GREMLIN_EMERGENCY_USD ? Number(process.env.GREMLIN_EMERGENCY_USD) : undefined,
     policy: makerPolicy(),
   }), null, 2), { mode: 0o600 })
   if (gremlinIds) chownSync(gatewayConfigPath, gremlinIds.uid, gremlinIds.gid)
@@ -179,7 +180,7 @@ try {
     // Health has its own process and payment ownership: a broken tool server cannot stop survival checks.
     if (independentHealth) await supervisor.start({ name: 'health', command: process.execPath, args: [resolve(here, '..', 'health', 'main.js')], env: { ...env, GREMLIN_HEALTH_PORT: String(healthPort), GREMLIN_GATEWAY_ADMIN: `http://127.0.0.1:${port}` }, ...gremlinIds,
       probe: httpProbe(`http://127.0.0.1:${healthPort}/healthz`, mcpToken) })
-    await supervisor.start({ name: 'mcp', command: process.execPath, args: [resolve(here, '..', 'main.js'), '--http'], env: { ...env, GREMLIN_MCP_PORT: String(mcpPort) }, ...gremlinIds,
+    await supervisor.start({ name: 'mcp', command: process.execPath, args: [resolve(here, '..', 'main.js'), '--http'], env: { ...env, GREMLIN_MCP_PORT: String(mcpPort), GREMLIN_GATEWAY_ADMIN: `http://127.0.0.1:${port}` }, ...gremlinIds,
       probe: httpProbe(`http://127.0.0.1:${mcpPort}/healthz`, mcpToken) })
   }
   const subagentEnv = { GREMLIN_PROTECTED_DIRS: home(), GREMLIN_SUBAGENT_ROOTS: `${workDir}:/tmp` }

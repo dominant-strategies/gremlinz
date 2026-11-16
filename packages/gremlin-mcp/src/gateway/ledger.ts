@@ -44,7 +44,7 @@ export class Ledger {
 
   record(r: CallRecord, t: RouteTarget) {
     this.roll()
-    const usd = costUsd(r, t)
+    const usd = r.usage ? costUsd(r, t) : (r.estimatedUsd ?? 0)
     const entry: LedgerEntry = { ...r, usd, priced: t.inputPerM > 0 || t.outputPerM > 0, ...(t.grantId ? { grantId: t.grantId } : {}) }
     // A lent key's calls are the lender's money: valued for repayment, not counted against the gremlin's budget.
     if (day(r.at) === this.today && !t.grantId) this.spentToday += usd
@@ -68,6 +68,14 @@ export class Ledger {
   spent(): number {
     this.roll()
     return this.spentToday
+  }
+
+  /** All credentials/grants in one account draw from the same reported allowance. */
+  accountUsed(accountId: string, sinceMs = 0): number {
+    if (!existsSync(this.file)) return 0
+    return readFileSync(this.file, 'utf8').split('\n').reduce((sum, line) => {
+      try { const e = JSON.parse(line) as LedgerEntry; return sum + (e.accountId === accountId && Date.parse(e.at) >= sinceMs ? e.usd : 0) } catch { return sum }
+    }, 0)
   }
 
   /** A reason to refuse, once today's spend reaches the cap. */

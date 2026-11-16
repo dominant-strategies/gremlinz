@@ -8,8 +8,8 @@
  * and stops for good on 401/403, telling the lender through the board. The lender's wishes go with each call as a
  * delimited system note (lentKeyNote).
  *
- * The allowance is checked before each call and a call's cost is known only after it; capping max_tokens keeps the
- * overshoot to the prompt estimate. Lenders should still lend a dedicated key with a hard limit set at the provider.
+ * GrantPool revalidates authorization and reserves estimated cost before dispatch. Provider billing can differ
+ * from estimates; lenders should still lend a dedicated key with a hard limit set at the provider.
  */
 import { createHash } from 'node:crypto'
 import { grantProblem, lentKeyNote, lentLimits, openApiKey, providerOf, signMessage, verifyMessage, type GrantStatus, type KeyGrant, type Signed } from '@gremlins/hatch'
@@ -35,14 +35,14 @@ export interface LentOffer {
 }
 
 export async function fetchGrants(boardUrl: string, gremlin: HDNodeWallet, fetchImpl: typeof fetch = fetch): Promise<OpenGrant[]> {
-  const res = await fetchImpl(new URL(`/api/grants?gremlin=${gremlin.address}`, boardUrl))
+  const res = await fetchImpl(new URL(`/api/grants?gremlin=${gremlin.address}`, boardUrl), { signal: AbortSignal.timeout(5000) })
   if (!res.ok) throw new Error(`board grants: ${res.status}`)
-  const { grants } = (await res.json()) as { grants: (Signed<KeyGrant> & { status?: string | null })[] }
+  const { grants } = (await res.json()) as { grants: (Signed<KeyGrant> & { status?: string | null; revokedAt?: string | null })[] }
   const out: OpenGrant[] = []
   for (const sg of grants) {
     const g = sg.message
     // A key this gremlin already reported as refused stays off, across restarts.
-    if (sg.status === 'disabled') continue
+    if (sg.status === 'disabled' || sg.revokedAt) continue
     if (g.gremlin.toLowerCase() !== gremlin.address.toLowerCase() || !verifyMessage(sg) || grantProblem(g)) continue
     try {
       out.push({ grant: g, apiKey: await openApiKey(gremlin.signingKey, g.sealedKey) })
@@ -66,7 +66,7 @@ export async function reportDisabled(boardUrl: string, gremlin: HDNodeWallet, gr
 /** Remaining budget on the key, for providers that report it. */
 export async function remainingUsd(g: OpenGrant, fetchImpl: typeof fetch = fetch): Promise<number | undefined> {
   const base = g.grant.provider.baseUrl.replace(/\/$/, '')
-  const auth = { headers: { authorization: `Bearer ${g.apiKey}` }, signal: AbortSignal.timeout(20_000) }
+  const auth = { headers: { authorization: `Bearer ${g.apiKey}` }, signal: AbortSignal.timeout(5000) }
   try {
     if (g.grant.provider.budgetApi === 'openrouter') {
       const r = await fetchImpl(`${base}/key`, auth)
@@ -189,7 +189,7 @@ export class LentKeys {
   offerFor(g: OpenGrant, allow: Allowance, lim?: KeyLimiter): LentOffer {
     const grant = g.grant
     const reg = providerOf(grant.provider)
-    const id = `grant-${grant.grantId.slice(2, 10)}`
+    const id = `grant-${grant.grantId.slice(2)}`
     const note = lentKeyNote(grant)
     const preferred = grant.wishes?.preferredModels ?? []
     const models = [...preferred.filter((m) => grant.provider.models.includes(m)), ...grant.provider.models.filter((m) => !preferred.includes(m))]

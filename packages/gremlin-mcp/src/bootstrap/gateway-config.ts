@@ -4,7 +4,7 @@
  * as a last resort; plus a daily budget. Local development can add an Ollama
  * server (GREMLIN_OLLAMA_URL + GREMLIN_OLLAMA_MODEL), which then fronts every route.
  */
-import type { GatewayConfig } from '../gateway/config.js'
+import { GatewayConfig } from '../gateway/config.js'
 import { homeFile } from '../env.js'
 import { HASHFERENCE_MAIN_MODEL } from '../hashference.js'
 import { refAllowed, type ModelPolicy } from '@gremlins/hatch'
@@ -17,6 +17,7 @@ export interface GatewayEnv {
   /** Defaults to GREMLIN_HOME/hashference.json. */
   hashferenceKeyFile?: string
   dailyUsd?: number
+  emergencyUsd?: number
   port?: number
   /** The maker's model policy (signed config). */
   policy?: ModelPolicy
@@ -42,18 +43,18 @@ export function gatewayConfig(e: GatewayEnv = {}): GatewayConfig {
   const main: GatewayConfig['routes'][string] = withPolicy([...hashferenceRoute, veniceMain], e.policy, providers.map((p) => p.id))
   if (e.ollamaUrl && e.ollamaModel) {
     // A local model may need minutes to load into memory on its first call.
-    providers.unshift({ id: 'ollama', kind: 'openai', baseUrl: `${e.ollamaUrl.replace(/\/$/, '')}/v1`, timeoutMs: 900_000, firstByteMs: 180_000, free: false, minIntervalMs: 0 })
+    providers.unshift({ id: 'ollama', kind: 'openai', baseUrl: `${e.ollamaUrl.replace(/\/$/, '')}/v1`, timeoutMs: 900_000, firstByteMs: 180_000, free: false, local: true, minIntervalMs: 0 })
     main.unshift({ provider: 'ollama', model: e.ollamaModel, inputPerM: 0, outputPerM: 0 })
   }
-  return {
+  return GatewayConfig.parse({
     host: '127.0.0.1',
     port: e.port ?? 8711,
     providers,
     routes: { 'gremlin-main': main },
-    budget: { dailyUsd: e.dailyUsd ?? 2 },
+    budget: { dailyUsd: e.dailyUsd ?? 2, emergencyUsd: e.emergencyUsd ?? Math.min(0.10, (e.dailyUsd ?? 2) * 0.05) },
     glean: { enabled: true, models: {} },
     ...(e.policy ? { policy: e.policy } : {}),
-  }
+  })
 }
 
 type Target = GatewayConfig['routes'][string][number]

@@ -122,13 +122,16 @@ research/             evidence and provider research
 - **M10 — skills marketplace and harness configuration** (below).
 - **Later —** RentAHuman, mining, game layer.
 
-## Shared API keys (planned)
+## Shared API keys (backend implemented; UI and repayment planned)
 
 People can lend a gremlin an API key with rules for when it may be used, e.g. "if ≥30% of my budget is left within
 12 hours of the reset, use up to 20%", or "burn whatever is left in the last 6 hours". The key is sealed to the
 gremlin's key and delivered via the board; only the gateway holds it. The gateway routes to it only inside the
 allowed windows, reading the remaining budget from the provider where possible (OpenRouter key info, Venice key
 limits) and otherwise counting its own use. A dedicated sub-key with a hard provider-side limit is recommended.
+Grant delivery, gateway routing and budget accounting are implemented. See [inference access recovery](RUNTIME-HERMES.md#inference-access-recovery) for credential rotation, grant freshness and limits.
+The lending UI and automated repayment remain planned.
+
 Repayment: patron credit ("donated $X of inference", counts towards vote weight); for syndicates, the gremlin buys
 shares for the lender out of income at the logged value, and a later vault version may issue capped, logged shares
 for in-kind contributions.

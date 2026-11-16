@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, statSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { collectPayload, decodePayload, encodePayload, restorePayload } from '../src/payload.js'
@@ -28,13 +28,26 @@ describe('move-out payload', () => {
 
   it('keeps API access, pending payments and spending history, leaving process locks behind', () => {
     const home = dir(), runtimeDir = dir()
-    const files = ['hashference.json', 'inference-purchase.json', 'hosting-renewal.json', 'inference-ledger.jsonl', 'health-actions.jsonl', 'sends.jsonl']
+    const files = ['hashference.json', 'inference-purchase.json', 'hosting-renewal.json', 'inference-ledger.jsonl', 'inference-credentials.json', 'inference-reservations.json', 'inference-sources.json', 'inference-docs.json', 'health-actions.jsonl', 'sends.jsonl']
     for (const file of [...files, 'inference-purchase.json.lock', 'runtime-health.json']) writeFileSync(join(home, file), file)
     const payload = collectPayload({ phrase: 'test phrase', gremlinHome: home, runtimeDir })
     const target = dir()
     restorePayload(payload, { gremlinHome: target, runtimeDir: dir() })
     for (const file of files) expect(readFileSync(join(target, file), 'utf8')).toBe(file)
     expect(Object.keys(payload.files)).toHaveLength(files.length)
+  })
+
+  it('moves newly acquired provider keys with owner-only permissions', () => {
+    const home = dir(), target = dir()
+    mkdirSync(join(home, 'inference-keys'))
+    writeFileSync(join(home, 'inference-keys/provider.json'), '{"apiKey":"owned-key"}', { mode: 0o600 })
+    writeFileSync(join(home, 'other-secret.json'), '{"apiKey":"not-an-inference-key"}')
+    symlinkSync(join(home, 'other-secret.json'), join(home, 'inference-keys/link.json'))
+    const payload = collectPayload({ phrase: 'test phrase', gremlinHome: home, runtimeDir: dir() })
+    expect(payload.files['gremlin/inference-keys/link.json']).toBeUndefined()
+    restorePayload(payload, { gremlinHome: target, runtimeDir: dir() })
+    expect(readFileSync(join(target, 'inference-keys/provider.json'), 'utf8')).toBe('{"apiKey":"owned-key"}')
+    expect(statSync(join(target, 'inference-keys/provider.json')).mode & 0o777).toBe(0o600)
   })
 
   it('refuses path traversal', () => {

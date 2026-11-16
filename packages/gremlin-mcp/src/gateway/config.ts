@@ -19,7 +19,19 @@ export const ProviderConfig = z.object({
   baseUrl: z.string().url(),
   /** Name of the environment variable holding the API key (openai kind). */
   apiKeyEnv: z.string().optional(),
-  /** File holding the key (hashference kind), read on every call so a key made later is used at once. */
+  /** Official renewal/API documents checked daily; supply Markdown/OpenAPI URLs where available. */
+  documentationUrls: z.array(z.string().url()).max(6).optional(),
+  /** Alternative credentials, tried independently in order. All must belong to authorized accounts. */
+  apiKeyEnvs: z.array(z.string().min(1)).min(1).optional(),
+  /** Credentials with the same account share payment/rate-limit cooldowns and this optional daily cap. */
+  accountId: z.string().min(1).optional(),
+  accountDailyUsd: z.number().positive().optional(),
+  /** Internal hints for ephemeral lent-key providers; never contains the key itself. */
+  credentialHash: z.string().optional(),
+  quotaResetAt: z.number().finite().optional(),
+  /** Local inference stays available when the paid budget is exhausted; it still follows the model policy. */
+  local: z.boolean().optional(),
+  /** JSON file holding { apiKey }, read on every call. Hashference also stores wallet/account metadata. */
   keyFile: z.string().optional(),
   /** Whole request (including a long streamed answer). */
   timeoutMs: z.number().int().positive().default(600_000),
@@ -44,6 +56,8 @@ export const RouteTarget = z.object({
   maxRequestBytes: z.number().int().positive().optional(),
   /** Set for a lent key: calls are valued for repaying the lender and do not count against the gremlin's budget. */
   grantId: z.string().optional(),
+  /** Accounting group for credentials sharing a balance. */
+  accountId: z.string().optional(),
 })
 export type RouteTarget = z.infer<typeof RouteTarget>
 
@@ -53,7 +67,12 @@ export const GatewayConfig = z.object({
   providers: z.array(ProviderConfig).min(1),
   routes: z.record(z.string(), z.array(RouteTarget).min(1)),
   /** Spending cap; calls are refused (fail closed) once a UTC day's spend reaches it. */
-  budget: z.object({ dailyUsd: z.number().positive() }).optional(),
+  budget: z.object({
+    dailyUsd: z.number().positive(),
+    /** Held back from ordinary calls, within dailyUsd. Available only through gremlin-recovery on localhost. */
+    emergencyUsd: z.number().nonnegative().default(0),
+    recoveryMaxTokens: z.number().int().positive().default(512),
+  }).refine((b) => b.emergencyUsd < b.dailyUsd, 'emergencyUsd must be below dailyUsd').optional(),
   /** Add the reviewed free endpoints as the gremlin-glean route. */
   glean: z.object({ enabled: z.boolean().default(true), models: z.record(z.string(), z.array(z.string())).default({}) }).default({ enabled: true, models: {} }),
   /** The maker's model policy from the signed config: every route, the router and lent keys keep to it. Absent: any model. */

@@ -57,7 +57,7 @@ const chat = (model: string, extra: object = {}) => fetch(`${base}/chat/completi
 describe('inference gateway', () => {
   it('lists aliases as models', async () => {
     const r = await (await fetch(`${base}/models`)).json()
-    expect(r.data.map((m: { id: string }) => m.id)).toEqual(['gremlin-main', 'gremlin-bad'])
+    expect(r.data.map((m: { id: string }) => m.id)).toEqual(['gremlin-main', 'gremlin-bad', 'gremlin-recovery'])
   })
 
   it('fails over to the next provider and reports the alias as the model', async () => {

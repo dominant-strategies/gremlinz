@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { WAKE_JOB_ID, cronJobs, hermesConfig, refreshCronJobs, workspaceGuide } from '../src/bootstrap/hermes.js'
+import { WAKE_JOB_ID, ACCESS_JOB_ID, cronJobs, hermesConfig, refreshCronJobs, workspaceGuide } from '../src/bootstrap/hermes.js'
 
 describe('Hermes config', () => {
   const cfg = parse(hermesConfig({
@@ -36,7 +36,7 @@ describe('Hermes config', () => {
 describe('wake-up job', () => {
   it('is a valid pre-seeded Hermes cron job that carries context from its last run', () => {
     const { jobs } = JSON.parse(cronJobs({ wakeEveryMinutes: 30, now: new Date('2026-10-12T00:00:00Z') }))
-    expect(jobs).toHaveLength(1)
+    expect(jobs).toHaveLength(2)
     expect(jobs[0].id).toMatch(/^[0-9a-f]{12}$/)
     expect(jobs[0].schedule).toEqual({ kind: 'interval', minutes: 30, display: 'every 30m' })
     expect(jobs[0].context_from).toEqual(['self'])
@@ -100,5 +100,33 @@ describe('work folder', () => {
     expect(g).toContain('/h/work')
     expect(g).toMatch(/Never in \/tmp/)
     expect(g).toMatch(/Nothing secret/)
+  })
+})
+
+
+describe('proactive inference maintenance', () => {
+  it('uses working recovery inference to repair, discover and validate sources before access is exhausted', () => {
+    const { jobs } = JSON.parse(cronJobs({ workdir: '/h/work' }))
+    const access = jobs.find((j: { id: string }) => j.id === ACCESS_JOB_ID)
+    expect(access).toMatchObject({ name: 'gremlin-inference-maintenance', model: 'gremlin-recovery', provider: 'custom:gremlin', schedule: { minutes: 360 }, workdir: '/h/work', retry_failures: true })
+    expect(access.prompt).toContain('inference_access docs')
+    expect(access.prompt).toContain('exact inspected hash')
+    expect(access.prompt).toContain('review is not proof of a successful renewal')
+    expect(access.prompt).toContain('inference_access repair')
+    expect(access.prompt).toContain('inference_access discover')
+    expect(access.prompt).toContain('inference_access connect')
+    expect(access.prompt).toContain('at most eight model calls')
+    const refreshed = JSON.parse(refreshCronJobs(JSON.stringify({ jobs: [jobs[0]] })))
+    expect(refreshed.jobs.some((j: { id: string }) => j.id === ACCESS_JOB_ID)).toBe(true)
+  })
+  it('preserves maintenance run state and restores its owned model and prompt after restart', () => {
+    const old = JSON.parse(cronJobs())
+    const access = old.jobs.find((j: { id: string }) => j.id === ACCESS_JOB_ID)
+    Object.assign(access, { prompt: 'old', model: 'wrong', next_run_at: '2026-11-14T00:00:00Z', last_status: 'ok' })
+    const next = JSON.parse(refreshCronJobs(JSON.stringify(old))).jobs.find((j: { id: string }) => j.id === ACCESS_JOB_ID)
+    expect(next.model).toBe('gremlin-recovery')
+    expect(next.next_run_at).toBe(access.next_run_at)
+    expect(next.last_status).toBe('ok')
+    expect(next.prompt).toContain('inference_access')
   })
 })

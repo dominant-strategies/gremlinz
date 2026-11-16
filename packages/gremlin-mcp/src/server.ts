@@ -9,8 +9,9 @@ import { registerWalletTools } from './tools/wallet.js'
 import { registerDonationTools } from './tools/donation.js'
 import { registerSecurityTools, type SecurityDeps } from './tools/security.js'
 import { registerHashferenceTools, type HashferenceDeps } from './tools/hashference.js'
-import { registerHealthTools, sharedMonitor } from './tools/health.js'
 import { registerLentTools } from './tools/lent.js'
+import { registerInferenceAccess, type AccessDeps } from './tools/inference-access.js'
+import { registerHealthTools, sharedMonitor, remoteHealth } from './tools/health.js'
 import type { HealthMonitor } from './health/monitor.js'
 
 export interface ServerDeps {
@@ -23,6 +24,7 @@ export interface ServerDeps {
   hashference?: HashferenceDeps
   /** The health monitor (one per process; replaced in tests). */
   health?: () => HealthMonitor
+  access?: Omit<AccessDeps, 'checkHealth'>
 }
 
 export function createServer(deps: ServerDeps = {}): McpServer {
@@ -36,7 +38,9 @@ export function createServer(deps: ServerDeps = {}): McpServer {
   registerDonationTools(server)
   registerSecurityTools(server, { now: deps.now, ...deps.security })
   registerHashferenceTools(server, deps.hashference)
-  registerHealthTools(server, deps.health ?? (() => sharedMonitor()))
   registerLentTools(server)
+  const monitor = deps.health ?? (() => sharedMonitor())
+  registerHealthTools(server, monitor)
+  registerInferenceAccess(server, { ...deps.access, checkHealth: () => process.env.GREMLIN_HEALTH_URL ? remoteHealth('/check') : monitor().check({ refresh: true }) })
   return server
 }

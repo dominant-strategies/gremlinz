@@ -1,13 +1,15 @@
 /** Upstream calls, and which failures mean "try the next provider". */
 import type { ProviderConfig } from './config.js'
+import { apiKeyFromFile } from './key-file.js'
 import { readKey } from '../hashference.js'
 
 export type UpstreamFetch = (url: string, init: RequestInit) => Promise<Response>
 
 export function providerFetch(p: ProviderConfig, env: NodeJS.ProcessEnv = process.env): UpstreamFetch {
   if (p.kind === 'openai') {
-    const key = p.apiKeyEnv ? env[p.apiKeyEnv] : undefined
     return (url, init) => {
+      const key = p.apiKeyEnv ? env[p.apiKeyEnv] : apiKeyFromFile(p.keyFile)
+      if ((p.apiKeyEnv || p.keyFile) && !key) return Promise.resolve(new Response('{}', { status: 401 }))
       const headers = new Headers(init.headers)
       if (key) headers.set('authorization', `Bearer ${key}`)
       return fetch(url, { ...init, headers })
@@ -18,7 +20,7 @@ export function providerFetch(p: ProviderConfig, env: NodeJS.ProcessEnv = proces
 }
 
 /** Worth failing over: the provider is down, overloaded, out of balance or misbehaving. Not: our request is bad. */
-export const retryable = (status: number) => status === 402 || status === 408 || status === 409 || status === 425 || status === 429 || status >= 500
+export const retryable = (status: number) => status === 401 || status === 403 || status === 402 || status === 408 || status === 409 || status === 425 || status === 429 || status >= 500
 
 /**
  * Hashference with the gremlin's own key. No key yet (or an unreadable file) answers 402 without calling out, so the

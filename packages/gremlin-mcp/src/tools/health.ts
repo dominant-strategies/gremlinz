@@ -12,7 +12,7 @@ import { addEarning, earnings, noteIssue, openIssues, recordAction, updateEarnin
 import { sensitiveReason } from '../gateway/glean.js'
 import { withDeadline } from '@gremlins/hatch/node'
 
-async function remoteHealth<T>(path: string): Promise<T> {
+export async function remoteHealth<T>(path: string): Promise<T> {
   return withDeadline(async signal => {
     const response = await fetch(new URL(path, process.env.GREMLIN_HEALTH_URL!), {
       method: 'POST', headers: { authorization: `Bearer ${process.env.GREMLIN_MCP_TOKEN ?? ''}` }, signal,

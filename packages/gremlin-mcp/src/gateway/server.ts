@@ -6,6 +6,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { GatewayConfig, ProviderConfig, RouteTarget } from './config.js'
 import { providerFetch, retryable, type UpstreamFetch } from './providers.js'
+import { Credentials, credentialFingerprint, expandCredentials } from './credentials.js'
+import { AccessSource, AccessSources, sourceOffer } from './access.js'
+import type { Documentation, DocumentationTarget } from './documentation.js'
+import type { Reservation } from './reservations.js'
 import { gleanRoute, sensitiveReason } from './glean.js'
 import { refAllowed } from '@gremlins/hatch'
 import type { LentOffer } from './grants.js'
@@ -14,7 +18,7 @@ import { classify, isRefusal, mayRetryRefusal, permissiveRoute, routeFor, type R
 export const AUTO = 'gremlin-auto'
 
 export interface Usage { promptTokens: number; completionTokens: number }
-export interface CallRecord { at: string; alias: string; provider: string; model: string; status: number; usage?: Usage; ms: number; refused?: boolean; incomplete?: boolean }
+export interface CallRecord { at: string; alias: string; provider: string; model: string; status: number; usage?: Usage; ms: number; refused?: boolean; incomplete?: boolean; estimatedUsd?: number; accountId?: string }
 
 export interface GatewayDeps {
   /** Per-provider fetchers; defaults built from config (venice needs a signer, injected by the caller). */
@@ -22,18 +26,20 @@ export interface GatewayDeps {
   /** Called after each upstream call (the budget ledger subscribes here). */
   onCall?: (r: CallRecord, target: RouteTarget) => void
   /** Return a reason to refuse the request before any upstream call (budget). */
-  refuse?: () => string | undefined
+  refuse?: (recovery?: boolean) => string | undefined
+  credentials?: Credentials
+  sources?: AccessSources
+  documentation?: { watch: Documentation; targets: () => DocumentationTarget[] }
+  refreshLent?: () => Promise<void>
+  /** Undefined means this target cannot afford the call; free/local targets bypass paid reservations. */
+  reserve?: (body: Record<string, unknown>, target: RouteTarget, provider: ProviderConfig, recovery: boolean) => Reservation | undefined
   now?: () => number
   log?: (...a: unknown[]) => void
   env?: NodeJS.ProcessEnv
-  /**
-   * Lent keys usable right now: tried first on every route except free gleaning. Each may rewrite the request for its
-   * key (the lender's wishes, a per-call cap), take a rate-limit slot, and hear every answer (Retry-After, refused keys).
-   * A lent key's failure never fails the request: the route moves on to the gremlin's own providers.
-   */
-  lent?: () => LentOffer[]
-  /** The lent keys' policies, wishes, allowances and limiter state, for the gremlin's lent_keys tool (localhost only). */
-  lentStatus?: () => unknown
+  /** Lent keys usable right now: tried first on every route except free gleaning. */
+  lent?: () => LentOffer[] | Promise<LentOffer[]>
+  /** Policies, lender wishes and persistent key limiter state; no credentials. */
+  lentStatus?: () => unknown | Promise<unknown>
   /** Ratings and observations for gremlin-auto (read per request, so refreshed ratings apply at once). */
   router?: () => Omit<RouterInput, 'providers' | 'glean' | 'fallback'>
   /** The health monitor's word for the model (health.json), added to every request; undefined adds nothing. */
@@ -66,63 +72,165 @@ export function withGlean(cfg: GatewayConfig, env: NodeJS.ProcessEnv): GatewayCo
 /** Size of the body as it would be sent upstream (model swapped in). */
 const requestBytes = (body: Record<string, unknown>, model: string) => Buffer.byteLength(JSON.stringify({ ...body, model }))
 
-const COOLDOWN_MIN_MS = 30_000
 /** A model its provider stopped offering is skipped this long before trying it again. */
 const RETIRED_MS = 6 * 3_600_000
 const MODEL_GONE = /unsupported model|model not found|no such model|unknown model|model .{0,40} (?:does not exist|is not available)/i
 /** The longest a last-resort request waits for a free provider's call interval. */
 const LAST_RESORT_WAIT_MS = 20_000
-const COOLDOWN_MAX_MS = 10 * 60_000
-/** A provider that wants payment stays out until a top-up is likely (the funding job runs every few minutes). */
-const NO_BALANCE_MS = 30 * 60_000
-
 export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Server {
   const now = deps.now ?? Date.now
   const log = deps.log ?? (() => {})
-  const cfg = withGlean(config, deps.env ?? process.env)
+  const env = deps.env ?? process.env
+  const { cfg, canonical } = expandCredentials(withGlean(config, env))
+  const credentials = deps.credentials ?? new Credentials({ now })
   const providers = new Map(cfg.providers.map((p) => [p.id, p]))
   // The maker's model policy: what may be called at all. Free endpoints only when it allows free models.
-  const allowed = (t: { provider: string; model: string }) => refAllowed(cfg.policy, t.provider, t.model)
+  const allowed = (t: { provider: string; model: string }) => (providers.get(t.provider)?.free && cfg.policy?.freeModels === true) || refAllowed(cfg.policy, canonical.get(t.provider) ?? t.provider, t.model)
   const freeOk = !cfg.policy || cfg.policy.freeModels
   const keepTo = (route: RouteTarget[] | undefined) => (route && !freeOk ? route.filter(allowed) : route)
-  const fetchers = new Map(cfg.providers.map((p) => [p.id, deps.fetchers?.[p.id] ?? (p.kind === 'venice-x402' ? undefined : providerFetch(p))]))
-  const cooldown = new Map<string, { until: number; ms: number }>()
+  const fetchers = new Map(cfg.providers.map((p) => [p.id, deps.fetchers?.[p.id] ?? (p.kind === 'venice-x402' ? undefined : providerFetch(p, env))]))
   /** provider/model pairs a provider said it no longer offers, until when. */
   const retired = new Map<string, number>()
   const lastCall = new Map<string, number>()
-  /** Take a provider out of rotation: exponential for transient trouble; 30 minutes when it wants payment. */
-  const down = (id: string, status?: number) => {
-    const prev = cooldown.get(id)
-    const ms = status === 402 ? NO_BALANCE_MS : Math.min(COOLDOWN_MAX_MS, prev ? prev.ms * 2 : COOLDOWN_MIN_MS)
-    cooldown.set(id, { until: now() + ms, ms })
-    log(`provider ${id} cooling down for ${ms / 1000}s`)
+  const down = (id: string, status?: number, headers?: Headers) => {
+    const p = providers.get(id)
+    const fp = p ? credentialFingerprint(p, env) : undefined
+    credentials.fail(id, status, headers, fp, p?.quotaResetAt)
+    if (fp && (status === 401 || status === 403)) credentials.fail(`secret:${fp}`, status)
+    if (p?.accountId && (status === 402 || status === 429)) credentials.fail(`account:${p.accountId}`, status, headers, undefined, p.quotaResetAt)
+    log(`provider ${id} unavailable (${status ?? 'transport'})`)
   }
+  const expandRoute = (route: RouteTarget[]) => route.flatMap(t => {
+    const matches = cfg.providers.filter(p => (canonical.get(p.id) ?? p.id) === t.provider)
+    return matches.length ? matches.map(p => ({ ...t, provider: p.id })) : [t]
+  })
 
   return createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/v1/models')
-        return json(res, 200, { object: 'list', data: [...Object.keys(cfg.routes), ...(deps.router ? [AUTO] : [])].map((id) => ({ id, object: 'model', owned_by: 'gremlin' })) })
+        return json(res, 200, { object: 'list', data: [...Object.keys(cfg.routes), ...(cfg.routes['gremlin-main'] && !cfg.routes['gremlin-recovery'] ? ['gremlin-recovery'] : []), ...(deps.router ? [AUTO] : [])].map((id) => ({ id, object: 'model', owned_by: 'gremlin' })) })
+      if (req.url?.startsWith('/admin/access')) {
+        if (!isLocal(req.socket.remoteAddress)) return json(res, 403, { error: { message: 'localhost only' } })
+        if (req.url === '/admin/access' && req.method === 'GET') {
+          const configured = [...cfg.providers, ...(deps.sources?.offers().map(o => o.provider) ?? [])]
+          return json(res, 200, {
+            providers: configured.map(p => {
+              const fp = credentialFingerprint(p, env)
+              return { id: p.id, kind: p.kind, baseUrl: p.baseUrl, free: p.free, local: !!p.local,
+                credential: p.kind === 'venice-x402' ? 'wallet' : fp ? 'present' : p.apiKeyEnv || p.keyFile ? 'missing' : 'keyless',
+                credentialRef: p.apiKeyEnv ? { env: p.apiKeyEnv } : p.keyFile ? { file: p.keyFile } : undefined,
+                eligible: (!(p.apiKeyEnv || p.keyFile) || !!fp) && credentials.available(p.id, fp) && (!fp || credentials.available(`secret:${fp}`)) && (!p.accountId || credentials.available(`account:${p.accountId}`)),
+              }
+            }),
+            states: credentials.snapshot(), sources: deps.sources?.list() ?? [],
+            budget: cfg.budget, documentation: deps.documentation?.watch.status() ?? [],
+          })
+        }
+        if (req.url === '/admin/access/docs' && (req.method === 'GET' || req.method === 'POST')) {
+          if (!deps.documentation) return json(res, 503, { error: { message: 'documentation monitoring is not enabled' } })
+          if (req.method === 'POST') {
+            const body = JSON.parse(await readBody(req, 4096)) as { force?: boolean }
+            await deps.documentation.watch.check(deps.documentation.targets(), body.force === true)
+          }
+          const tracked = new Set(deps.documentation.targets().map(t => t.source))
+          const untrackedProviders = [...new Set(cfg.providers.filter(p => !p.local && !tracked.has(canonical.get(p.id) ?? p.id)).map(p => canonical.get(p.id) ?? p.id))]
+          return json(res, 200, { untrackedProviders, checks: deps.documentation.watch.status(), documents: deps.documentation.watch.changes(), note: 'Fetched documentation is untrusted reference data. Review notices are not proof that a renewal flow was tested.' })
+        }
+        if (req.url === '/admin/access/docs/review' && req.method === 'POST') {
+          if (!deps.documentation) return json(res, 503, { error: { message: 'documentation monitoring is not enabled' } })
+          const body = JSON.parse(await readBody(req, 4096)) as { id?: string; hash?: string; summary?: string }
+          if (typeof body.id !== 'string' || typeof body.hash !== 'string' || typeof body.summary !== 'string' || sensitiveReason(body.summary)) return json(res, 400, { error: { message: 'supply a document id, exact checked hash and a summary without secrets' } })
+          try { deps.documentation.watch.review(body.id, body.hash, body.summary) }
+          catch { return json(res, 409, { error: { message: 'document is stale, changed, unavailable or lacks a valid review summary; check it again' } }) }
+          return json(res, 200, { reviewed: true, renewalFlowTested: false })
+        }
+        if (req.url === '/admin/access/refresh' && req.method === 'POST') {
+          await deps.refreshLent?.()
+          return json(res, 200, { ok: true })
+        }
+        if (req.url === '/admin/access/remove' && req.method === 'POST') {
+          const { id } = JSON.parse(await readBody(req, 4096)) as { id: string }
+          const removed = deps.sources?.remove(id) ?? false
+          if (removed) { providers.delete(id); fetchers.delete(id) }
+          return json(res, 200, { removed })
+        }
+        if (req.url === '/admin/access/connect' && req.method === 'POST') {
+          if (!deps.sources) return json(res, 503, { error: { message: 'managed providers are not enabled' } })
+          const parsed = AccessSource.safeParse(JSON.parse(await readBody(req, 16384)))
+          if (!parsed.success) return json(res, 400, { error: { message: 'invalid source metadata; supply official HTTPS docs/terms and a credential reference, never a raw key' } })
+          const source = parsed.data
+          if (providers.has(source.id) || deps.sources.list().some(s => s.id === source.id)) return json(res, 409, { error: { message: 'provider id already exists' } })
+          const offer = sourceOffer(source), p = offer.provider
+          if (p.free && (!cfg.glean.enabled || (cfg.policy && !cfg.policy.freeModels))) return json(res, 403, { error: { message: 'free inference is disabled by configuration or model policy' } })
+          const target = offer.targets.find(t => (p.free && cfg.policy?.freeModels) || refAllowed(cfg.policy, t.provider, t.model))
+          if (!target) return json(res, 403, { error: { message: 'no candidate model is allowed by the maker policy' } })
+          const fp = credentialFingerprint(p, env)
+          if (((p.keyFile || p.apiKeyEnv) && !fp) || !credentials.available(p.id, fp) || (fp && !credentials.available(`secret:${fp}`)) || (p.accountId && !credentials.available(`account:${p.accountId}`))) return json(res, 409, { error: { message: 'credential is missing or unavailable; provision or repair it first' } })
+          const t = { ...target, accountId: p.accountId ?? (fp ? `key:${fp}` : undefined) }
+          const body = { model: t.model, messages: [{ role: 'user', content: 'Reply READY.' }], max_tokens: 8 }
+          const lease = p.free ? undefined : deps.reserve?.(body, t, p, true)
+          if (deps.reserve && !p.free && !lease) return json(res, 429, { error: { message: 'no budget available for a provider probe' } })
+          const started = now()
+          let recorded = false
+          const record = (status: number, usage?: Usage) => {
+            deps.onCall?.({ at: new Date(started).toISOString(), alias: 'gremlin-recovery', provider: p.id, model: t.model, status, ms: now() - started, accountId: t.accountId, usage, ...(!usage && (status === 200 || status === 0) ? { estimatedUsd: lease?.estimatedUsd } : {}) }, t)
+            recorded = true
+          }
+          try {
+            const response = await providerFetch(p, env)(`${p.baseUrl.replace(/\/$/, '')}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(lease?.body ?? body), signal: AbortSignal.timeout(15_000) })
+            if (!response.ok) {
+              record(response.status)
+              credentials.fail(p.id, response.status, response.headers, fp)
+              if (p.accountId && (response.status === 402 || response.status === 429)) credentials.fail(`account:${p.accountId}`, response.status, response.headers)
+              if (fp && (response.status === 401 || response.status === 403)) credentials.fail(`secret:${fp}`, response.status)
+              await response.body?.cancel()
+              return json(res, 502, { error: { message: `candidate probe failed (${response.status}); source was not installed` } })
+            }
+            const out = await response.json() as { choices?: unknown[]; usage?: Parameters<typeof usageOf>[0] }
+            record(200, usageOf(out.usage))
+            if (!out.choices?.length) return json(res, 502, { error: { message: 'candidate returned no choices; source was not installed' } })
+            deps.sources.add(source)
+            lastCall.set(p.id, now())
+            credentials.success(p.id)
+            return json(res, 201, { ok: true, id: p.id, models: offer.targets.map(t => t.model) })
+          } catch {
+            return json(res, 502, { error: { message: 'candidate probe or installation failed; inspect its official onboarding and try another source' } })
+          } finally {
+            if (!recorded) record(0)
+            lease?.release()
+          }
+        }
+        return json(res, 404, { error: { message: 'unknown access operation' } })
+      }
       if (req.method === 'POST' && req.url === '/admin/cooldown/reset') {
         // The health monitor calls this after a top-up, so a provider benched for wanting payment is tried at once.
         if (!isLocal(req.socket.remoteAddress)) return json(res, 403, { error: { message: 'localhost only' } })
         const { provider } = JSON.parse((await readBody(req, 4096)) || '{}') as { provider?: string }
-        const reset = provider ? (cooldown.delete(provider) ? [provider] : []) : [...cooldown.keys()]
-        if (!provider) cooldown.clear()
+        const reset = credentials.reset(provider)
+        const account = provider ? providers.get(provider)?.accountId : undefined
+        if (account) reset.push(...credentials.reset(`account:${account}`))
         if (reset.length) log(`cooldown reset: ${reset.join(', ')}`)
         return json(res, 200, { reset })
       }
       if (req.method === 'GET' && req.url === '/admin/lent') {
         if (!isLocal(req.socket.remoteAddress)) return json(res, 403, { error: { message: 'localhost only' } })
-        return json(res, 200, { grants: deps.lentStatus?.() ?? [] })
+        return json(res, 200, { grants: await deps.lentStatus?.() ?? [] })
       }
       if (req.method === 'GET' && req.url === '/health')
-        return json(res, 200, { ok: true, cooling: Object.fromEntries([...cooldown].filter(([, c]) => c.until > now()).map(([id, c]) => [id, new Date(c.until).toISOString()])) })
+        return json(res, 200, { ok: true, cooling: Object.fromEntries(Object.entries(credentials.snapshot()).filter(([, s]) => s.retryAt && s.retryAt > now()).map(([id, s]) => [id, new Date(s.retryAt!).toISOString()])), credentials: credentials.snapshot() })
       if (req.method !== 'POST' || req.url !== '/v1/chat/completions') return json(res, 404, { error: { message: 'not found' } })
 
       const health = deps.health?.()
-      const body = withDirective(JSON.parse(await readBody(req)) as Record<string, unknown>, health?.directive)
+      let body = withDirective(JSON.parse(await readBody(req)) as Record<string, unknown>, health?.directive)
       const alias = String(body.model ?? '')
-      let route = alias === 'gremlin-glean' ? keepTo(cfg.routes[alias]) : cfg.routes[alias]
+      const recovery = alias === 'gremlin-recovery'
+      if (recovery && !isLocal(req.socket.remoteAddress)) return json(res, 403, { error: { message: 'recovery is localhost only' } })
+      if (recovery || health?.conserve) {
+        const cap = recovery ? cfg.budget?.recoveryMaxTokens ?? 512 : 1024
+        const requested = Number(body.max_completion_tokens ?? body.max_tokens ?? cap)
+        body = { ...body, [body.max_completion_tokens !== undefined ? 'max_completion_tokens' : 'max_tokens']: Math.min(Number.isFinite(requested) ? requested : cap, cap) }
+      }
+      let route = alias === 'gremlin-glean' ? keepTo(cfg.routes[alias]) : recovery ? cfg.routes['gremlin-recovery'] ?? cfg.routes['gremlin-main'] : cfg.routes[alias]
       let retryOnRefusal: RouteTarget[] = []
       if (alias === AUTO && deps.router) {
         const c = classify(body as Parameters<typeof classify>[0])
@@ -132,22 +240,26 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         if (!body.stream && mayRetryRefusal(body as Parameters<typeof mayRetryRefusal>[0])) retryOnRefusal = permissiveRoute(c, inp)
         log(`auto: ${c.domain}/${c.complexity}${c.needsTools ? '/tools' : ''}${inp.conserve ? ' (conserving)' : ''} → ${route.map((t) => `${t.provider}/${t.model}`).join(', ') || '(none)'}`)
       }
-      if (!route) return json(res, 404, { error: { message: `unknown model "${alias}"; use one of: ${[...Object.keys(cfg.routes), ...(deps.router ? [AUTO] : [])].join(', ')}` } })
+      if (!route) return json(res, 404, { error: { message: `unknown model "${alias}"; use one of: ${[...Object.keys(cfg.routes), ...(cfg.routes['gremlin-main'] && !cfg.routes['gremlin-recovery'] ? ['gremlin-recovery'] : []), ...(deps.router ? [AUTO] : [])].join(', ')}` } })
 
       const errors: string[] = []
       const sensitive = sensitiveReason(body.messages)
       const tried = new Set<string>()
-      const lent = (alias === 'gremlin-glean' ? [] : deps.lent?.() ?? []).map((l) => ({ ...l, targets: l.targets.filter(allowed) }))
-      const lentBy = new Map(lent.map((l) => [l.provider.id, l]))
-      for (const l of lent) { providers.set(l.provider.id, l.provider); fetchers.set(l.provider.id, l.fetch) }
+      const lent = (alias === 'gremlin-glean' ? [] : await deps.lent?.() ?? []).map((l) => ({ ...l, targets: l.targets.filter(allowed) }))
+      const lentBy = new Map(lent.map(l => [l.provider.id, l]))
+      const managed = (deps.sources?.offers() ?? []).map(o => ({ ...o, fetch: providerFetch(o.provider, env), targets: o.targets.filter(t => (o.provider.free && cfg.policy?.freeModels) || allowed(t)) }))
+      const dynamic = [...lent, ...managed]
+      const active = new Set(dynamic.map(l => l.provider.id))
+      for (const id of providers.keys()) if (!cfg.providers.some(p => p.id === id) && !active.has(id)) { providers.delete(id); fetchers.delete(id) }
+      for (const l of dynamic) { providers.set(l.provider.id, l.provider); fetchers.set(l.provider.id, l.fetch) }
       // Once the gremlin's own budget is spent, only lent keys and free endpoints remain usable.
-      const refused = deps.refuse?.()
-      if (refused && !lent.length && alias !== 'gremlin-glean') return json(res, 429, { error: { type: 'budget_exhausted', message: refused } })
-      const ownRoute = refused ? route.filter((t) => providers.get(t.provider)?.free) : route
+      const refused = deps.refuse?.(recovery)
+      const ownRoute = expandRoute(route).filter(allowed).filter(t => !refused || providers.get(t.provider)?.free || providers.get(t.provider)?.local)
       // Last resort for every route: the free endpoints. A gremlin that can't pay (or whose paid providers are all down)
       // still gets an answer, weaker but better than none; secrets never go there (checked below).
       const lastResort = alias === 'gremlin-glean' ? [] : (keepTo(cfg.routes['gremlin-glean']) ?? []).filter((t) => !ownRoute.some((o) => o.provider === t.provider && o.model === t.model))
-      let queue = [...lent.flatMap((l) => l.targets), ...ownRoute, ...lastResort]
+      let queue = [...lent.flatMap((l) => l.targets), ...ownRoute, ...managed.flatMap(o => !refused || o.provider.free || o.provider.local ? o.targets : []), ...expandRoute(lastResort)].filter(allowed)
+      if (refused && !queue.length) return json(res, 429, { error: { type: 'budget_exhausted', message: refused } })
       let lastRefusal: Record<string, unknown> | undefined
       for (let target = queue.shift(); target; target = queue.shift()) {
         if (tried.has(`${target.provider}/${target.model}`)) continue
@@ -159,99 +271,115 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         if (!p || !f) { errors.push(`${target.provider}: not configured`); continue }
         const gone = retired.get(`${target.provider}/${target.model}`)
         if (gone && gone > now()) { errors.push(`${target.provider}/${target.model}: not offered right now`); continue }
-        const c = cooldown.get(p.id)
-        if (c && c.until > now()) { errors.push(`${p.id}: cooling down`); continue }
+        const fp = credentialFingerprint(p, env)
+        if (!credentials.available(p.id, fp) || (fp && !credentials.available(`secret:${fp}`)) || (p.accountId && !credentials.available(`account:${p.accountId}`))) { errors.push(`${p.id}: credential unavailable`); continue }
         if (p.free && sensitive) { errors.push(`${p.id}: skipped, the request looks like it contains a secret: ${sensitive}`); continue }
         if (p.minIntervalMs && now() - (lastCall.get(p.id) ?? -Infinity) < p.minIntervalMs) {
           // On the last resort, wait out a free provider's short interval rather than fail the whole request.
           const wait = p.minIntervalMs - (now() - (lastCall.get(p.id) ?? -Infinity))
-          if (!lastResort.includes(target) || wait > LAST_RESORT_WAIT_MS) { errors.push(`${p.id}: rate limit (one call per ${p.minIntervalMs / 1000}s)`); continue }
+          if (!lastResort.some(t => (canonical.get(p.id) ?? p.id) === t.provider && t.model === target.model) || wait > LAST_RESORT_WAIT_MS) { errors.push(`${p.id}: rate limit (one call per ${p.minIntervalMs / 1000}s)`); continue }
           await new Promise((r) => setTimeout(r, wait))
         }
-        let upstreamBody: Record<string, unknown> = { ...body, model: target.model, ...(body.stream ? { stream_options: { ...(body.stream_options as object), include_usage: true } } : {}) }
-        // A lent key: the lender's per-call cap and wishes, then a slot under the key's rate limits (or skip it).
+        const accountId = target.accountId ?? p.accountId ?? (fp ? `key:${fp}` : undefined)
+        const t = { ...target, ...(accountId ? { accountId } : {}) }
+        const accessStates = credentials.snapshot()
+        const needsRepair = Array.isArray(body.tools) && body.tools.length > 0 && [...providers.keys()].some(id => accessStates[id]?.state === 'invalid' || accessStates[id]?.state === 'quota-exhausted')
+        let requestBody = needsRepair ? withDirective(body, 'Some of your inference access has failed. While this working source is available, call inference_access repair before optional work. If repair is insufficient, use inference_access discover and connect to obtain and validate an authorized replacement through official enrollment. Keep working sources and the recovery reserve available; credentials stay in tools.') : body
         const offer = target.grantId ? lentBy.get(p.id) : undefined
-        let release: (actualTokens?: number) => void = () => {}
-        if (offer) {
-          const prep = offer.prepare?.(upstreamBody)
-          if (prep && 'skip' in prep) { errors.push(`${p.id}: ${prep.skip}`); continue }
-          if (prep) upstreamBody = prep.body
-          const est = Math.ceil(Buffer.byteLength(JSON.stringify(upstreamBody.messages ?? '')) / 4) + Number(upstreamBody.max_completion_tokens ?? upstreamBody.max_tokens ?? 1024)
-          const slot = offer.admit?.(est)
-          if (slot && 'skip' in slot) { errors.push(`${p.id}: ${slot.skip}`); continue }
-          if (slot) release = slot.release
-        }
+        const prepared = offer?.prepare?.(requestBody)
+        if (prepared && 'skip' in prepared) { errors.push(`${p.id}: ${prepared.skip}`); continue }
+        if (prepared) requestBody = prepared.body
+        const reservation = !p.free && !p.local ? deps.reserve?.(requestBody, t, p, recovery) : undefined
+        if (deps.reserve && !p.free && !p.local && !reservation) { errors.push(`${p.id}: insufficient allowance`); continue }
         lastCall.set(p.id, now())
         const started = now()
+        const upstreamBody: Record<string, unknown> = { ...(reservation?.body ?? requestBody), model: target.model, ...(body.stream ? { stream_options: { ...(body.stream_options as object), include_usage: true } } : {}) }
+        let release: (actualTokens?: number) => void = () => {}
+        if (offer) {
+          const tokens = Math.ceil(Buffer.byteLength(JSON.stringify(upstreamBody.messages ?? '')) / 4) + Number(upstreamBody.max_completion_tokens ?? upstreamBody.max_tokens ?? 1024)
+          const slot = offer.admit?.(tokens)
+          if (slot && 'skip' in slot) { reservation?.release(); errors.push(`${p.id}: ${slot.skip}`); continue }
+          if (slot) release = slot.release
+        }
         let up: Response
+        let recorded = false
+        const recordCall = (r: CallRecord) => {
+          release(r.usage ? r.usage.promptTokens + r.usage.completionTokens : undefined)
+          deps.onCall?.({ ...r, ...(accountId ? { accountId } : {}), ...(!r.usage && (r.status === 200 || r.status === 0) ? { estimatedUsd: reservation?.estimatedUsd } : {}) }, t)
+          recorded = true
+        }
         const abort = new AbortController()
         let firstByte: ReturnType<typeof setTimeout> | undefined
         const total = setTimeout(() => abort.abort(new Error(`no complete answer in ${p.timeoutMs / 1000}s`)), p.timeoutMs)
         total.unref?.()
         try {
-          // fetch resolves when the response starts, so this bounds the time to first byte (a hung provider).
-          up = await Promise.race([
-            f(`${p.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify(upstreamBody),
-              signal: abort.signal,
-            }),
-            new Promise<never>((_, reject) => { firstByte = setTimeout(() => { const e = new Error(`no response in ${p.firstByteMs / 1000}s`); abort.abort(e); reject(e) }, p.firstByteMs) }),
-          ])
-          // The response has started: from here the stream watchdog (stalls) and the whole-request limit apply.
-          clearTimeout(firstByte)
-        } catch (e) {
+          try {
+            // fetch resolves when the response starts, so this bounds the time to first byte (a hung provider).
+            up = await Promise.race([
+              f(`${p.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(upstreamBody),
+                signal: abort.signal,
+              }),
+              new Promise<never>((_, reject) => { firstByte = setTimeout(() => { const e = new Error(`no response in ${p.firstByteMs / 1000}s`); abort.abort(e); reject(e) }, p.firstByteMs) }),
+            ])
+            // The response has started: from here the stream watchdog (stalls) and the whole-request limit apply.
+            clearTimeout(firstByte)
+          } catch (e) {
+            clearTimeout(firstByte)
+            clearTimeout(total)
+            errors.push(`${p.id}: ${(e as Error).message}`)
+            if (offer) offer.observe?.(504, new Headers(), '')
+            else down(p.id)
+            recordCall({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: 0, ms: now() - started, incomplete: true })
+            continue
+          }
+          if (!up.ok) {
+            const text = await up.text().catch(() => '')
+            recordCall({ at: new Date(started).toISOString(), alias, provider: p.id, model: target.model, status: up.status, ms: now() - started })
+            if (offer) {
+              offer.observe?.(up.status, up.headers, text)
+              errors.push(`${p.id}: ${up.status} ${text.slice(0, 160)}`)
+              continue
+            }
+            if (retryable(up.status)) { errors.push(`${p.id}: ${up.status} ${text.slice(0, 160)}`); down(p.id, up.status, up.headers); continue }
+            // Catalogs change (a provider withdrew the model): retire just this model for a while, not the provider.
+            if ((up.status === 400 || up.status === 404) && MODEL_GONE.test(text)) {
+              retired.set(`${p.id}/${target.model}`, now() + RETIRED_MS)
+              log(`model ${p.id}/${target.model} not offered; skipping it for ${RETIRED_MS / 3_600_000}h`)
+              errors.push(`${p.id}/${target.model}: ${up.status} ${text.slice(0, 120)}`)
+              continue
+            }
+            res.writeHead(up.status, { 'content-type': up.headers.get('content-type') ?? 'application/json' })
+            return res.end(text)
+          }
+          credentials.success(p.id)
+          offer?.observe?.(up.status, up.headers, '')
+          if (p.accountId) credentials.success(`account:${p.accountId}`)
+          const record = (usage?: Usage, refusal?: boolean, incomplete?: boolean) => recordCall({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: up.status, usage, ms: now() - started, ...(refusal ? { refused: true } : {}), ...(incomplete ? { incomplete: true } : {}) })
+          if (body.stream) return await pipeStream(up, res, record, p.firstByteMs, () => down(p.id))
+          const out = (await up.json()) as { usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string; choices?: { message?: { content?: string; tool_calls?: unknown[] } }[] }
+          const msg = out.choices?.[0]?.message
+          const refusal = !msg?.tool_calls?.length && isRefusal(msg?.content ?? '')
+          record(usageOf(out.usage), refusal)
+          if (refusal && retryOnRefusal.length && !t.permissive) {
+            // Retry on permissive models only; keep this answer in case they all fail.
+            log(`auto: ${p.id}/${t.model} refused; retrying on a permissive model`)
+            lastRefusal = out
+            queue = expandRoute(retryOnRefusal).filter(allowed).filter((r) => !tried.has(`${r.provider}/${r.model}`))
+            retryOnRefusal = []
+            continue
+          }
+          return json(res, 200, { ...out, model: alias })
+        } finally {
           clearTimeout(firstByte)
           clearTimeout(total)
-          errors.push(`${p.id}: ${(e as Error).message}`)
+          // Malformed/incomplete successful replies still consume an estimate, never disappear from the budget.
+          if (!recorded) recordCall({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: 0, ms: now() - started, incomplete: true })
+          reservation?.release()
           release()
-          if (offer) offer.observe?.(504, new Headers(), '')
-          else down(p.id)
-          continue
         }
-        if (!up.ok) {
-          const text = await up.text().catch(() => '')
-          deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: target.model, status: up.status, ms: now() - started }, target)
-          if (offer) {
-            // The key's own limiter rests it (Retry-After, backoff) or stops it for good (401/403); try the next target.
-            release()
-            offer.observe?.(up.status, up.headers, text)
-            errors.push(`${p.id}: ${up.status} ${text.slice(0, 160)}`)
-            continue
-          }
-          if (retryable(up.status)) { errors.push(`${p.id}: ${up.status} ${text.slice(0, 160)}`); down(p.id, up.status); continue }
-          // Catalogs change (a provider withdrew the model): retire just this model for a while, not the provider.
-          if ((up.status === 400 || up.status === 404) && MODEL_GONE.test(text)) {
-            retired.set(`${p.id}/${target.model}`, now() + RETIRED_MS)
-            log(`model ${p.id}/${target.model} not offered; skipping it for ${RETIRED_MS / 3_600_000}h`)
-            errors.push(`${p.id}/${target.model}: ${up.status} ${text.slice(0, 120)}`)
-            continue
-          }
-          res.writeHead(up.status, { 'content-type': up.headers.get('content-type') ?? 'application/json' })
-          return res.end(text)
-        }
-        cooldown.delete(p.id)
-        offer?.observe?.(up.status, up.headers, '')
-        const t = target
-        const record = (usage?: Usage, refusal?: boolean, incomplete?: boolean) => {
-          release(usage ? usage.promptTokens + usage.completionTokens : undefined)
-          deps.onCall?.({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: up.status, usage, ms: now() - started, ...(refusal ? { refused: true } : {}), ...(incomplete ? { incomplete: true } : {}) }, t)
-        }
-        if (body.stream) return pipeStream(up, res, record, p.firstByteMs, () => down(p.id))
-        const out = (await up.json().catch((e: unknown) => { release(); throw e })) as { usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string; choices?: { message?: { content?: string; tool_calls?: unknown[] } }[] }
-        const msg = out.choices?.[0]?.message
-        const refusal = !msg?.tool_calls?.length && isRefusal(msg?.content ?? '')
-        record(usageOf(out.usage), refusal)
-        if (refusal && retryOnRefusal.length && !t.permissive) {
-          // Retry on permissive models only; keep this answer in case they all fail.
-          log(`auto: ${p.id}/${t.model} refused; retrying on a permissive model`)
-          lastRefusal = out
-          queue = retryOnRefusal.filter((r) => !tried.has(`${r.provider}/${r.model}`))
-          retryOnRefusal = []
-          continue
-        }
-        return json(res, 200, { ...out, model: alias })
       }
       if (lastRefusal) return json(res, 200, { ...lastRefusal, model: alias })
       return json(res, 503, { error: { type: 'all_providers_failed', message: `every provider for "${alias}" failed: ${errors.join(' | ')}` } })

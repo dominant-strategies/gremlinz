@@ -41,7 +41,7 @@ describe('budget enforcement in the gateway', () => {
     let upstreamHits = 0
     const up = createServer((_q, s) => { upstreamHits++; s.end('{}') })
     await new Promise<void>((r) => up.listen(0, '127.0.0.1', r))
-    const cfg = GatewayConfig.parse({ providers: [{ id: 'p', kind: 'openai', baseUrl: `http://127.0.0.1:${(up.address() as { port: number }).port}/v1` }], routes: { 'gremlin-main': [{ provider: 'p', model: 'm' }] } })
+    const cfg = GatewayConfig.parse({ providers: [{ id: 'p', kind: 'openai', baseUrl: `http://127.0.0.1:${(up.address() as { port: number }).port}/v1` }], routes: { 'gremlin-main': [{ provider: 'p', model: 'm' }] }, glean: { enabled: false } })
     const gw = createGateway(cfg, { refuse: () => 'inference budget for today is spent' })
     await new Promise<void>((r) => gw.listen(0, '127.0.0.1', r))
     const r = await fetch(`http://127.0.0.1:${(gw.address() as { port: number }).port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'gremlin-main', messages: [] }) })

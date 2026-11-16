@@ -146,6 +146,6 @@ export function grantProblem(g: KeyGrant, now = new Date()): string | null {
   if (!GrantPolicy.safeParse(g.policy).success) return 'bad policy'
   if (g.wishes !== undefined && !GrantWishes.safeParse(g.wishes).success) return 'bad wishes'
   if (g.wishes?.preferredModels.some((m) => !g.provider.models.includes(m))) return "bad wishes: a preferred model is not one of the grant's models"
-  if (g.expiresAt && Date.parse(g.expiresAt) <= now.getTime()) return 'expired'
+  if (g.expiresAt && (!Number.isFinite(Date.parse(g.expiresAt)) || Date.parse(g.expiresAt) <= now.getTime())) return 'expired'
   return null
 }

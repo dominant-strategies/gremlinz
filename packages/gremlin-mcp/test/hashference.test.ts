@@ -226,3 +226,39 @@ describe('withdrawn models', () => {
     } finally { gw.close(); up.close() }
   })
 })
+
+describe('Hashference credential repair', () => {
+  it('replaces only rejected keys, validates before publication, and retains the old file on failed validation', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'hf-repair-')), 'key.json')
+    const signer = quaiSigner()
+    const old = { apiKey: 'hf_old', address: signer.address, createdAt: '' }
+    writeFileSync(file, JSON.stringify(old), { mode: 0o600 })
+    const h = fakeHashference()
+    let rejectNew = true
+    const f = (async (url, init) => {
+      if (new URL(String(url)).pathname === '/v1/account') {
+        const auth = new Headers(init?.headers).get('authorization')
+        if (auth === 'Bearer hf_old' || rejectNew) return json(401, {})
+      }
+      return h.f(url, init)
+    }) as typeof fetch
+    await expect(setupKey(signer, file, { fetch: f, repair: true })).rejects.toThrow(/401/)
+    expect(readKey(file)?.apiKey).toBe('hf_old')
+    rejectNew = false
+    expect((await setupKey(signer, file, { fetch: f, repair: true })).apiKey).toBe('hf_secret')
+    expect(readKey(file)?.apiKey).toBe('hf_secret')
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+  })
+  it('does not create new keys on balance exhaustion, permission denial, rate limits or service outages', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'hf-repair-')), 'key.json')
+    const signer = quaiSigner()
+    writeFileSync(file, JSON.stringify({ apiKey: 'hf_old', address: signer.address }), { mode: 0o600 })
+    for (const status of [402, 403, 429, 503]) {
+      const seen: string[] = []
+      const f = (async (url) => { seen.push(new URL(String(url)).pathname); return json(status, {}) }) as typeof fetch
+      await expect(setupKey(signer, file, { fetch: f, repair: true })).rejects.toThrow(String(status))
+      expect(seen).toEqual(['/v1/account'])
+      expect(readKey(file)?.apiKey).toBe('hf_old')
+    }
+  })
+})

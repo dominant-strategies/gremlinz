@@ -6,7 +6,13 @@ import { createGateway } from './server.js'
 import { Ledger, type LedgerEntry } from './ledger.js'
 import { loadRatings, observe, type ModelRating, type Observed } from './ratings.js'
 import { boardUrl, chainKeys, homeFile, keys, phrase } from '../env.js'
-import { LentKeys, fetchGrants, remainingUsd, reportDisabled } from './grants.js'
+import { boardGrantPool } from './grant-pool.js'
+import { Credentials } from './credentials.js'
+import { Documentation } from './documentation.js'
+import { documentationTargets } from './documentation-targets.js'
+import { AccessSources } from './access.js'
+import { spending } from './spending.js'
+import { Reservations } from './reservations.js'
 import { veniceFetch } from './venice.js'
 import { setKnownSecrets } from './glean.js'
 import { base58 } from '@scure/base'
@@ -54,28 +60,21 @@ const router = () => {
   return { ratings: cache.ratings, seen: cache.seen }
 }
 
-// Lent keys: fetched from the board every 10 minutes (held in memory only), remaining budgets every 2 minutes. A key
-// the provider refuses (401/403) is stopped for good and reported to the lender through the board.
-const lentKeys = new LentKeys({
-  gremlin: keys().evm.address,
-  used: (id, since) => ledger.grantUsed(id, since),
-  onDisabled: (g, status, reason) => {
-    log(`lent key ${g.grantId} (${g.provider.label}) stopped: ${reason}`)
-    void reportDisabled(boardUrl(), keys().evm, g.grantId, status, reason).then((ok) => { if (!ok) log(`could not tell the board about lent key ${g.grantId}`) })
-  },
-})
-const refreshGrants = async () => {
-  try {
-    lentKeys.set(await fetchGrants(boardUrl(), keys().evm))
-    if (lentKeys.grants.length) log(`lent keys: ${lentKeys.grants.map((g) => g.grant.provider.label).join(', ')}`)
-  } catch (e) { log('grants refresh failed:', (e as Error).message) }
-}
-const refreshRemaining = async () => { for (const g of lentKeys.grants) lentKeys.setRemaining(g.grant.grantId, await remainingUsd(g)) }
-void refreshGrants().then(refreshRemaining)
-setInterval(() => void refreshGrants(), 10 * 60_000).unref()
-setInterval(() => void refreshRemaining(), 2 * 60_000).unref()
-const lent = () => lentKeys.offers()
-
+// Grant authorization is revalidated per request with a 30-second refresh / 60-second maximum age.
+const grants = boardGrantPool(boardUrl(), keys().evm, (account, since) => ledger.accountUsed(account, since), log)
+const reservations = new Reservations({ file: homeFile('inference-reservations.json') })
+const credentials = new Credentials({ file: homeFile('inference-credentials.json') })
+const sources = new AccessSources(homeFile('inference-sources.json'))
+const documentation = new Documentation({ file: homeFile('inference-docs.json'), dir: homeFile('inference-docs') })
+const targets = () => documentationTargets(cfg, sources)
+// Public docs are checked without model access or credentials; individual documents have a 24-hour TTL.
+const checkDocumentation = () => documentation.check(targets()).catch(() => log('documentation check failed; maintenance should inspect official URLs'))
+void checkDocumentation()
+setInterval(() => void checkDocumentation(), 3_600_000).unref()
 // The health monitor's directive goes into every request (re-read every 30 s; none when health.json is stale).
-createGateway(cfg, { log, fetchers, router, lent, lentStatus: () => lentKeys.status(), health: healthReader(), onCall: (r, t) => ledger.record(r, t), refuse: () => ledger.refuse(cfg.budget?.dailyUsd) })
+createGateway(cfg, {
+  log, fetchers, router, credentials, sources, documentation: { watch: documentation, targets }, refreshLent: async () => { await grants.offers(true) }, lent: () => grants.offers(), lentStatus: () => grants.status(), health: healthReader(),
+  onCall: (r, t) => ledger.record(r, t),
+  ...spending(cfg, ledger, grants, reservations),
+})
   .listen(cfg.port, cfg.host, () => log(`gateway on http://${cfg.host}:${cfg.port}/v1 (${Object.keys(cfg.routes).join(', ')}, gremlin-auto)`))

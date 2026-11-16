@@ -36,7 +36,7 @@ write('config.yaml', hermesConfig({
   gatewayUrl,
   mcp: process.env.GREMLIN_MCP_URL
     ? { url: process.env.GREMLIN_MCP_URL }
-    : { command: process.execPath, args: [mcpMain], env: { GREMLIN_HOME: home(), GREMLIN_BOARD_URL: boardUrl(), ...(process.env.GREMLIN_DEV_BALANCES ? { GREMLIN_DEV_BALANCES: process.env.GREMLIN_DEV_BALANCES } : {}) } },
+    : { command: process.execPath, args: [mcpMain], env: { GREMLIN_HOME: home(), GREMLIN_BOARD_URL: boardUrl(), GREMLIN_GATEWAY_URL: gatewayUrl, ...(process.env.GREMLIN_DEV_BALANCES ? { GREMLIN_DEV_BALANCES: process.env.GREMLIN_DEV_BALANCES } : {}) } },
   skillsDir,
   wakeEveryMinutes: Number(process.env.GREMLIN_WAKE_MINUTES ?? 45),
 }))

@@ -16,7 +16,7 @@ export interface Payload {
 
 // hosting.json: the gremlin's own hosting account (hatch custody), which it keeps wherever it lives.
 const GREMLIN_FILES = ['state.json', 'config.json', 'signed-config.json', 'status.json', 'launch.json', 'hosting.json',
-  'hashference.json', 'inference-purchase.json', 'hosting-renewal.json', 'inference-ledger.jsonl', 'health-actions.jsonl', 'health-state.json', 'mining.json', 'earnings.jsonl', 'income.jsonl', 'issues.jsonl', 'sends.jsonl']
+  'hashference.json', 'inference-purchase.json', 'hosting-renewal.json', 'inference-ledger.jsonl', 'inference-credentials.json', 'inference-reservations.json', 'inference-sources.json', 'inference-docs.json', 'health-actions.jsonl', 'health-state.json', 'mining.json', 'earnings.jsonl', 'income.jsonl', 'issues.jsonl', 'sends.jsonl']
 /** Never moved: the old server's own nest key, or anything already regenerated on the new server. */
 const SKIP = new Set(['seed', 'nest-key', 'moveout.json'])
 const MAX_BYTES = 48 * 1024 * 1024
@@ -40,6 +40,11 @@ export function collectPayload(opts: { phrase: string; gremlinHome: string; runt
   for (const f of GREMLIN_FILES) {
     const p = join(opts.gremlinHome, f)
     if (existsSync(p) && !SKIP.has(f)) add(`gremlin/${f}`, readFileSync(p))
+  }
+  // Only dedicated provider-key JSON files move; never follow symlinks into other protected directories.
+  const inferenceKeys = join(opts.gremlinHome, 'inference-keys')
+  if (existsSync(inferenceKeys)) for (const entry of readdirSync(inferenceKeys, { withFileTypes: true })) {
+    if (entry.isFile() && /^[a-zA-Z0-9][a-zA-Z0-9._-]*\.json$/.test(entry.name)) add(`gremlin/inference-keys/${entry.name}`, readFileSync(join(inferenceKeys, entry.name)))
   }
   if (opts.launch && !files['gremlin/launch.json']) add('gremlin/launch.json', Buffer.from(JSON.stringify(opts.launch)))
   for (const p of walk(opts.runtimeDir)) {

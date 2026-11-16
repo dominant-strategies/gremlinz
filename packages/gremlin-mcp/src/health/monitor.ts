@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs'
 import { withDeadline } from '@gremlins/hatch/node'
 import { homeFile, keys } from '../env.js'
 import { readStatus, updateStatus } from '../status.js'
-import { account, buyCredit, readKey, setupKey, type HashferenceKey } from '../hashference.js'
+import { account, buyCredit, readKey, setupKey, HashferenceError, type HashferenceKey } from '../hashference.js'
 import type { SecurityResult } from '../tools/security.js'
 import { WAKE_JOB_ID } from '../bootstrap/hermes.js'
 import {
@@ -153,11 +153,20 @@ export class HealthMonitor {
     }
 
     // ── measure ──
-    const key = await this.ensureKey(notes)
+    let key = await this.ensureKey(notes)
     let hfUsd: number | undefined
     let miningUser: string | undefined
     if (key) {
-      try { const a = await account(key, this.hf()); hfUsd = a.availableUsd; miningUser = a.miningUsername } catch (e) { notes.push(`Hashference balance unreadable: ${(e as Error).message.slice(0, 120)}`) }
+      try { const a = await account(key, this.hf()); hfUsd = a.availableUsd; miningUser = a.miningUsername }
+      catch (e) {
+        if (e instanceof HashferenceError && e.status === 401) {
+          key = await this.ensureKey(notes, true)
+          if (key) try {
+            const a = await account(key, this.hf()); hfUsd = a.availableUsd; miningUser = a.miningUsername
+            act('inference', 'key-repair', 'replaced rejected Hashference credential using the owner wallet', { ok: true })
+          } catch { notes.push('Replacement Hashference credential could not read account credit') }
+        } else notes.push(`Hashference balance unreadable: ${(e as Error).message.slice(0, 120)}`)
+      }
     }
     const veniceUsd = reportedBalance(homeFile('balance-venice.json'))
     const burn = burnFromLedger(homeFile('inference-ledger.jsonl'), now)
@@ -287,15 +296,15 @@ export class HealthMonitor {
   private hf() { return { fetch: this.d.hashference?.fetch, base: this.d.hashference?.base, sleep: this.d.hashference?.sleep } }
 
   /** Hashference account: idempotent (an existing key is reused; signing in again returns the same workspace). */
-  private async ensureKey(notes: string[]): Promise<HashferenceKey | undefined> {
+  private async ensureKey(notes: string[], repair = false): Promise<HashferenceKey | undefined> {
     const file = homeFile('hashference.json')
     const k = readKey(file)
-    if (k) return k
+    if (k && !repair) return k
     try {
       const w = this.d.quaiSigner ? undefined : keys().quai
       const signer = this.d.quaiSigner?.() ?? { address: w!.address, signMessage: (m: string) => w!.signMessage(m) }
-      const made = await setupKey(signer, file, { fetch: this.d.hashference?.fetch, base: this.d.hashference?.base, label: 'gremlin' })
-      recordAction({ kind: 'hashference-setup', ok: true, detail: 'created the Hashference account' }, this.d.now())
+      const made = await setupKey(signer, file, { fetch: this.d.hashference?.fetch, base: this.d.hashference?.base, label: 'gremlin', repair })
+      if (!repair) recordAction({ kind: 'hashference-setup', ok: true, detail: 'created the Hashference account' }, this.d.now())
       return made
     } catch (e) {
       notes.push(`Hashference setup failed: ${(e as Error).message.slice(0, 120)}`)

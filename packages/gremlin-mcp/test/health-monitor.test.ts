@@ -81,7 +81,7 @@ function setup(o: Setup = {}) {
     rerunWake: async () => { reruns.push(Date.now()) },
     miner,
   }
-  return { home, hermes, hf, wallet, resets, reruns, sp, miner, monitor: new HealthMonitor(deps) }
+  return { home, hermes, hf, wallet, resets, reruns, sp, miner, deps, monitor: new HealthMonitor(deps) }
 }
 
 const health = (home: string) => JSON.parse(readFileSync(join(home, 'health.json'), 'utf8')) as HealthFile
@@ -103,6 +103,28 @@ describe('health monitor', () => {
     // The second check finds the credit and does nothing more.
     await t.monitor.check()
     expect(t.hf.s.paidWei).toHaveLength(1)
+  })
+
+  it('repairs a rejected credential without a model turn or duplicate payment', async () => {
+    const t = setup({ hfUsd: 10, walletUsd: 100 })
+    const old = JSON.parse(readFileSync(join(t.home, 'hashference.json'), 'utf8'))
+    let minted = 0
+    const fetch = (async (url: string | URL, init: RequestInit = {}) => {
+      const path = new URL(String(url)).pathname
+      if (path === '/v1/account' && new Headers(init.headers).get('authorization') === 'Bearer hf_k') return json(401, {})
+      if (path === '/v1/auth/wallet/challenge') return json(200, { nonce: 'n', message: 'Sign in' })
+      if (path === '/v1/auth/wallet') return json(200, { session: { token: 'session' } })
+      if (path === '/v1/profile/api-keys') { minted++; return json(201, { apiKey: { apiKey: 'hf_replacement' } }) }
+      return t.hf.f(url, init)
+    }) as typeof globalThis.fetch
+    const monitor = new HealthMonitor({ ...t.deps, quaiSigner: () => ({ address: old.address, signMessage: async () => 'signed' }), hashference: { ...t.deps.hashference, fetch } })
+    const h = await monitor.check()
+    expect(h.inferenceUsd).toBe(10)
+    expect(h.areas.inference.did.join(' ')).toContain('replaced rejected Hashference credential')
+    expect(JSON.parse(readFileSync(join(t.home, 'hashference.json'), 'utf8')).apiKey).toBe('hf_replacement')
+    await monitor.check()
+    expect(minted).toBe(1)
+    expect(t.hf.s.paidWei).toHaveLength(0)
   })
 
   it('writes health.json with every area, and the board tier', async () => {
