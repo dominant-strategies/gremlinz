@@ -1,0 +1,3 @@
+#!/bin/sh
+# Test stand-in: every unit asked about is active.
+echo active

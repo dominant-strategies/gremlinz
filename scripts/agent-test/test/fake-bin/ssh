@@ -1,0 +1,4 @@
+#!/bin/sh
+# Test stand-in for ssh to an egg: runs the collector (on stdin) here, against the fixture GREMLIN_HOME.
+if [ -n "$FAKE_SSH_FAIL" ]; then echo "ssh: connect to host 203.0.113.7 port 22: Connection timed out" >&2; exit 255; fi
+exec python3 - 100000 "$AGENT_TEST_FIX/home" "$AGENT_TEST_FIX/hermes"

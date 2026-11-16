@@ -1,0 +1,3 @@
+#!/bin/sh
+# Test stand-in: `sshd -T` of a dev egg.
+printf 'authorizedkeysfile /etc/ssh/gremlinz_dev_keys\nauthorizedkeyscommand none\nallowusers gremlinz-dev\npasswordauthentication no\npermitrootlogin no\n'

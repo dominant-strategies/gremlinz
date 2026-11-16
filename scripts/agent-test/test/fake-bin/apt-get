@@ -1,0 +1,3 @@
+#!/bin/sh
+# Test stand-in: a simulated upgrade with one ordinary update and nothing from -security.
+echo "Inst libfoo1 [1.0] (1.1 Ubuntu:24.04/noble-updates [amd64])"

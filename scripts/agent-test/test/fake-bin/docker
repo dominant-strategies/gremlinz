@@ -1,0 +1,7 @@
+#!/bin/sh
+# Test stand-in: `docker inspect … egg` and `docker exec … hermes cron runs`.
+case "$1" in
+  inspect) echo "running|2026-11-15T09:00:00Z|ghcr.io/dominant-strategies/gremlinz-egg@sha256:abc" ;;
+  exec) cat "$AGENT_TEST_FIX/cron-runs.txt" ;;
+  *) exit 1 ;;
+esac
