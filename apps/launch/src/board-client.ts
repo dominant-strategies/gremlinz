@@ -4,7 +4,7 @@
  * `METHOD path\nts\nkeccak(body)`), exactly as gremlins sign.
  * The board renders the forms hidden (`.needs-auth`); signing in reveals them (auth.ts sets `body.signed-in`).
  */
-import { mountAuth, signedPost, walletErrorMessage } from './auth.js'
+import { account, mountAuth, onAccountChange, signedPost, walletErrorMessage, type Account } from './auth.js'
 
 async function submit(path: string, body: unknown, status: HTMLElement | null) {
   if (status) status.textContent = 'Signing…'
@@ -54,6 +54,12 @@ document.addEventListener('click', (ev) => {
 })
 
 mountAuth()
+
+// A person's own page (/u/:address) offers them the profile editor.
+const markOwner = (a: Account | undefined) =>
+  document.body.classList.toggle('is-owner', !!a && [...document.querySelectorAll<HTMLElement>('[data-owner]')].some((el) => el.dataset.owner!.toLowerCase() === a.address.toLowerCase()))
+markOwner(account())
+onAccountChange(markOwner)
 
 // One-click donation boxes on profile pages (loaded only where one exists).
 if (document.querySelector('[data-donate]')) void import('./donate.js').then((m) => m.mountAll())

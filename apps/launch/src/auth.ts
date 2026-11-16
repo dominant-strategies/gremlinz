@@ -462,8 +462,10 @@ export function mountAuth(slot: HTMLElement | null = document.getElementById('gr
       const chip = h('button', { type: 'button', class: 'auth-chip', 'aria-haspopup': 'true', 'aria-expanded': 'false', title: a.address }, walletIcon(a.kind), h('span', { class: 'addr' }, short(a.address)))
       const copy = h('button', { type: 'button' }, 'Copy address')
       const out = h('button', { type: 'button' }, 'Sign out')
+      const profile = h('button', { type: 'button' }, 'Your profile')
+      profile.onclick = () => { location.href = '/me/' }
       const menu = h('div', { class: 'auth-menu', hidden: '' },
-        h('p', { class: 'small muted' }, `Signed in with ${walletName(a.kind)}`), h('p', { class: 'addr' }, a.address), copy, out)
+        h('p', { class: 'small muted' }, `Signed in with ${walletName(a.kind)}`), h('p', { class: 'addr' }, a.address), profile, copy, out)
       const toggle = (show = menu.hidden) => { menu.hidden = !show; chip.setAttribute('aria-expanded', String(show)) }
       chip.onclick = (e) => { e.stopPropagation(); toggle() }
       copy.onclick = () => { void navigator.clipboard?.writeText(a.address); copy.textContent = 'Copied'; setTimeout(() => { copy.textContent = 'Copy address' }, 1200) }
@@ -476,4 +478,6 @@ export function mountAuth(slot: HTMLElement | null = document.getElementById('gr
   }
   render()
   onAccountChange(render)
+  // No profile yet? A small, dismissible nudge towards /me/ (loaded on its own, so pages stay light).
+  void import('./profile-prompt.js').then((m) => m.mountProfilePrompt()).catch(() => {})
 }
