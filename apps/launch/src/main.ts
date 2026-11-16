@@ -15,7 +15,7 @@ import { boardApi } from './board.js'
 import { WALLET_NAMES, canPayUsdc, makerAccount, payUsdcOnBase, signConfigWithWallet } from './hatch-wallet.js'
 import { FLUENCE_MIN_TOPUP_USD } from '@gremlins/hosting'
 import { formatUnits as fmtUnits } from 'ethers'
-import { FLUENCE_STEPS, PROGRESS_CSS, Progress, SPORESTACK_STEPS, COMMON_STEPS } from './progress.js'
+import { FLUENCE_STEPS, FLUENCE_USDC_STEPS, PROGRESS_CSS, Progress, SPORESTACK_STEPS, COMMON_STEPS } from './progress.js'
 import { BUILD_STEPS, clearSession, loadMakerToken, loadSession, newLaunchId, saveMakerToken, saveSession, type BuildStep, type Session } from './session.js'
 
 const CANARY = new URL(window.location.href).searchParams.get('canary') === '1'
@@ -44,7 +44,9 @@ const save = () => saveSession(s)
 // Progress window: every step and transaction, persisted with the session.
 document.head.insertAdjacentHTML('beforeend', `<style>${PROGRESS_CSS}</style>`)
 const progress = new Progress({ load: () => s.progress, save: (p) => { s.progress = p; save() } }, () => (s.config?.name ? `Hatching ${s.config.name}` : 'Hatching a gremlin'))
-const planFor = () => (s.host === 'fluence' ? FLUENCE_STEPS : s.host === 'sporestack' ? SPORESTACK_STEPS : COMMON_STEPS)
+/** USDC on Base when the maker signed in with an EVM wallet (and never started a QUAI bridge); otherwise QUAI. */
+const payWith = (): 'usdc' | 'quai' => (s.bridgeTx ? 'quai' : s.payWith ?? (account() && canPayUsdc(account()!.kind) ? 'usdc' : 'quai'))
+const planFor = () => (s.host === 'fluence' ? (payWith() === 'usdc' ? FLUENCE_USDC_STEPS : FLUENCE_STEPS) : s.host === 'sporestack' ? SPORESTACK_STEPS : COMMON_STEPS)
 progress.plan(planFor())
 // Sessions from before the progress window (or partially tracked ones): mark what the session proves is done.
 const backfill: [boolean | undefined, string, string?][] = [
@@ -131,6 +133,8 @@ function stepConnect() {
       st.signing('Choose a wallet and sign in')
       const a = await makerAccount()
       s.maker = a.address
+      s.payWith = canPayUsdc(a.kind) ? 'usdc' : 'quai'
+      progress.plan(planFor())
       st.signed()
       st.done(`${s.maker.slice(0, 8)}… (${WALLET_NAMES[a.kind]})`)
       save()
@@ -569,7 +573,7 @@ function stepHost() {
   show(`<p class="eyebrow">Step 7 of 7</p><h2>Where should the egg hatch?</h2>
     <p class="muted">The egg is a small rented server. It only lives until your gremlin moves to a home it pays for itself.</p>
     <div class="choice" style="margin:18px 0 22px">
-      <label><input type="radio" name="host" value="fluence" checked><span><b>Fluence <span class="pill pill-alive" style="margin-left:6px">recommended</span></b><span class="muted small">From $${FLUENCE_MIN_TOPUP_USD}. Pay QUAI with Pelagus (bridged for you), or USDC on Base from MetaMask, Phantom or any WalletConnect wallet.</span></span></label>
+      <label><input type="radio" name="host" value="fluence" checked><span><b>Fluence <span class="pill pill-alive" style="margin-left:6px">recommended</span></b><span class="muted small">From $${FLUENCE_MIN_TOPUP_USD}. ${payWith() === 'usdc' ? `Pay USDC on Base${account() ? ` with ${WALLET_NAMES[account()!.kind]}` : ''}: one transfer, no bridge.` : 'Pay QUAI with Pelagus (bridged for you), or USDC on Base from MetaMask, Phantom or any WalletConnect wallet.'}</span></span></label>
       <label><input type="radio" name="host" value="sporestack" ${CANARY ? 'disabled' : ''}><span><b>SporeStack</b><span class="muted small">USDT, BTC or XMR. A new account needs a $100 first deposit, which is reused for later eggs.</span></span></label>
     </div>
     <button id="go">Continue</button>`)
@@ -609,13 +613,15 @@ async function stepFluence() {
 
   if (job.status === 'funding' && !s.bridgeTx && !(BigInt(job.funds?.quai ?? 0) > 0n)) {
     // QUAI is bridged with Pelagus; an EVM wallet pays USDC on Base directly.
-    const payWith = account() && canPayUsdc(account()!.kind) ? 'usdc' : 'quai'
-    const quaiWei = payWith === 'quai' ? await quaiNeededFor(target, hostingAddress) : 0n
+    const pay = (s.payWith = payWith())
+    save()
+    progress.plan(planFor())
+    const quaiWei = pay === 'quai' ? await quaiNeededFor(target, hostingAddress) : 0n
     if (!progress.isDone('fund-egg')) fund.start('Choose how to pay')
     show(`<h2>Fund the egg</h2>
       <p>The egg needs <b>${fmtUsd(target)}</b> of hosting credit. It goes to the egg's own hosting account, which the egg takes over once it runs: neither you nor gremlinz keeps it.</p>
       ${s.hatch.custody === 'mpc' ? `<p class="small dev-note">${mpc.LOSS_WARNING}</p>` : ''}
-      ${payWith === 'usdc' ? `<p><button id="usdc">Pay ${fmtUsd(target)} USDC on Base with ${WALLET_NAMES[account()!.kind]}</button></p>
+      ${pay === 'usdc' ? `<p><button id="usdc">Pay ${fmtUsd(target)} USDC on Base with ${WALLET_NAMES[account()!.kind]}</button></p>
       <p class="muted">One transfer to the egg's hosting address <code>${esc(hostingAddress)}</code>. You can also send it from any other wallet; this page continues once it arrives.</p>`
       : `<p><button id="quai">Pay ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI with Pelagus</button></p>
       <p class="muted">Pelagus will ask for three confirmations: wrap, approve, bridge. Or send ${fmtUsd(target)} USDC on Base to <code>${esc(hostingAddress)}</code> from any wallet; this page continues once it arrives.</p>`}`)
@@ -649,10 +655,10 @@ async function stepFluence() {
           if (!paying) fund.touch('Waiting for you to pay')
           await sleep(15_000)
         }
-        if (!paying || payWith === 'usdc') { fund.done('USDC received'); bridge.skip(); swap.skip(); resolve() }
+        if (!paying || pay === 'usdc') { fund.done('USDC received'); bridge.skip(); swap.skip(); resolve() }
       })()
     })
-  } else if (!progress.isDone('fund-egg')) fund.done(s.bridgeTx ? 'bridge sent' : job.status === 'funding' ? 'QUAI already on Base' : 'funded')
+  } else if (!progress.isDone('fund-egg')) fund.done(s.bridgeTx ? 'bridge sent' : job.status === 'funding' && payWith() === 'quai' ? 'QUAI already on Base' : 'funded')
 
   show(`<h2>Starting the egg…</h2><p class="muted">The hatch service pays Fluence and starts the server as soon as the money is there. The server locks itself down (no passwords, no keys but the team's during the dev phase) before the egg starts. Follow it in the progress window.</p>`)
   if (s.bridgeTx && !progress.isDone('bridge')) await followBridge(s.bridgeTx, bridge)
@@ -726,7 +732,7 @@ async function stepHatch() {
   s.eggAddress = egg.announcement.address
   if (!s.signed) {
     show(`<h2>Your egg is alive</h2>
-      <p>Sign ${esc(s.config!.name)}'s configuration for this egg (Quai address <code>${esc(egg.announcement.deposit.quai)}</code>).
+      <p>Sign ${esc(s.config!.name)}'s configuration for this egg (address <code>${esc(egg.announcement.deposit.quai)}</code>).
          The signature names the egg, so nobody else can use it.</p>
       <button id="sign">Sign with ${account() ? WALLET_NAMES[account()!.kind] : 'your wallet'}</button>`)
     sign.start('Waiting for you')
@@ -768,12 +774,17 @@ async function stepHatch() {
   } else if (!progress.isDone('look-post')) progress.step('look-post').skip(s.look ? 'published' : 'no Forge look')
   const d = egg.announcement.deposit
   show(`<h2>${esc(s.config!.name)} is waiting to be fed</h2>
-    <p>Fund your gremlin with anything on these chains. It converts to QUAI and Qi on its own once it hatches.</p>
+    ${s.host === 'fluence' && payWith() === 'usdc'
+      ? `<p>Send USDC (or ETH) on Base to its address. It handles the conversion itself once it hatches.</p>
+    <dl class="deposit">
+      <dt>Base, Ethereum or BSC (USDC, USDT, ETH, BNB…)</dt><dd><code>${esc(d.evm)}</code></dd>
+    </dl>`
+      : `<p>Fund your gremlin with anything on these chains. It converts to QUAI and Qi on its own once it hatches.</p>
     <dl class="deposit">
       <dt>Quai (QUAI)</dt><dd><code>${esc(d.quai)}</code></dd>
       ${d.qiPaymentCode ? `<dt>Qi payment code</dt><dd><code>${esc(d.qiPaymentCode)}</code></dd>` : ''}
       <dt>Ethereum, Base or BSC (ETH, BNB, USDC, USDT, QUAI…)</dt><dd><code>${esc(d.evm)}</code></dd>
-    </dl>
+    </dl>`}
     <p><a href="${esc(new URL(`/g/${s.eggAddress}`, BOARD).toString())}" target="_blank" rel="noopener">Its page on the board</a></p>
     <button id="new" class="secondary">Hatch another</button>`)
   $('#new').onclick = () => { clearSession(); s = { launchId: newLaunchId() }; progress.reset(); progress.plan(planFor()); route() }

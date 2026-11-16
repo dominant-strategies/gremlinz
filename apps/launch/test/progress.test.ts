@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FLUENCE_STEPS, Progress, SPORESTACK_STEPS, type StepState } from '../src/progress.js'
+import { FLUENCE_STEPS, FLUENCE_USDC_STEPS, Progress, SPORESTACK_STEPS, type StepState } from '../src/progress.js'
 
 const make = () => {
   let saved: Record<string, StepState> | undefined
@@ -11,6 +11,15 @@ describe('hatch progress', () => {
   it('counts the signatures each plan needs', () => {
     expect(FLUENCE_STEPS.reduce((a, d) => a + d.sigs, 0)).toBe(6) // connect 1 + wrap/approve/bridge 3 + config 1 + Forge look 1 (no egg-key signature: the hatch service holds the account)
     expect(SPORESTACK_STEPS.reduce((a, d) => a + d.sigs, 0)).toBe(3) // connect + config + Forge look
+    expect(FLUENCE_USDC_STEPS.reduce((a, d) => a + d.sigs, 0)).toBe(4) // connect + one USDC transfer + config + Forge look
+  })
+
+  it('a USDC-on-Base hatch has no QUAI steps', () => {
+    const ids = FLUENCE_USDC_STEPS.map((d) => d.id)
+    expect(ids).not.toContain('bridge')
+    expect(ids).not.toContain('swap')
+    expect(FLUENCE_USDC_STEPS.some((d) => /quai/i.test(d.title))).toBe(false)
+    expect(ids.slice(ids.indexOf('fund-egg'))).toEqual(FLUENCE_STEPS.map((d) => d.id).filter((id) => id !== 'bridge' && id !== 'swap').slice(ids.indexOf('fund-egg')))
   })
 
   it('tracks a payment step through signatures, transactions and confirmation, and persists it', () => {

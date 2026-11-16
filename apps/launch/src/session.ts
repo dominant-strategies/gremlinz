@@ -34,6 +34,8 @@ export interface Session {
   host?: 'fluence' | 'sporestack'
   /** Fluence: the board's hatch job, which holds the egg's hosting account until the egg takes it over. */
   hatch?: { jobId: string; custody?: 'local' | 'mpc'; hostingAddress: string | null; minUsd: number }
+  /** How the maker pays for a Fluence egg: USDC on Base from an EVM wallet, or QUAI bridged from Pelagus. */
+  payWith?: 'usdc' | 'quai'
   bridgeTx?: string
   sporestackToken?: string
   invoiceUri?: string

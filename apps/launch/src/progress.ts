@@ -60,11 +60,24 @@ export const FLUENCE_STEPS: StepDef[] = [
   { id: 'fund-egg', title: 'Pay for the egg (QUAI or USDC)', sigs: 3, expect: '~1 min', who: 'you' },
   { id: 'bridge', title: 'Bridge QUAI to Base', sigs: 0, expect: '5–10 min', who: 'auto' },
   { id: 'swap', title: 'Swap to USDC (no gas)', sigs: 0, expect: '~1 min', who: 'auto' },
-  { id: 'start', title: 'Pay Fluence and start the server', sigs: 0, expect: '2–5 min', who: 'auto' },
-  HATCH_STEPS[0]!,
-  { id: 'custody', title: 'Egg takes over its hosting account', sigs: 0, expect: '~1 min after it announces', who: 'auto' },
-  ...HATCH_STEPS.slice(1),
+  ...fluenceTail(),
 ]
+
+/** Fluence, paid in USDC on Base straight from an EVM wallet: no wrap, bridge or swap. */
+export const FLUENCE_USDC_STEPS: StepDef[] = [
+  ...COMMON_STEPS,
+  { id: 'fund-egg', title: 'Pay for the egg (USDC on Base)', sigs: 1, expect: '~1 min', who: 'you' },
+  ...fluenceTail(),
+]
+
+function fluenceTail(): StepDef[] {
+  return [
+    { id: 'start', title: 'Pay Fluence and start the server', sigs: 0, expect: '2–5 min', who: 'auto' },
+    HATCH_STEPS[0]!,
+    { id: 'custody', title: 'Egg takes over its hosting account', sigs: 0, expect: '~1 min after it announces', who: 'auto' },
+    ...HATCH_STEPS.slice(1),
+  ]
+}
 
 export const SPORESTACK_STEPS: StepDef[] = [
   ...COMMON_STEPS,
@@ -116,6 +129,10 @@ export class Progress {
   private steps: Record<string, StepState>
   private defs: StepDef[] = COMMON_STEPS
   private open: boolean
+  /** Closed by the maker: hidden until something needs them (a signature or a failure), or they reopen it. */
+  private closed = false
+  /** What needed attention when it was closed ("step:status"), so only something new reopens it. */
+  private closedOn = ''
   private timer?: number
   private root?: HTMLElement
 
@@ -183,7 +200,15 @@ export class Progress {
     document.body.append(root)
     this.root = root
     root.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('[data-toggle]')) {
+      const el = e.target as HTMLElement
+      if (el.closest('[data-close]')) {
+        this.closed = true
+        this.closedOn = this.attention()
+        this.render()
+      } else if (el.closest('[data-reopen]')) {
+        this.closed = false
+        this.render()
+      } else if (el.closest('[data-toggle]')) {
         this.open = !this.open
         try { localStorage.setItem('gremlins.progress.open', this.open ? '1' : '0') } catch { /* ignore */ }
         this.render()
@@ -191,6 +216,13 @@ export class Progress {
     })
     this.timer = window.setInterval(() => this.render(), 1000)
     this.render()
+  }
+
+  /** The current step if it needs the maker (a wallet signature or a failure), as "step:status:sigsDone"; else ''. */
+  private attention(): string {
+    const d = this.defs.find((x) => !this.isDone(x.id))
+    const st = d && this.steps[d.id]
+    return st && (st.status === 'signing' || st.status === 'failed') ? `${d.id}:${st.status}:${st.sigsDone}` : ''
   }
 
   render() {
@@ -203,11 +235,25 @@ export class Progress {
     const cs = current ? this.steps[current.id] : undefined
     const busy = cs && (cs.status === 'active' || cs.status === 'waiting' || cs.status === 'signing')
 
-    const head = `<button class="pg-head" data-toggle aria-expanded="${this.open}">
-      <span class="pg-dot ${busy ? 'pg-live' : cs?.status === 'failed' ? 'pg-bad' : ''}"></span>
-      <span class="pg-title">${esc(this.title())}</span>
-      <span class="pg-meta">${current ? `step ${currentIdx + 1}/${this.defs.length}` : 'done'} · ✍ ${doneSigs}/${totalSigs}</span>
-      <span class="pg-caret">${this.open ? '▾' : '▴'}</span></button>`
+    // A closed window comes back by itself when the maker is needed: a wallet signature, or a failure.
+    if (this.closed) {
+      const need = this.attention()
+      if (need && need !== this.closedOn) this.closed = false
+    }
+    const dot = `<span class="pg-dot ${busy ? 'pg-live' : cs?.status === 'failed' ? 'pg-bad' : ''}"></span>`
+    if (this.closed) {
+      this.root.className = 'closed'
+      this.root.innerHTML = `<button class="pg-reopen" data-reopen title="Show hatch progress" aria-label="Show hatch progress">${dot}<span>${current ? `step ${currentIdx + 1}/${this.defs.length}` : 'done'}</span></button>`
+      return
+    }
+
+    const head = `<div class="pg-head">
+      <button class="pg-headbtn" data-toggle aria-expanded="${this.open}" title="${this.open ? 'Minimize' : 'Expand'}">
+        ${dot}
+        <span class="pg-title">${esc(this.title())}</span>
+        <span class="pg-meta">${current ? `step ${currentIdx + 1}/${this.defs.length}` : 'done'} · ✍ ${doneSigs}/${totalSigs}</span></button>
+      <button class="pg-win" data-toggle title="${this.open ? 'Minimize' : 'Expand'}" aria-label="${this.open ? 'Minimize' : 'Expand'}">${this.open ? '–' : '▴'}</button>
+      <button class="pg-win" data-close title="Close (comes back when you need to sign)" aria-label="Close">×</button></div>`
 
     const nowLine = current && cs && cs.status !== 'todo'
       ? `<div class="pg-now">${esc(current.title)}${cs.detail ? `: ${esc(cs.detail)}` : ''}${cs.startedAt && !cs.finishedAt ? ` · ${elapsed(t - cs.startedAt)}` : ''}</div>`
@@ -243,7 +289,12 @@ export class Progress {
 
 export const PROGRESS_CSS = `
 #progress{position:fixed;right:16px;bottom:16px;width:min(360px,calc(100vw - 32px));max-height:min(70vh,560px);overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:13px;z-index:10}
-#progress .pg-head{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:8px;width:100%;padding:10px 12px;cursor:pointer;position:sticky;top:0;background:var(--card);border-bottom:1px solid var(--line)}
+#progress .pg-head{display:flex;align-items:center;gap:2px;padding:4px 6px 4px 0;position:sticky;top:0;background:var(--card);border-bottom:1px solid var(--line)}
+#progress .pg-headbtn{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:8px;flex:1;min-width:0;padding:6px 6px 6px 12px;cursor:pointer}
+#progress .pg-win{all:unset;box-sizing:border-box;width:26px;height:26px;display:grid;place-items:center;border-radius:6px;cursor:pointer;color:var(--muted);font-size:16px;line-height:1}
+#progress .pg-win:hover,#progress .pg-win:focus-visible{background:color-mix(in srgb,var(--muted) 15%,transparent);color:inherit}
+#progress.closed{width:auto;overflow:visible;border-radius:999px}
+#progress .pg-reopen{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:8px 14px;cursor:pointer;color:var(--muted);font-variant-numeric:tabular-nums}
 #progress .pg-title{font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #progress .pg-meta{color:var(--muted);font-variant-numeric:tabular-nums}
 #progress .pg-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
