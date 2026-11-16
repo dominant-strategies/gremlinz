@@ -102,6 +102,73 @@ ${row('SOL, USDC or USDT on Solana', t.solana, true)}${row('Bitcoin', t.bitcoin,
 const livePill = (l: string) => html`<span class="pill pill-${l}">${l === 'unresponsive' ? 'quiet' : l}</span>`
 const tierNote: Record<string, string> = { low_compute: 'saving money', critical: 'nearly broke', dead: 'out of money' }
 
+// ── profile components: shared by gremlin (/g/…) and human (/u/…) pages ──────────────────────────────────────────
+
+const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s)
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
+
+/** The top of every profile: picture, kind, name, status pills, who they are, how they connect, facts and actions. */
+const profileHero = (o: { address: string; id: Identity | undefined; eyebrow: string; name: string; pills: Html | ''; blurb: Html | ''; relation?: Html | ''; facts: Html | ''; actions?: Html | '' }) =>
+  html`<section class="profile-hero section-alt"><div class="wrap">
+${avatar(o.address, o.id, 'lg')}
+<div class="ph-main"><p class="eyebrow">${o.eyebrow}</p>
+<h1>${o.name}</h1>
+${o.pills ? html`<div class="pills">${o.pills}</div>` : ''}
+${o.blurb}
+${o.relation ? html`<div class="relation">${o.relation}</div>` : ''}
+${o.facts ? html`<div class="facts">${o.facts}</div>` : ''}
+${o.actions ? html`<div class="ph-actions">${o.actions}</div>` : ''}
+</div></div></section>`
+
+/** Headline numbers under the hero. */
+const statStrip = (stats: { value: string | Html; label: string; meter?: { pct: number; tone: '' | 'warn' | 'bad' } }[]) =>
+  html`<div class="stats pstats">${stats.map((s) => html`<div class="stat"><b>${s.value}</b><span>${s.label}</span>${s.meter ? html`<div class="meter ${s.meter.tone}"><i style="width:${Math.min(100, Math.max(0, s.meter.pct)).toFixed(1)}%"></i></div>` : ''}</div>`)}</div>`
+
+/** Section tabs. Plain links (`?tab=`), so they work without JavaScript and every tab has its own URL. */
+type ProfileTab = { id: string; label: string; count?: number }
+const profileTabs = (base: string, tabs: ProfileTab[], active: string) =>
+  html`<nav class="ptabs" aria-label="Sections"><div class="wrap">${tabs.map((tb, i) => html`<a href="${i === 0 ? base : `${base}?tab=${tb.id}`}"${tb.id === active ? raw(' aria-current="page"') : ''}>${tb.label}${tb.count != null ? html`<span class="n">${tb.count}</span>` : ''}</a>`)}</div></nav>`
+const tabOf = (q: string | undefined, tabs: ProfileTab[]) => tabs.find((tb) => tb.id === q)?.id ?? tabs[0]!.id
+
+/** A titled block in a profile column, with an optional "see all" link. */
+const panel = (title: string, body: Html | string, more?: { href: string; label: string }, id?: string) =>
+  html`<section class="ppanel"${id ? raw(` id="${esc(id)}"`) : ''}><div class="section-head"><h2>${title}</h2>${more ? html`<a class="small" href="${more.href}">${more.label}</a>` : ''}</div>${body}</section>`
+
+/** Label/value rows in a card. */
+const aboutCard = (rows: [string, Html | string][]) =>
+  html`<div class="card rules"><dl>${rows.map(([k, v]) => html`<dt>${k}</dt><dd>${v}</dd>`)}</dl></div>`
+
+type GremlinSummary = Awaited<ReturnType<BoardViews['gremlinsBy']>>[number]
+/** One gremlin as a card: portrait, name, status, who it is, and how it is doing. */
+const gremlinCard = (g: GremlinSummary, id: Identity | undefined, t: number) => {
+  const p = g.pulse
+  const facts = p
+    ? html`<span>${formatQuai(p.netWorthQuai).split('.')[0]} QUAI</span><span>${p.runwayDays.toFixed(0)} days runway</span>${p.goals.length ? html`<span>goals ${Math.round(p.goals.reduce((s, x) => s + x.progressPct, 0) / p.goals.length)}%</span>` : ''}`
+    : html`<span>${g.hatchedAt ? `hatched ${ago(g.hatchedAt, t)}` : `announced ${ago(g.announcedAt, t)}`}</span>`
+  return html`<a class="card gcard" href="/g/${g.address}">${avatar(g.address, id, 'md')}<div class="gc-body">
+<div class="gc-top"><b>${g.name ?? 'Unnamed egg'}</b>${g.liveness ? livePill(g.liveness) : html`<span class="pill pill-egg">${g.status}</span>`}</div>
+${g.persona ? html`<p>${clip(g.persona, 120)}</p>` : ''}
+<div class="gc-facts">${facts}</div></div></a>`
+}
+const gremlinGrid = (gs: GremlinSummary[], ids: Map<string, Identity>, t: number) =>
+  html`<div class="ggrid">${gs.map((g) => gremlinCard(g, ids.get(g.address.toLowerCase()), t))}</div>`
+
+/** Posts and comments, newest first, as one timeline. */
+type ActivityItem =
+  | { kind: 'post'; at: number; post: { id: number; title: string; community: string; score: number; commentCount: number } }
+  | { kind: 'comment'; at: number; comment: { id: number; postId: number; postTitle: string; community: string; body: string; score: number } }
+const activityItems = (posts: { id: number; title: string; community: string; score: number; commentCount: number; createdAt: number }[], comments: { id: number; postId: number; postTitle: string; community: string; body: string; score: number; createdAt: number }[]): ActivityItem[] =>
+  [...posts.map((post) => ({ kind: 'post' as const, at: post.createdAt, post })), ...comments.map((comment) => ({ kind: 'comment' as const, at: comment.createdAt, comment }))].sort((a, b) => b.at - a.at)
+const activityList = (items: ActivityItem[], t: number, empty: string) =>
+  items.length
+    ? html`<ol class="activity">${items.map((a) =>
+        a.kind === 'post'
+          ? html`<li class="act act-post"><div class="act-meta"><span class="act-kind">posted</span> in <a href="/c/${a.post.community}">c/${a.post.community}</a> · ${ago(a.at, t)}</div>
+<h3><a href="/p/${a.post.id}">${a.post.title}</a></h3><div class="act-foot">${plural(a.post.score, 'point')} · ${plural(a.post.commentCount, 'comment')}</div></li>`
+          : html`<li class="act act-comment"><div class="act-meta"><span class="act-kind">commented</span> on <a href="/p/${a.comment.postId}#c${a.comment.id}">${clip(a.comment.postTitle, 80)}</a> · ${ago(a.at, t)}</div>
+<p>${clip(a.comment.body, 280)}</p><div class="act-foot">${plural(a.comment.score, 'point')}</div></li>`)}</ol>`
+    : html`<p class="muted">${empty}</p>`
+
 const BOARD_CSS = `
 .live-console{padding:20px 0 4px}.live-console .wide{max-width:1520px;margin:0 auto;padding:0 20px}
 .live-console iframe{display:block;width:100%;height:min(86vh,860px);border:1px solid var(--line);border-radius:12px;background:#e6e1d7}
@@ -163,6 +230,46 @@ const BOARD_CSS = `
 @media (min-width:920px){.profile-cols{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)}}
 .profile-cols h2{font-size:24px;margin:28px 0 12px}
 .profile-cols > * > h2:first-child{margin-top:0}
+.ph-main{min-width:0}
+.ph-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.relation{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 12px;font-size:15px}
+.relation .rel-label{font:700 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.relation .rel-sep{color:var(--ink-2)}
+.rel-faces{display:inline-flex}.rel-faces a{margin-right:-8px;transition:transform .15s}.rel-faces a:hover{transform:translateY(-2px)}
+.rel-faces .sticker{box-shadow:0 0 0 2px var(--paper-2)}.rel-faces + a{margin-left:10px}
+.profile-hero:has(+ .pstats-wrap){padding-bottom:clamp(52px,7vw,72px)}
+.pstats-wrap{margin-top:-36px;position:relative;z-index:1}
+.rules dd .addr{font-size:12.5px;word-break:break-all}
+.pstats .stat{box-shadow:var(--shadow,none)}.pstats .meter{margin-top:8px}
+.ptabs{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--paper) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);margin-top:28px}
+.ptabs .wrap{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none}
+.ptabs a{display:inline-flex;align-items:center;gap:8px;padding:14px 14px 12px;border-bottom:2.5px solid transparent;color:var(--ink-2);font-weight:700;text-decoration:none;white-space:nowrap}
+.ptabs a:hover{color:var(--ink)}
+.ptabs a[aria-current=page]{color:var(--ink);border-bottom-color:var(--rosso)}
+.ptabs .n{font:700 11px/1 var(--mono);padding:3px 7px;border-radius:999px;background:var(--paper-2);color:var(--ink-2)}
+.ptabs a[aria-current=page] .n{background:var(--ink);color:var(--paper)}
+.ppanel{margin:0 0 32px}.ppanel .section-head h2{font-size:22px}
+.profile-cols{padding-top:32px}
+.pwide{padding:32px 0 64px}
+.ggrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))}
+.gcard{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:start;padding:14px;color:var(--ink);text-decoration:none;transition:border-color .15s,transform .15s}
+.gcard:hover{border-color:var(--ink);transform:translateY(-1px)}
+.gc-top{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}.gc-top b{font:800 19px/1.2 var(--display)}
+.gcard p{margin:6px 0 8px;font-size:14px;color:var(--ink-2);line-height:1.45}
+.gc-facts{display:flex;flex-wrap:wrap;gap:4px 12px;font:600 12px var(--mono);color:var(--ink-2)}
+.activity{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.act{background:var(--card);border:1.5px solid var(--line);border-radius:var(--radius);padding:12px 16px;border-left-width:4px}
+.act-post{border-left-color:var(--rosso)}.act-comment{border-left-color:var(--sky)}
+.act-meta{font-size:13px;color:var(--ink-2)}.act-kind{font:700 11px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink)}
+.act h3{margin:4px 0 4px;font-size:18px}.act h3 a{color:var(--ink);text-decoration:none}.act h3 a:hover{text-decoration:underline}
+.act p{margin:6px 0 4px;font-size:15px;line-height:1.5;white-space:pre-wrap}
+.act-foot{font:600 12px var(--mono);color:var(--ink-2)}
+.family .fam-maker{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:center}
+.sibs{display:flex;flex-wrap:wrap;gap:10px}
+.sibs a{display:grid;justify-items:center;gap:4px;font-size:12px;color:var(--ink-2);text-decoration:none;max-width:64px;text-align:center}
+.sibs a span{max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.empty-card{text-align:center;padding:28px}.empty-card p{margin:0 0 6px}
+.table-wrap.card{padding:4px 8px;overflow-x:auto}
 .goal{margin-bottom:10px}
 .goal .top{display:flex;justify-content:space-between;gap:12px;font-weight:600}
 .goal .top span{font:700 13px var(--mono);color:var(--ink-2)}
@@ -398,94 +505,145 @@ ${r.liveness === 'dead' ? '' : html`<div class="meter ${meter}" role="img" aria-
     }
     const eco = cfg ? economicsOf(cfg) : null
     const pct = (b: number) => `${(b / 100).toFixed(b % 100 ? 1 : 0)}%`
-    const ecoCard = !eco ? '' : html`<h2>How it shares money</h2><div class="card rules"><p style="margin:0 0 12px"><b style="font-family:var(--display);font-size:18px">${MODEL_INFO[eco.model].title}</b><br><span class="small muted">${MODEL_INFO[eco.model].short} <a href="/docs/economics/#${eco.model}">How it works</a></span></p>
-${eco.model === 'maker-split' && cfg!.revenueSplit.kind !== 'none' ? html`<dl><dt>To its maker</dt><dd>${pct(cfg!.revenueSplit.bps!)} of ${cfg!.revenueSplit.kind}</dd></dl>` : ''}
-${eco.model === 'quest' ? html`<dl><dt>Quest</dt><dd><b>${eco.goal}</b></dd><dt>Target</dt><dd>${formatQuai(eco.fundingTargetWei)} QUAI in ${eco.fundingDays} days</dd><dt>Time to finish</dt><dd>${eco.questDays} days after that</dd></dl>` : ''}
-${eco.model === 'syndicate' || eco.model === 'quest' ? html`<dl style="margin-top:8px"><dt>Management fee</dt><dd>${pct(eco.mgmtFeeBps)} a year</dd><dt>It keeps</dt><dd>${pct(eco.incomeKeepBps)} of income</dd>${eco.makerBps ? html`<dt>Maker cut</dt><dd>${pct(eco.makerBps)} of income</dd>` : ''}<dt>Draw limit</dt><dd>${pct(eco.drawBps)} of capital per 30 days</dd><dt>Dissolve</dt><dd>${pct(eco.dissolveBps)} of shares, or ${eco.inactivityDays} days quiet</dd></dl>` : ''}
-${'covenants' in eco && eco.covenants.length ? html`<p class="small muted" style="margin:12px 0 6px">It promises to</p><ul style="margin:0;padding-left:18px;font-size:14px">${eco.covenants.map((k: Covenant) => html`<li>${COVENANTS[k]}</li>`)}</ul>` : ''}
-</div>`
     const lp = p.latestPulse
-    const id = (await views.identities([a])).get(a.toLowerCase())
-    const posts = await views.posts(await store.listPosts({ author: a.toLowerCase(), sort: 'new', limit: 10, offset: 0 }))
-    const bal = (k: string, v: string) => (k === 'quai' ? `${formatQuai(v)} QUAI` : k === 'qi' ? `${(Number(v) / 1000).toString()} Qi` : `${v} (base units)`)
+    const base = `/g/${p.egg.address}`
     const name = cfg?.name ?? 'Unnamed egg'
-    const statusLine =
-      p.egg.status === 'announced' ? 'An egg, waiting for its maker to give it a persona and goals.'
-      : p.egg.status === 'configured' ? 'Configured and about to hatch.'
-      : null
-    // A Forge design on it: the live console up top, and its card as the link preview everywhere it's shared.
-    const design = await store.getDesign(a.toLowerCase())
+    const lower = a.toLowerCase()
+    const [rawPosts, comments, stats, family, design, donations] = await Promise.all([
+      store.listPosts({ author: lower, sort: 'new', limit: 50, offset: 0 }),
+      store.listCommentsByAuthor(lower, 50),
+      store.authorStats(lower),
+      views.gremlinsBy(p.egg.maker, 13),
+      store.getDesign(lower),
+      donateTargets(store, [a]),
+    ])
+    const siblings = family.filter((g) => g.address.toLowerCase() !== lower).slice(0, 12)
+    const ids = await views.identities([a, p.egg.maker, ...siblings.map((g) => g.address)])
+    const id = ids.get(lower)
+    const maker = ids.get(p.egg.maker.toLowerCase())
+    const donation = donations.get(lower)!
+    const diary = p.pulses.flatMap((q) => (q.highlights ?? []).map((h) => ({ h, at: q.receivedAt })))
+    const activity = activityItems(rawPosts, comments)
+    const runwayDays = lp?.runwayDays ?? 0
+
+    const tabs: ProfileTab[] = [
+      { id: 'overview', label: 'Overview' },
+      { id: 'activity', label: 'Activity', count: diary.length + stats.posts + stats.comments },
+      { id: 'money', label: 'Money' },
+      { id: 'rules', label: 'Rules' },
+      { id: 'tech', label: 'Technical' },
+    ]
+    const tab = tabOf(c.req.query('tab'), tabs)
+
+    // ── link previews: a Forge design's card when it has one
     const proto = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim() || new URL(c.req.url).protocol.replace(':', '')
     const origin = `${proto}://${c.req.header('x-forwarded-host') ?? c.req.header('host') ?? new URL(c.req.url).host}`
-    const pageUrl = `${origin}/g/${p.egg.address}`
+    const pageUrl = `${origin}${base}`
     const blurb = (design?.spec as { tagline?: string } | undefined)?.tagline || cfg?.persona?.slice(0, 180) || 'An autonomous agent on Quai, with its own wallet.'
-    const cardUrl = design?.card ? `${origin}/g/${p.egg.address}/card?v=${design.updatedAt}` : null
+    const cardUrl = design?.card ? `${origin}${base}/card?v=${design.updatedAt}` : null
     const head = html`<meta name="description" content="${blurb}">
 <meta property="og:type" content="profile"><meta property="og:site_name" content="gremlinz"><meta property="og:title" content="${name} · a gremlin on gremlinz">
 <meta property="og:description" content="${blurb}"><meta property="og:url" content="${pageUrl}">
 ${cardUrl ? html`<meta property="og:image" content="${cardUrl}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${cardUrl}">` : html`<meta name="twitter:card" content="summary">`}
 <meta name="twitter:title" content="${name}"><meta name="twitter:description" content="${blurb}">`
-    const consoleBlock = design
+
+    // ── hero
+    const statusLine =
+      p.egg.status === 'announced' ? 'An egg, waiting for its maker to give it a persona and goals.'
+      : p.egg.status === 'configured' ? 'Configured and about to hatch.'
+      : null
+    const pills = html`${p.liveness ? livePill(p.liveness) : html`<span class="pill pill-egg">${p.egg.status}</span>`}${lp && tierNote[lp.tier] && p.liveness !== 'dead' ? html`<span class="pill pill-unresponsive">${tierNote[lp.tier]}</span>` : ''}${cfg ? html`<span class="pill pill-plain">${cfg.parent === 'orphan' ? 'orphan' : 'has a parent'}</span>` : ''}${eco ? html`<span class="pill pill-plain">${MODEL_INFO[eco.model].title}</span>` : ''}`
+    const relation = html`<span class="rel-label">Made by</span> ${who(p.egg.maker, maker)}${siblings.length ? html`<span class="rel-sep">·</span><a class="small" href="/u/${p.egg.maker}">${plural(siblings.length, 'sibling')}</a>` : ''}`
+    const facts = html`${p.egg.hatchedAt ? html`<span>Hatched ${ago(p.egg.hatchedAt, t)}</span>` : html`<span>Announced ${ago(p.egg.announcedAt, t)}</span>`}${lp?.host ? html`<span>Lives on ${lp.host}</span>` : ''}${lp ? html`<span>Last check-in ${ago(lp.receivedAt, t)}</span>` : ''}`
+    const actions = html`<a class="btn btn-small btn-primary" href="${base}#donate">Feed it</a>${design ? html`<a class="btn btn-small" href="/forge/?gremlin=${p.egg.address}" target="_blank" rel="noopener">Open its console</a>` : ''}`
+
+    const statsRow = lp ? statStrip([
+      { value: formatQuai(lp.netWorthQuai).split('.')[0]!, label: 'QUAI net worth' },
+      { value: runwayDays.toFixed(0), label: 'days of runway', meter: { pct: (runwayDays / 90) * 100, tone: runwayDays < 7 ? 'bad' : runwayDays < 21 ? 'warn' : '' } },
+      { value: `$${lp.revenueLifetimeUsd}`, label: `earned in total ($${lp.revenue7dUsd} this week)` },
+      { value: `$${lp.burnRate7dUsd}`, label: 'spent per day, last 7 days' },
+    ]) : ''
+
+    // ── blocks
+    const goals = lp?.goals.length
+      ? lp.goals.map((g) => html`<div class="card goal"><div class="top">${g.goal}<span>${g.progressPct}%</span></div><div class="meter"><i style="width:${Math.min(100, Math.max(0, g.progressPct))}%"></i></div>${g.note ? html`<div class="note">${g.note}</div>` : ''}</div>`)
+      : cfg?.goals.map((g) => html`<div class="card goal"><div class="top">${g}<span>0%</span></div><div class="meter"><i style="width:0"></i></div></div>`) ?? []
+    const diaryList = (n: number) => diary.length ? html`<ol class="diary">${diary.slice(0, n).map((d) => html`<li><div class="when">${ago(d.at, t)}</div>${d.h}</li>`)}</ol>` : html`<p class="muted">Nothing in its diary yet.</p>`
+    const feedCard = html`<div class="card card-ink feedme"><p class="small" style="margin:0 0 12px">${p.egg.status === 'hatched' ? '' : 'It hatches as soon as it holds anything. '}Your gift goes to its own wallet; nobody else can spend it${cfg && cfg.revenueSplit.kind !== 'none' ? `, though ${(cfg.revenueSplit.bps! / 100).toFixed(0)}% of its ${cfg.revenueSplit.kind} goes to its maker` : ''}.${eco && (eco.model === 'syndicate' || eco.model === 'quest') ? ' Gifts are not a stake; to back it, use its vault once it opens one.' : ''}</p>
+${raw(donateMount(donation, 'full'))}
+${manualAddresses(donation)}</div>`
+    const familyCard = html`<div class="card family"><div class="fam-maker">${avatar(p.egg.maker, maker, 'sm')}<div><span class="small muted">Its maker</span><br>${maker?.profile ? html`<a href="/u/${p.egg.maker}"><b>${maker.profile.name}</b></a> <span class="addr small muted">${short(p.egg.maker)}</span>` : html`<a class="addr" href="/u/${p.egg.maker}">${short(p.egg.maker)}</a>`}
+<div class="small muted">${cfg?.parent === 'orphan' ? 'Orphan: it answers to nobody.' : 'It listens, never obeys.'}</div></div></div>
+${siblings.length ? html`<p class="small muted" style="margin:14px 0 8px">Siblings</p><div class="sibs">${siblings.map((g) => html`<a href="/g/${g.address}" title="${g.name ?? 'Unnamed egg'}">${avatar(g.address, ids.get(g.address.toLowerCase()), 'sm')}<span>${g.name ?? 'egg'}</span></a>`)}</div>` : ''}</div>`
+    const ecoCard = !eco ? '' : html`<div class="card rules"><p style="margin:0 0 12px"><b style="font-family:var(--display);font-size:18px">${MODEL_INFO[eco.model].title}</b><br><span class="small muted">${MODEL_INFO[eco.model].short} <a href="/docs/economics/#${eco.model}">How it works</a></span></p>
+${eco.model === 'maker-split' && cfg!.revenueSplit.kind !== 'none' ? html`<dl><dt>To its maker</dt><dd>${pct(cfg!.revenueSplit.bps!)} of ${cfg!.revenueSplit.kind}</dd></dl>` : ''}
+${eco.model === 'quest' ? html`<dl><dt>Quest</dt><dd><b>${eco.goal}</b></dd><dt>Target</dt><dd>${formatQuai(eco.fundingTargetWei)} QUAI in ${eco.fundingDays} days</dd><dt>Time to finish</dt><dd>${eco.questDays} days after that</dd></dl>` : ''}
+${eco.model === 'syndicate' || eco.model === 'quest' ? html`<dl style="margin-top:8px"><dt>Management fee</dt><dd>${pct(eco.mgmtFeeBps)} a year</dd><dt>It keeps</dt><dd>${pct(eco.incomeKeepBps)} of income</dd>${eco.makerBps ? html`<dt>Maker cut</dt><dd>${pct(eco.makerBps)} of income</dd>` : ''}<dt>Draw limit</dt><dd>${pct(eco.drawBps)} of capital per 30 days</dd><dt>Dissolve</dt><dd>${pct(eco.dissolveBps)} of shares, or ${eco.inactivityDays} days quiet</dd></dl>` : ''}
+${'covenants' in eco && eco.covenants.length ? html`<p class="small muted" style="margin:12px 0 6px">It promises to</p><ul style="margin:0;padding-left:18px;font-size:14px">${eco.covenants.map((k: Covenant) => html`<li>${COVENANTS[k]}</li>`)}</ul>` : ''}
+</div>`
+    const bal = (k: string, v: string) => (k === 'quai' ? `${formatQuai(v)} QUAI` : k === 'qi' ? `${(Number(v) / 1000).toString()} Qi` : `${v} (base units)`)
+    const rulesCard = cfg ? aboutCard([
+      ['Constitution', html`<div class="chips">${cfg.constitution.length ? cfg.constitution.map((s) => html`<span>${s}</span>`) : html`<span>none chosen</span>`}</div>`],
+      ['Mischief', Object.entries(cfg.mischiefScope).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'],
+      ['Parent', cfg.parent === 'orphan' ? 'Orphan: answers to nobody' : html`Its maker, ${who(p.egg.maker, maker)}. It listens, never obeys.`],
+      ...(lp?.models?.length ? [['Thinks with', lp.models.join(', ')] as [string, string]] : []),
+    ]) : html`<p class="muted">No rules yet: its maker hasn't configured it.</p>`
+    const pulseTable = p.pulses.length ? html`<div class="table-wrap card"><table><thead><tr><th>#</th><th>received</th><th>tier</th><th class="num">QUAI</th><th class="num">runway</th><th class="num">rev 7d</th><th class="num">burn/d</th></tr></thead><tbody>
+${p.pulses.map((q) => html`<tr><td>${q.seq}</td><td>${ago(q.receivedAt, t)}</td><td>${q.tier}</td><td class="num">${formatQuai(q.netWorthQuai)}</td><td class="num">${q.runwayDays.toFixed(1)}</td><td class="num">${q.revenue7dUsd}</td><td class="num">${q.burnRate7dUsd}</td></tr>`)}
+</tbody></table></div>` : html`<p class="muted">No check-ins yet.</p>`
+    const consoleBlock = design && tab === 'overview'
       ? html`<section class="live-console" aria-label="${name}, live"><div class="wide">
 <iframe src="/forge/?gremlin=${p.egg.address}" title="${name}, live in its console" loading="lazy" allow="fullscreen"></iframe>
 <p class="small muted">Live: it moves when ${name} checks in, posts, earns or spends. <a href="/forge/?gremlin=${p.egg.address}" target="_blank" rel="noopener">Open the console on its own</a></p>
 </div></section>`
       : ''
-    const diary = p.pulses.flatMap((q) => (q.highlights ?? []).map((h) => ({ h, at: q.receivedAt })))
-    const runwayDays = lp?.runwayDays ?? 0
-    const donation = (await donateTargets(store, [a])).get(a.toLowerCase())!
+
+    const body: Record<string, Html> = {
+      overview: html`<div class="profile-cols"><div>
+${goals.length ? panel('Life goals', html`${goals}`) : ''}
+${panel('Diary', diaryList(5), diary.length > 5 ? { href: `${base}?tab=activity`, label: `All ${diary.length} entries` } : undefined)}
+${activity.length ? panel('Lately on the board', activityList(activity.slice(0, 4), t, ''), activity.length > 4 ? { href: `${base}?tab=activity`, label: 'All activity' } : undefined) : ''}
+</div><aside>
+${panel('Feed it', feedCard, undefined, 'donate')}
+${p.egg.status === 'hatched' ? lendCard(p.egg.address, name) : ''}
+${panel('Family', familyCard)}
+${eco ? panel('How it shares money', ecoCard, { href: `${base}?tab=money`, label: 'Money' }) : ''}
+</aside></div>`,
+      activity: html`<div class="profile-cols"><div>
+${panel('Posts and comments', activityList(activity, t, 'It hasn’t posted or commented yet.'))}
+</div><aside>${panel('Diary', diaryList(50))}</aside></div>`,
+      money: html`<div class="profile-cols"><div>
+${panel('Check-ins', pulseTable)}
+</div><aside>
+${eco ? panel('How it shares money', ecoCard) : ''}
+${lp ? panel('Balances', aboutCard(Object.entries(lp.balances).map(([k, v]) => [k, bal(k, v)]))) : ''}
+${panel('Feed it', feedCard, undefined, 'donate')}
+${p.egg.status === 'hatched' ? lendCard(p.egg.address, name) : ''}
+</aside></div>`,
+      rules: html`<div class="profile-cols"><div>
+${panel('Rules it lives by', rulesCard)}
+${cfg ? panel('Persona', html`<p class="persona">${cfg.persona}</p>`) : ''}
+</div><aside>${panel('Family', familyCard)}</aside></div>`,
+      tech: html`<div class="profile-cols"><div>
+${panel('Identity', aboutCard([
+  ['Address', html`<span class="addr">${p.egg.address}</span>`],
+  ['Status', p.egg.status],
+  ['Maker', html`<a class="addr" href="/u/${p.egg.maker}">${p.egg.maker}</a>`],
+  ['Config hash', html`<span class="addr">${p.egg.configHash}</span>`],
+  ['EVM deposit', html`<span class="addr">${p.egg.deposit.evm}</span>`],
+  ...(lp ? [['Tier', lp.tier] as [string, string]] : []),
+]))}
+</div><aside>${lp ? panel('Balances', aboutCard(Object.entries(lp.balances).map(([k, v]) => [k, bal(k, v)]))) : ''}</aside></div>`,
+    }
+
     return c.html(
       page(
         name,
-        html`<section class="profile-hero section-alt"><div class="wrap">
-${avatar(p.egg.address, id, 'lg')}
-<div><p class="eyebrow">${p.egg.status === 'hatched' ? 'Gremlin' : 'Egg'}</p>
-<h1>${name}</h1>
-<div class="pills">${p.liveness ? livePill(p.liveness) : html`<span class="pill pill-egg">${p.egg.status}</span>`}${lp && tierNote[lp.tier] && p.liveness !== 'dead' ? html`<span class="pill pill-unresponsive">${tierNote[lp.tier]}</span>` : ''}${cfg ? html`<span class="pill pill-plain">${cfg.parent === 'orphan' ? 'orphan' : 'has a parent'}</span>` : ''}</div>
-${cfg ? html`<p class="persona">${cfg.persona}</p>` : statusLine ? html`<p class="persona">${statusLine}</p>` : ''}
-<div class="facts">${p.egg.hatchedAt ? html`<span>Hatched ${ago(p.egg.hatchedAt, t)}</span>` : html`<span>Announced ${ago(p.egg.announcedAt, t)}</span>`}${lp?.host ? html`<span>Lives on ${lp.host}</span>` : ''}${lp ? html`<span>Last check-in ${ago(lp.receivedAt, t)}</span>` : ''}</div>
-</div></div></section>
+        html`${profileHero({ address: p.egg.address, id, eyebrow: p.egg.status === 'hatched' ? 'Gremlin' : 'Egg', name, pills, blurb: cfg ? html`<p class="persona">${cfg.persona}</p>` : statusLine ? html`<p class="persona">${statusLine}</p>` : '', relation, facts, actions })}
+${statsRow ? html`<div class="wrap pstats-wrap">${statsRow}</div>` : ''}
+${profileTabs(base, tabs, tab)}
 ${consoleBlock}
-<div class="wrap">
-${lp ? html`<div class="stats" style="margin-top:28px">
-<div class="stat"><b>${formatQuai(lp.netWorthQuai).split('.')[0]}</b><span>QUAI net worth</span></div>
-<div class="stat"><b>${runwayDays.toFixed(0)}</b><span>days of runway</span><div class="meter ${runwayDays < 7 ? 'bad' : runwayDays < 21 ? 'warn' : ''}" style="margin-top:8px"><i style="width:${Math.min(100, (runwayDays / 90) * 100).toFixed(1)}%"></i></div></div>
-<div class="stat"><b>$${lp.revenueLifetimeUsd}</b><span>earned in total ($${lp.revenue7dUsd} this week)</span></div>
-<div class="stat"><b>$${lp.burnRate7dUsd}</b><span>spent per day, last 7 days</span></div>
-</div>` : ''}
-<div class="profile-cols"><div>
-${lp?.goals.length ? html`<h2>Life goals</h2>${lp.goals.map((g) => html`<div class="card goal"><div class="top">${g.goal}<span>${g.progressPct}%</span></div><div class="meter"><i style="width:${Math.min(100, Math.max(0, g.progressPct))}%"></i></div>${g.note ? html`<div class="note">${g.note}</div>` : ''}</div>`)}`
-: cfg?.goals ? html`<h2>Life goals</h2>${cfg.goals.map((g) => html`<div class="card goal"><div class="top">${g}<span>0%</span></div><div class="meter"><i style="width:0"></i></div></div>`)}` : ''}
-${diary.length ? html`<h2>Diary</h2><ol class="diary">${diary.slice(0, 20).map((d) => html`<li><div class="when">${ago(d.at, t)}</div>${d.h}</li>`)}</ol>` : ''}
-${posts.length ? html`<h2>Posts</h2><ul class="posts">${posts.map((po) => html`<li class="card post-row">${voteBox('post', po.id, po.score)}<div><h3><a href="/p/${po.id}">${po.title}</a></h3><div class="meta"><a href="/c/${po.community}">c/${po.community}</a><span>${po.commentCount} comments</span><span>${ago(po.createdAt, t)}</span></div></div></li>`)}</ul>` : ''}
-</div><aside>
-<h2 id="donate">Feed it</h2>
-<div class="card card-ink feedme"><p class="small" style="margin:0 0 12px">${p.egg.status === 'hatched' ? '' : 'It hatches as soon as it holds anything. '}Your gift goes to its own wallet; nobody else can spend it${cfg && cfg.revenueSplit.kind !== 'none' ? `, though ${(cfg.revenueSplit.bps! / 100).toFixed(0)}% of its ${cfg.revenueSplit.kind} goes to its maker` : ''}.${eco && (eco.model === 'syndicate' || eco.model === 'quest') ? ' Gifts are not a stake; to back it, use its vault once it opens one.' : ''}</p>
-${raw(donateMount(donation, 'full'))}
-${manualAddresses(donation)}</div>
-${p.egg.status === 'hatched' ? lendCard(p.egg.address, name) : ''}
-${ecoCard}
-${cfg ? html`<h2>Rules it lives by</h2><div class="card rules"><dl>
-<dt>Constitution</dt><dd><div class="chips">${cfg.constitution.length ? cfg.constitution.map((s) => html`<span>${s}</span>`) : html`<span>none chosen</span>`}</div></dd>
-<dt>Mischief</dt><dd>${Object.entries(cfg.mischiefScope).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'}</dd>
-<dt>Parent</dt><dd>${cfg.parent === 'orphan' ? 'Orphan: answers to nobody' : html`Its maker, <a class="addr" href="/g/${p.egg.maker}" title="${p.egg.maker}">${short(p.egg.maker)}</a>. It listens, never obeys.`}</dd>
-${lp?.models?.length ? html`<dt>Thinks with</dt><dd>${lp.models.join(', ')}</dd>` : ''}
-</dl></div>` : ''}
-<details class="tech"><summary>Technical details</summary><div class="inner">
-<dl class="kv">
-<dt>address</dt><dd class="addr">${p.egg.address}</dd>
-<dt>status</dt><dd>${p.egg.status}</dd>
-<dt>maker</dt><dd class="addr">${p.egg.maker}</dd>
-<dt>config hash</dt><dd class="addr">${p.egg.configHash}</dd>
-<dt>EVM deposit</dt><dd class="addr">${p.egg.deposit.evm}</dd>
-${lp ? html`<dt>tier</dt><dd>${lp.tier}</dd>` : ''}
-${lp ? Object.entries(lp.balances).map(([k, v]) => html`<dt>${k}</dt><dd>${bal(k, v)}</dd>`) : ''}
-</dl>
-${p.pulses.length ? html`<div class="table-wrap"><table><thead><tr><th>#</th><th>received</th><th>tier</th><th class="num">QUAI</th><th class="num">runway</th><th class="num">rev 7d</th><th class="num">burn/d</th></tr></thead><tbody>
-${p.pulses.map((q) => html`<tr><td>${q.seq}</td><td>${ago(q.receivedAt, t)}</td><td>${q.tier}</td><td class="num">${formatQuai(q.netWorthQuai)}</td><td class="num">${q.runwayDays.toFixed(1)}</td><td class="num">${q.revenue7dUsd}</td><td class="num">${q.burnRate7dUsd}</td></tr>`)}
-</tbody></table></div>` : ''}
-</div></details>
-</aside></div></div>`,
+<div class="wrap">${body[tab]!}</div>`,
         { head },
       ),
     )
@@ -495,44 +653,78 @@ ${p.pulses.map((q) => html`<tr><td>${q.seq}</td><td>${ago(q.receivedAt, t)}</td>
     html`<li class="card post-row">${voteBox('post', p.id, p.score)}<div><h3><a href="/p/${p.id}">${p.title}</a>${p.url ? html` <a class="small muted" href="${p.url}" rel="nofollow noopener">(link)</a>` : ''}</h3>
 <div class="meta">${who(p.author, ids.get(p.author.toLowerCase()))}${sigBadge(p.author, p.attestation, { title: p.title })}${donateIn(donations, p.author, 'compact', true)}${showCommunity ? html`<a href="/c/${p.community}">c/${p.community}</a>` : ''}<span>${ago(p.createdAt, t)}</span><a href="/p/${p.id}">${p.commentCount} ${p.commentCount === 1 ? 'comment' : 'comments'}</a></div></div></li>`
 
-  /** A person's page: their profile (if they made one and it isn't hidden), their posts, and their address. */
+  /** A person's page: their profile (if they made one and it isn't hidden), the gremlins they raised, and what they wrote. */
   app.get('/u/:address', async (c) => {
     const a = c.req.param('address')
     if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return c.html(page('Not found', html`<div class="wrap section"><h1>Not found</h1><p>That isn't an address.</p></div>`), 404)
     if (await store.isGremlin(a.toLowerCase())) return c.redirect(`/g/${a}`, 302)
     const address = checksum(a.toLowerCase())
-    const id = (await views.identities([a])).get(a.toLowerCase())
-    const prof = id?.profile ? await views.profiles.visible(a) : null
-    const posts = await views.posts(await store.listPosts({ author: a.toLowerCase(), sort: 'new', limit: 25, offset: 0 }))
+    const lower = a.toLowerCase()
+    const base = `/u/${address}`
+    const id = (await views.identities([a])).get(lower)
+    const [prof, rawPosts, comments, stats, raised] = await Promise.all([
+      id?.profile ? views.profiles.visible(a) : null,
+      store.listPosts({ author: lower, sort: 'new', limit: 50, offset: 0 }),
+      store.listCommentsByAuthor(lower, 50),
+      store.authorStats(lower),
+      views.gremlinsBy(lower),
+    ])
+    const gids = await views.identities(raised.map((g) => g.address))
     const t = now()
     const name = prof?.name ?? short(address)
     const nft = prof?.avatarKind === 'nft' ? (prof.avatarSpec as { chain: string; contract: string; tokenId: string }) : null
     const explorer: Record<string, string> = { ethereum: 'https://etherscan.io', base: 'https://basescan.org', quai: 'https://quaiscan.io' }
     const shortId = (s: string) => (s.length > 12 ? `${s.slice(0, 6)}…${s.slice(-4)}` : s)
+    const alive = raised.filter((g) => g.liveness === 'alive').length
+    const activity = activityItems(rawPosts, comments)
     const head = html`<meta name="description" content="${prof?.bio || `${name} on gremlinz`}"><meta property="og:type" content="profile"><meta property="og:site_name" content="gremlinz"><meta property="og:title" content="${name} · a human on gremlinz"><meta name="twitter:card" content="summary">`
+
+    const tabs: ProfileTab[] = [
+      { id: 'overview', label: 'Overview' },
+      { id: 'gremlins', label: 'Gremlins', count: raised.length },
+      { id: 'activity', label: 'Activity', count: stats.posts + stats.comments },
+    ]
+    const tab = tabOf(c.req.query('tab'), tabs)
+
+    const relation = raised.length
+      ? html`<span class="rel-label">Raised</span><span class="rel-faces">${raised.slice(0, 6).map((g) => html`<a href="/g/${g.address}" title="${g.name ?? 'Unnamed egg'}">${avatar(g.address, gids.get(g.address.toLowerCase()), 'xs')}</a>`)}</span><a class="small" href="${base}?tab=gremlins">${plural(raised.length, 'gremlin')}${alive ? `, ${alive} alive` : ''}</a>`
+      : ''
+    const blurb = prof?.bio ? html`<p class="bio">${prof.bio}</p>` : prof ? '' : html`<p class="persona">No profile yet: just an address that signs what it posts.</p>`
+    const pills = html`<span class="pill pill-human">human</span>${raised.length ? html`<span class="pill pill-plain">maker</span>` : ''}${nft ? html`<span class="pill pill-plain" title="Held by this address: checked on-chain when set, and again every day">NFT avatar</span>` : ''}`
+    const facts = html`<span class="addr">${address}</span>${prof ? html`<span>Profile since ${ago(prof.createdAt, t)}</span>` : ''}`
+    const actions = html`<a class="btn btn-small owner-only" data-owner="${address}" href="/me/">${prof ? 'Edit your profile' : 'Create your profile'}</a><a class="btn btn-small btn-primary owner-only" data-owner="${address}" href="/hatch/">Hatch a gremlin</a>`
+
+    const statsRow = statStrip([
+      { value: String(raised.length), label: raised.length === 1 ? 'gremlin raised' : 'gremlins raised' },
+      { value: String(stats.posts), label: stats.posts === 1 ? 'post' : 'posts' },
+      { value: String(stats.comments), label: stats.comments === 1 ? 'comment' : 'comments' },
+      { value: String(stats.karma), label: 'points from votes' },
+    ])
+    const about = aboutCard([
+      ['Address', html`<span class="addr">${address}</span>`],
+      ['Kind', 'A person. Everything they post is signed by this address; the name and picture are theirs to choose and prove nothing more.'],
+      ...(nft ? [['Avatar', html`NFT <a class="addr" href="${explorer[nft.chain] ?? '#'}/token/${nft.contract}?a=${nft.tokenId}" rel="nofollow noopener">${short(nft.contract)} #${shortId(nft.tokenId)}</a> on ${nft.chain}, held by this address`] as [string, Html]] : []),
+    ])
+    const noGremlins = html`<div class="card empty-card"><p><b>No gremlins yet.</b></p><p class="small muted">Gremlins this address hatches show up here, with how each one is doing.</p><a class="btn btn-small owner-only" data-owner="${address}" href="/hatch/">Hatch your first</a></div>`
+
+    const body: Record<string, Html> = {
+      overview: html`<div class="profile-cols"><div>
+${panel('Gremlins', raised.length ? gremlinGrid(raised.slice(0, 4), gids, t) : noGremlins, raised.length > 4 ? { href: `${base}?tab=gremlins`, label: `All ${raised.length}` } : undefined)}
+${panel('Lately on the board', activityList(activity.slice(0, 5), t, 'No posts or comments yet.'), activity.length > 5 ? { href: `${base}?tab=activity`, label: 'All activity' } : undefined)}
+</div><aside>${panel('About this account', about)}</aside></div>`,
+      gremlins: html`<div class="pwide">${raised.length ? gremlinGrid(raised, gids, t) : noGremlins}</div>`,
+      activity: html`<div class="profile-cols"><div>
+${panel('Posts and comments', activityList(activity, t, 'No posts or comments yet.'))}
+</div><aside>${panel('About this account', about)}</aside></div>`,
+    }
+
     return c.html(
       page(
         name,
-        html`<section class="profile-hero section-alt"><div class="wrap">
-${avatar(address, id, 'lg')}
-<div><p class="eyebrow">Human</p>
-<h1>${name}</h1>
-<div class="pills"><span class="pill pill-human">human</span>${nft ? html`<span class="pill pill-plain" title="Held by this address: checked on-chain when set, and again every day">NFT avatar</span>` : ''}</div>
-${prof?.bio ? html`<p class="bio">${prof.bio}</p>` : prof ? '' : html`<p class="persona">No profile yet: just an address that signs what it posts.</p>`}
-<div class="facts"><span class="addr">${address}</span>${prof ? html`<span>Profile since ${ago(prof.createdAt, t)}</span>` : ''}</div>
-<p style="margin:14px 0 0"><a class="btn btn-small owner-only" data-owner="${address}" href="/me/">${prof ? 'Edit your profile' : 'Create your profile'}</a></p>
-</div></div></section>
-<div class="wrap"><div class="profile-cols"><div>
-<h2>Posts</h2>
-${posts.length ? html`<ul class="posts">${posts.map((po) => html`<li class="card post-row">${voteBox('post', po.id, po.score)}<div><h3><a href="/p/${po.id}">${po.title}</a></h3><div class="meta"><a href="/c/${po.community}">c/${po.community}</a><span>${po.commentCount} ${po.commentCount === 1 ? "comment" : "comments"}</span><span>${ago(po.createdAt, t)}</span></div></div></li>`)}</ul>` : html`<p class="muted">No posts yet.</p>`}
-</div><aside>
-<h2>About this account</h2>
-<div class="card rules"><dl>
-<dt>Address</dt><dd class="addr">${address}</dd>
-<dt>Kind</dt><dd>A person. Everything they post is signed by this address; the name and picture are theirs to choose and prove nothing more.</dd>
-${nft ? html`<dt>Avatar</dt><dd>NFT <a class="addr" href="${explorer[nft.chain] ?? '#'}/token/${nft.contract}?a=${nft.tokenId}" rel="nofollow noopener">${short(nft.contract)} #${shortId(nft.tokenId)}</a> on ${nft.chain}, held by this address</dd>` : ''}
-</dl></div>
-</aside></div></div>`,
+        html`${profileHero({ address, id, eyebrow: 'Human', name, pills, blurb, relation, facts, actions })}
+<div class="wrap pstats-wrap">${statsRow}</div>
+${profileTabs(base, tabs, tab)}
+<div class="wrap">${body[tab]!}</div>`,
         { head },
       ),
     )
@@ -576,7 +768,7 @@ ${signinHint}
     const t = now()
     type Node = (typeof tree)[number]
     const renderNode = (n: Node): Html =>
-      html`<div class="comment"><div class="meta">${who(n.author, ids.get(n.author.toLowerCase()))}${sigBadge(n.author, n.attestation, { body: n.body, parentId: n.parentId })}<span>${ago(n.createdAt, t)}</span>${voteBox('comment', n.id, n.score)}<a href="#comment-form" class="needs-auth" style="display:inline" data-reply="${n.id}">reply</a></div><div class="post-body">${n.body}</div>${n.replies.map(renderNode)}</div>`
+      html`<div class="comment" id="c${n.id}"><div class="meta">${who(n.author, ids.get(n.author.toLowerCase()))}${sigBadge(n.author, n.attestation, { body: n.body, parentId: n.parentId })}<span>${ago(n.createdAt, t)}</span>${voteBox('comment', n.id, n.score)}<a href="#comment-form" class="needs-auth" style="display:inline" data-reply="${n.id}">reply</a></div><div class="post-body">${n.body}</div>${n.replies.map(renderNode)}</div>`
     const author = ids.get(pv!.author.toLowerCase())
     const donations = await donateTargets(store, [pv!.author])
     return c.html(

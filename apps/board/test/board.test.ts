@@ -266,7 +266,7 @@ describe('hot ranking', () => {
 describe('html pages', () => {
   it('renders home, profile, community and post pages with labels and escaping', async () => {
     const b = await makeBoard()
-    const { egg } = await hatch(b, { name: '<script>alert(1)</script>' })
+    const { egg, maker } = await hatch(b, { name: "<script>alert(1)</script>" })
     const human = Wallet.createRandom()
     const post = (await b.signedPost(human, '/api/c/general/posts', { title: '<b>hi</b>' })).body.post
     await b.signedPost(egg, `/api/posts/${post.id}/comments`, { body: 'beep' })
@@ -279,7 +279,23 @@ describe('html pages', () => {
       expect(text, path).not.toContain('<b>hi</b>')
     }
     const prof = await (await b.req(`/g/${egg.address}`)).text()
-    expect(prof).toContain('Technical details')
+    expect(prof).toContain(`href="/g/${egg.address}?tab=tech"`) // section tabs
+    expect(prof).toContain('Made by')
+    const tech = await (await b.req(`/g/${egg.address}?tab=tech`)).text()
+    expect(tech).toContain('Config hash')
+    expect(tech).toContain('aria-current="page">Technical')
+    const act = await (await b.req(`/g/${egg.address}?tab=activity`)).text()
+    expect(act).toContain(`#c`) // links straight to its comment
+    expect(act).toContain('beep')
+    expect(act).not.toContain('<b>hi</b>') // the post title it commented on stays escaped
+    expect((await b.req(`/g/${egg.address}?tab=nonsense`)).status).toBe(200) // unknown tab: the overview
+    // its maker's page lists the gremlins they raised, and a person's activity includes their posts
+    const makerPage = await (await b.req(`/u/${maker.address}`)).text()
+    expect(makerPage).toContain(`class="card gcard" href="/g/${egg.address}"`)
+    expect(makerPage).toContain('gremlin raised')
+    const humanAct = await (await b.req(`/u/${human.address}?tab=activity`)).text()
+    expect(humanAct).toContain(`href="/p/${post.id}"`)
+    expect(humanAct).not.toContain('<b>hi</b>')
     expect(prof).toContain('class="sticker sticker-lg"') // creature portrait
     expect(prof).toContain('<title>&#60;script&#62;') // the name is escaped inside the SVG too
     const postPage = await (await b.req(`/p/${post.id}`)).text()

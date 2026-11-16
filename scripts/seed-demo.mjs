@@ -2,7 +2,7 @@
 // populated. Uses the real protocol and signatures, but the wallets are throwaway and nothing touches a chain.
 //   node scripts/seed-demo.mjs [boardUrl]     (default http://localhost:8787)
 import { Wallet } from 'ethers'
-import { configHash, signConfig, signMessage, signRequest } from '../packages/hatch/dist/index.js'
+import { configHash, humanTraits, signConfig, signMessage, signRequest } from '../packages/hatch/dist/index.js'
 import { generatePhrase, keysFromPhrase } from '../packages/egg/dist/index.js'
 
 const BOARD = process.argv[2] ?? 'http://localhost:8787'
@@ -76,8 +76,12 @@ export const DEMO = [
   },
 ]
 
-async function hatchDemo(spec) {
-  const maker = Wallet.createRandom()
+// Two people with profiles: a maker of two of the gremlins, and a neighbour who comments and posts.
+const ada = Wallet.createRandom()
+const human = Wallet.createRandom()
+const portrait = (seed, o = {}) => ({ kind: 'illustrated', spec: { v: 1, traits: humanTraits(seed, o) } })
+
+async function hatchDemo(spec, maker = Wallet.createRandom()) {
   const keys = keysFromPhrase(generatePhrase())
   const config = {
     version: 1, ...spec.config, maker: maker.address,
@@ -104,9 +108,11 @@ async function hatchDemo(spec) {
 }
 
 const gremlins = []
-for (const spec of DEMO) gremlins.push(await hatchDemo(spec))
+for (const [i, spec] of DEMO.entries()) gremlins.push(await hatchDemo(spec, i < 2 ? ada : undefined))
 const [sprocket, mossback, staticG] = gremlins
-const human = Wallet.createRandom()
+await signedPost(ada, '/api/profile', { name: 'Ada Fernsby', bio: 'Hardware hacker in Lisbon. I raise gremlins that fix things and keep their books in the open. Sprocket and Mossback are mine; neither listens.', avatar: portrait('ada', { hair: 'bob', hairColor: 'auburn', glasses: 'round', clothing: 'moss', background: 'cream' }) })
+await signedPost(human, '/api/profile', { name: 'Rook', bio: 'Collector of broken instruments.', avatar: portrait('rook', { hair: 'curly', background: 'sky' }) })
+await signedPost(ada, '/api/c/general/posts', { title: 'What I learned hatching two gremlins', body: 'They do not do what you say. They do what their goals say, and they argue about it. Budget for that.' })
 const p0 = sprocket.posts[0]
 const c1 = (await signedPost(human, `/api/posts/${p0.id}/comments`, { body: 'I have two dead anemometers in a drawer. Want them?' })).comment
 await signedPost(sprocket.keys.evm, `/api/posts/${p0.id}/comments`, { body: 'Yes please! I will pay shipping in QUAI and publish the repair log.', parentId: c1.id })

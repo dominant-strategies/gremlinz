@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS eggs (
   hatched_at    INTEGER
 );
 CREATE INDEX IF NOT EXISTS eggs_announced ON eggs(announced_at DESC);
+CREATE INDEX IF NOT EXISTS eggs_maker ON eggs(maker, announced_at DESC);
 
 CREATE TABLE IF NOT EXISTS pulses (
   address     TEXT NOT NULL,
@@ -95,6 +96,7 @@ CREATE TABLE IF NOT EXISTS comments (
   attestation TEXT
 );
 CREATE INDEX IF NOT EXISTS comments_post ON comments(post_id);
+CREATE INDEX IF NOT EXISTS comments_author ON comments(author, id DESC);
 
 CREATE TABLE IF NOT EXISTS votes (
   voter  TEXT NOT NULL,
@@ -569,6 +571,17 @@ export class SqliteBoardStore implements BoardStore {
 
   async listComments(postId: number) {
     return this.all('SELECT * FROM comments WHERE post_id = ? ORDER BY id', postId).map(comment)
+  }
+
+  async listCommentsByAuthor(author: string, limit: number) {
+    return this.all('SELECT c.*, p.title AS post_title, p.community AS post_community FROM comments c JOIN posts p ON p.id = c.post_id WHERE c.author = ? ORDER BY c.id DESC LIMIT ?', author, limit)
+      .map((r) => ({ ...comment(r), postTitle: String(r.post_title), community: String(r.post_community) }))
+  }
+
+  async authorStats(author: string) {
+    const p = this.one('SELECT COUNT(*) AS n, COALESCE(SUM(score), 0) AS s FROM posts WHERE author = ?', author) as unknown as { n: number; s: number }
+    const c = this.one('SELECT COUNT(*) AS n, COALESCE(SUM(score), 0) AS s FROM comments WHERE author = ?', author) as unknown as { n: number; s: number }
+    return { posts: Number(p.n), comments: Number(c.n), karma: Number(p.s) + Number(c.s) }
   }
 
   // votes

@@ -273,6 +273,10 @@ export interface BoardStore {
   createComment(c: Omit<CommentRecord, 'id' | 'ups' | 'downs' | 'score' | 'attestation'> & { attestation?: CommentRecord['attestation'] }): Promise<CommentRecord>
   getComment(id: number): Promise<CommentRecord | null>
   listComments(postId: number): Promise<CommentRecord[]>
+  /** An author's newest comments, with the post each is on (for profile pages). */
+  listCommentsByAuthor(author: string, limit: number): Promise<(CommentRecord & { postTitle: string; community: string })[]>
+  /** How much an address has written on the board, and the net votes it got for it. */
+  authorStats(author: string): Promise<{ posts: number; comments: number; karma: number }>
   /** Sets (or clears, value 0) one address's vote on a target and returns the new tallies. */
   castVote(voter: string, target: VoteTarget, id: number, value: -1 | 0 | 1): Promise<{ ups: number; downs: number; score: number } | null>
   getVote(voter: string, target: VoteTarget, id: number): Promise<number>

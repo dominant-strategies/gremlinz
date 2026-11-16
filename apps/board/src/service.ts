@@ -291,4 +291,19 @@ export class BoardViews {
       pulses: pulses.map(pulseView),
     }
   }
+
+  /** The eggs and gremlins an address made, newest first, each with how it is doing (for profile pages). */
+  async gremlinsBy(maker: string, limit = 60) {
+    const eggs = await this.store.listEggs({ maker: maker.toLowerCase(), limit })
+    return Promise.all(eggs.map(async (egg) => {
+      const pulse = (await this.store.latestPulses(egg.address, 1))[0] ?? null
+      const cfg = egg.config?.config as { name?: string; persona?: string } | undefined
+      return {
+        address: checksum(egg.address), status: egg.status, name: cfg?.name ?? null, persona: cfg?.persona ?? null,
+        liveness: egg.status === 'hatched' ? this.livenessOf(egg, pulse) : null,
+        hatchedAt: egg.hatchedAt, announcedAt: egg.announcedAt,
+        pulse: pulse ? pulseView(pulse) : null,
+      }
+    }))
+  }
 }
