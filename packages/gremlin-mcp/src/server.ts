@@ -10,6 +10,7 @@ import { registerDonationTools } from './tools/donation.js'
 import { registerSecurityTools, type SecurityDeps } from './tools/security.js'
 import { registerHashferenceTools, type HashferenceDeps } from './tools/hashference.js'
 import { registerHealthTools, sharedMonitor } from './tools/health.js'
+import { registerLentTools } from './tools/lent.js'
 import type { HealthMonitor } from './health/monitor.js'
 
 export interface ServerDeps {
@@ -36,5 +37,6 @@ export function createServer(deps: ServerDeps = {}): McpServer {
   registerSecurityTools(server, { now: deps.now, ...deps.security })
   registerHashferenceTools(server, deps.hashference)
   registerHealthTools(server, deps.health ?? (() => sharedMonitor()))
+  registerLentTools(server)
   return server
 }
