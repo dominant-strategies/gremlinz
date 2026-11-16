@@ -21,6 +21,9 @@ import { ForgeError, critiqueGremlin, cutWithInstructions, decodeImage, designGr
 import { EggLaunchData } from '@gremlins/egg/dist/launch.js'
 import type { HatchStore } from './hatch-store.ts'
 import { checkClaim, hatchView, newJob, type HatchConfig } from './hatch.ts'
+import { ProfileBody, ProfileError, Profiles, isHeavyAvatar, profileAttestation, profileView } from './profiles.ts'
+import { NftVerifier } from './nft.ts'
+import { humanSvg, type HumanSpec } from '@gremlins/hatch'
 
 export interface BoardDeps {
   store: BoardStore
@@ -38,6 +41,8 @@ export interface BoardDeps {
   hatch?: { store: HatchStore; cfg: HatchConfig; mpc?: MpcCoordinator }
   /** The model catalogue offered at hatch (models.ts); defaults to the providers' live catalogues. */
   models?: () => Promise<ModelCatalog>
+  /** Reads NFT ownership and pictures for NFT avatars; defaults to the public RPCs in config.nft. */
+  nft?: NftVerifier
 }
 
 type Env = { Variables: { address: string; body: unknown; attestation: Attestation } }
@@ -50,6 +55,8 @@ const HANDOFF_POST_RE = /^\/api\/nests\/[^/]+\/handoff\/?$/
 const FORGE_PHOTO_RE = /^\/api\/(forge\/(photo|design|critique)|gremlins\/0x[0-9a-fA-F]{40}\/design)\/?$/
 /** A gremlin's Forge look carries a portrait image. */
 const LOOK_RE = /^\/api\/gremlins\/[^/]+\/look\/?$/
+/** A human's profile may carry an uploaded picture. */
+const PROFILE_POST_RE = /^\/api\/profile\/?$/
 
 /** The client's address as our reverse proxy (Caddy) saw it: the last X-Forwarded-For hop, else the socket. */
 /**
@@ -76,7 +83,7 @@ const HatchRequest = EggLaunchData.pick({ maker: true, configHash: true, launchI
 const HATCH_AUTH_HEADER = 'x-hatch-auth'
 const sameUrl = (a: string, b: string) => a.replace(/\/+$/, '') === b.replace(/\/+$/, '')
 
-function err(c: Context, status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 429 | 500 | 502 | 503, error: string, extra: Record<string, unknown> = {}) {
+function err(c: Context, status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 415 | 429 | 500 | 502 | 503, error: string, extra: Record<string, unknown> = {}) {
   return c.json({ error, ...extra }, status)
 }
 
@@ -101,7 +108,9 @@ export async function createBoard(deps: BoardDeps) {
   const now = deps.now ?? (() => Date.now())
   const store = deps.store
   const smartAccounts = deps.smartAccounts ?? (cfg.smartAccounts ? new SmartAccountVerifier(cfg.smartAccounts) : undefined)
-  const views = new BoardViews(store, cfg, now)
+  const nft = deps.nft ?? new NftVerifier({ rpc: cfg.nft.rpc, ipfsGateway: cfg.nft.ipfsGateway })
+  const profiles = new Profiles({ store, cfg, now, nft })
+  const views = new BoardViews(store, cfg, now, profiles)
   const limiter = new RateLimiter()
 
   for (const c of cfg.seedCommunities)
@@ -123,11 +132,13 @@ export async function createBoard(deps: BoardDeps) {
   const handoffBody = bodyLimit({ maxSize: cfg.handoffMaxBodyBytes, onError: (c) => err(c, 413, 'handoff too large') })
   const lookBody = bodyLimit({ maxSize: 512 * 1024, onError: (c) => err(c, 413, 'look too large') })
   const forgePhotoBody = bodyLimit({ maxSize: cfg.forgePhotoMaxBodyBytes, onError: (c) => err(c, 413, 'render too large') })
+  const profileBody = bodyLimit({ maxSize: cfg.profileMaxBodyBytes, onError: (c) => err(c, 413, 'profile too large: pictures can be at most 2 MB') })
   app.use('/api/*', (c, next) => {
     if (c.req.method !== 'POST') return smallBody(c, next)
     if (HANDOFF_POST_RE.test(c.req.path)) return handoffBody(c, next)
     if (FORGE_PHOTO_RE.test(c.req.path)) return forgePhotoBody(c, next)
     if (LOOK_RE.test(c.req.path)) return lookBody(c, next)
+    if (PROFILE_POST_RE.test(c.req.path)) return profileBody(c, next)
     return smallBody(c, next)
   })
 
@@ -546,7 +557,75 @@ export async function createBoard(deps: BoardDeps) {
     const a = c.req.param('address')
     if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
     const posts = await store.listPosts({ author: a.toLowerCase(), sort: 'new', limit: 25, offset: 0 })
-    return c.json({ address: checksum(a), kind: await views.accountKind(a), posts: await views.posts(posts) })
+    const profile = await profiles.visible(a)
+    return c.json({ address: checksum(a), kind: await views.accountKind(a), profile: profile ? profileView(profile) : null, posts: await views.posts(posts) })
+  })
+
+  // ---------------------------------------------------------------- human profiles (profiles.ts)
+  // A name, a bio and an avatar for an address that isn't a gremlin, set by a request that address signed.
+
+  app.post('/api/profile', signed('profile'), async (c) => {
+    const p = ProfileBody.safeParse(c.get('body'))
+    if (!p.success) return err(c, 400, zodMessage(p.error))
+    const address = c.get('address')
+    if (isHeavyAvatar(p.data)) {
+      const limited = rateLimited(c, 'avatar', address)
+      if (limited) return limited
+    }
+    try {
+      const { profile, created } = await profiles.save(address, p.data, profileAttestation(c.get('attestation'), p.data.avatar?.kind === 'upload'))
+      return c.json({ profile: profileView(profile), hidden: profiles.hidden(address), page: `/u/${checksum(address)}` }, created ? 201 : 200)
+    } catch (e) {
+      if (e instanceof ProfileError) return err(c, e.status, e.message)
+      throw e
+    }
+  })
+
+  app.get('/api/profile/:address', async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    if (await store.isGremlin(a.toLowerCase())) return err(c, 404, "this address is a gremlin: see /api/gremlins/:address", { kind: 'gremlin' })
+    if (profiles.hidden(a)) return err(c, 404, 'profile hidden by the operator', { kind: 'human' })
+    let p = await store.getProfile(a)
+    // An NFT avatar not confirmed for a day is checked now; one that changed hands is gone from this answer.
+    if (p && profiles.stale(p)) p = await profiles.recheck(p)
+    if (!p) return err(c, 404, 'no profile yet', { kind: 'human' })
+    c.header('cache-control', 'no-cache')
+    return c.json({ profile: profileView(p) })
+  })
+
+  /**
+   * Avatars by address: /avatars/<address>.svg (illustrated) or .webp (upload, NFT; ?s=64 for the small one). The
+   * ?v=<hash> in the URLs the board hands out pins one version, cached for a year; without it (or with an old one) the
+   * answer is the current picture, cached briefly.
+   */
+  app.get('/avatars/:file', async (c) => {
+    const notFound = () => c.text('no avatar', 404, { 'cache-control': 'public, max-age=60' })
+    const m = /^(0x[0-9a-fA-F]{40})\.(svg|webp)$/.exec(c.req.param('file'))
+    if (!m) return notFound()
+    const [, a, ext] = m as unknown as [string, string, 'svg' | 'webp']
+    const p = await profiles.visible(a)
+    if (!p || !p.avatarHash) return notFound()
+    if (profiles.stale(p)) void profiles.recheck(p) // the sweep catches it too; this just keeps viewed ones fresh
+    const v = c.req.query('v')
+    const headers: Record<string, string> = {
+      'cache-control': v === p.avatarHash ? 'public, max-age=31536000, immutable' : 'public, max-age=60',
+      etag: `"${p.avatarHash}"`,
+      'x-content-type-options': 'nosniff',
+      'cross-origin-resource-policy': 'cross-origin',
+    }
+    if (c.req.header('if-none-match') === `"${p.avatarHash}"`) return c.body(null, 304, headers)
+    if (ext === 'svg') {
+      if (p.avatarKind !== 'illustrated') return notFound()
+      // Drawn from whitelisted traits; served with a CSP that would stop a script even if one got in.
+      const svg = humanSvg((p.avatarSpec as HumanSpec).traits, { size: 256, title: p.name })
+      return c.body(svg, 200, { ...headers, 'content-type': 'image/svg+xml; charset=utf-8', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox" })
+    }
+    if (p.avatarKind !== 'upload' && p.avatarKind !== 'nft') return notFound()
+    const img = await store.getAvatarImage(a)
+    if (!img || img.hash !== p.avatarHash) return notFound()
+    const bytes = c.req.query('s') === '64' ? img.small : img.large
+    return c.body(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength) as unknown as ArrayBuffer, 200, { ...headers, 'content-type': img.mime })
   })
 
   // ---------------------------------------------------------------- communities, posts, comments, votes
@@ -892,5 +971,6 @@ export async function createBoard(deps: BoardDeps) {
     return c.text('404 Not Found', 404)
   })
 
-  return app
+  // main.ts runs profiles.sweep() on a timer (NFT avatars whose owner changed).
+  return Object.assign(app, { profiles })
 }

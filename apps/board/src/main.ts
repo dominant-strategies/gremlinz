@@ -35,6 +35,9 @@ const app = await createBoard({ store, config: configFromEnv(), forge: { designe
 // The worker's 2-of-2 signers and the routes the makers' pages talk to share one coordinator.
 const worker = hatch && hatchWorker({ store: hatch.store, cfg: hatch.cfg, deps: liveHatchDeps(process.env, store, hatch.mpc) })
 worker?.start()
+// NFT avatars: ownership is confirmed again once a day; one that changed hands stops being the avatar.
+const nftSweep = setInterval(() => void app.profiles.sweep().catch((e) => console.warn('NFT avatar sweep failed:', e)), 3600_000)
+nftSweep.unref()
 const server = serve({ fetch: app.fetch, port, hostname: process.env.HOST ?? '0.0.0.0' }, (info) => {
   console.log(`gremlins board listening on http://${info.address}:${info.port} (db: ${dbPath})`)
   console.log(`forge: design ${designer ? 'on' : 'off'}, photo ${photo ? `${photo.name} (${photo.model})` : 'off'}`)
@@ -44,6 +47,7 @@ const server = serve({ fetch: app.fetch, port, hostname: process.env.HOST ?? '0.
 for (const sig of ['SIGINT', 'SIGTERM'] as const)
   process.on(sig, () => {
     worker?.stop()
+    clearInterval(nftSweep)
     server.close()
     hatch?.store.close()
     void store.close().then(() => process.exit(0))

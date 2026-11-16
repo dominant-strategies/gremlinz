@@ -21,6 +21,8 @@ services:
       BOARD_PUBLIC_URL: ${BOARD_PUBLIC_URL:-}
       BOARD_EGG_DEV_SSH_KEYS: ${BOARD_EGG_DEV_SSH_KEYS:-}
       BOARD_HATCH_CUSTODY: ${BOARD_HATCH_CUSTODY:-mpc}
+      # Human profiles: addresses whose profile is hidden (apps/board/README.md)
+      BOARD_HIDDEN_PROFILES: ${BOARD_HIDDEN_PROFILES:-}
     expose:
       - "8787"
   caddy:

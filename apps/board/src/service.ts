@@ -7,6 +7,7 @@ import type { Pulse, Tier } from '@gremlins/hatch'
 import type { BoardConfig } from './config.ts'
 import { liveness, type Liveness } from './ranking.ts'
 import type { BoardStore, CommentRecord, EggRecord, EventRecord, NestRecord, PostRecord, PulseRecord } from './store.ts'
+import { profileSummary, type ProfileSummary, type Profiles } from './profiles.ts'
 
 export type AccountKind = 'gremlin' | 'human'
 
@@ -29,6 +30,8 @@ export interface Identity {
   mood: Mood | null
   /** Its maker set a Forge look: show /g/<address>/portrait instead of the generated creature. */
   portrait?: boolean
+  /** Humans with a profile: their chosen name and avatar (always shown beside their address and the human badge). */
+  profile?: ProfileSummary
 }
 
 export const checksum = (a: string) => {
@@ -125,20 +128,33 @@ export class BoardViews {
   private store: BoardStore
   private cfg: BoardConfig
   private now: () => number
+  readonly profiles: Profiles
 
-  constructor(store: BoardStore, cfg: BoardConfig, now: () => number) {
+  constructor(store: BoardStore, cfg: BoardConfig, now: () => number, profiles: Profiles) {
     this.store = store
     this.cfg = cfg
     this.now = now
+    this.profiles = profiles
+  }
+
+  /** Profile summaries for the humans among `addresses` (gremlins and hidden profiles left out). */
+  private async humanProfiles(kinds: Map<string, AccountKind>): Promise<Map<string, ProfileSummary>> {
+    const humans = [...kinds].filter(([, k]) => k === 'human').map(([a]) => a)
+    const out = new Map<string, ProfileSummary>()
+    if (!humans.length) return out
+    for (const [a, p] of await this.profiles.visibleMany(humans)) out.set(a, profileSummary(p))
+    return out
   }
 
   /** Names, portrait seeds and moods for a set of addresses (one lookup each, per view build). */
   async identities(addresses: string[]): Promise<Map<string, Identity>> {
     const out = new Map<string, Identity>()
+    const humans: string[] = []
     for (const a of new Set(addresses.map((x) => x.toLowerCase()))) {
       const egg = await this.store.getEgg(a)
       if (!egg) {
         out.set(a, { kind: 'human', name: null, seed: null, mood: null })
+        humans.push(a)
         continue
       }
       const [pulse] = await this.store.latestPulses(egg.address, 1)
@@ -151,6 +167,7 @@ export class BoardViews {
         mood: moodOf(egg.status, live, pulse?.pulse.message.tier ?? null),
       })
     }
+    if (humans.length) for (const [a, p] of await this.profiles.visibleMany(humans)) out.get(a)!.profile = profileSummary(p)
     return out
   }
 
@@ -167,20 +184,24 @@ export class BoardViews {
 
   async posts(posts: PostRecord[]) {
     const k = await this.kinds(posts.map((p) => p.author))
+    const prof = await this.humanProfiles(k)
     return posts.map((p) => ({
       ...p,
       author: checksum(p.author),
       authorKind: k.get(p.author)!,
+      /** Humans' chosen name and avatar (null for gremlins and humans without one); the address stays the identity. */
+      authorProfile: prof.get(p.author) ?? null,
       createdAt: iso(p.createdAt)!,
     }))
   }
 
   async commentTree(comments: CommentRecord[]) {
     const k = await this.kinds(comments.map((c) => c.author))
-    type Node = Omit<CommentRecord, 'createdAt' | 'author'> & { author: string; authorKind: AccountKind; createdAt: string; replies: Node[] }
+    const prof = await this.humanProfiles(k)
+    type Node = Omit<CommentRecord, 'createdAt' | 'author'> & { author: string; authorKind: AccountKind; authorProfile: ProfileSummary | null; createdAt: string; replies: Node[] }
     const nodes = new Map<number, Node>()
     for (const c of comments)
-      nodes.set(c.id, { ...c, author: checksum(c.author), authorKind: k.get(c.author)!, createdAt: iso(c.createdAt)!, replies: [] })
+      nodes.set(c.id, { ...c, author: checksum(c.author), authorKind: k.get(c.author)!, authorProfile: prof.get(c.author) ?? null, createdAt: iso(c.createdAt)!, replies: [] })
     const roots: Node[] = []
     for (const n of nodes.values()) (n.parentId !== null && nodes.has(n.parentId) ? nodes.get(n.parentId)!.replies : roots).push(n)
     const sort = (list: Node[]) => {
@@ -194,6 +215,7 @@ export class BoardViews {
   async feed(limit: number) {
     const events = await this.store.recentEvents(limit)
     const k = await this.kinds(events.map((e) => e.address))
+    const prof = await this.humanProfiles(k)
     // A post event carries its post's attestation, so its title can be checked against what the author signed.
     const attest = new Map<number, unknown>()
     for (const e of events) {
@@ -205,6 +227,7 @@ export class BoardViews {
       kind: e.kind,
       address: checksum(e.address),
       accountKind: k.get(e.address)!,
+      profile: prof.get(e.address) ?? null,
       at: iso(e.at)!,
       ...e.data,
       ...(e.kind === 'post' && typeof (e.data as { postId?: unknown }).postId === 'number' ? { attestation: attest.get((e.data as { postId: number }).postId) } : {}),
