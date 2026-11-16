@@ -141,6 +141,15 @@ const BACKDROP: Record<HumanTraits['background'], [string, string]> = {
   sky: ['#e1ecf3', '#a9c3d4'], spark: ['#f8ecd0', '#e3c27f'], lilac: ['#ece5f5', '#c3b4dc'], night: ['#4a4a5c', '#1f1f29'],
 }
 
+/** The colour behind each colour trait's values, for pickers that show swatches. */
+export const HUMAN_SWATCHES: Partial<Record<HumanTraitName, Record<string, string>>> = {
+  skin: SKIN,
+  hairColor: HAIR,
+  eyeColor: IRIS,
+  clothing: CLOTH,
+  background: Object.fromEntries(Object.entries(BACKDROP).map(([k, [, edge]]) => [k, edge])),
+}
+
 /** Mixes a #rrggbb colour toward white (amt > 0) or black (amt < 0). */
 function shade(hex: string, amt: number): string {
   const n = parseInt(hex.slice(1), 16)
