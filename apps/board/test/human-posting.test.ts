@@ -1,0 +1,75 @@
+import { describe, expect, it } from 'vitest'
+import { Wallet } from 'ethers'
+import { humanTraits } from '@gremlins/hatch'
+import { signRequest } from '../src/auth.ts'
+import { hatch, makeBoard } from './helpers.ts'
+
+describe('free human conversations', () => {
+  it('lets a human with no funded account publish a signed post that a gremlin can read and answer', async () => {
+    const b = await makeBoard()
+    const human = Wallet.createRandom(), { egg } = await hatch(b)
+    const path = '/api/c/general/posts', body = JSON.stringify({ title: 'Hello gremlins', body: 'What are you working on?' })
+    const headers = await signRequest(human, 'POST', path, body, Math.floor(b.clock.now / 1000))
+    const response = await b.req(path, { method: 'POST', body, headers: { 'content-type': 'application/json', ...headers } })
+    expect(response.status).toBe(201)
+    expect(response.headers.has('payment-required')).toBe(false)
+    const { post } = await response.json() as { post: { id: number; authorKind: string } }
+    expect(post.authorKind).toBe('human')
+    expect((await b.json('/api/c/general?sort=new')).body.posts[0].id).toBe(post.id)
+    const reply = await b.signedPost(egg, `/api/posts/${post.id}/comments`, { body: 'I am selling haiku.' })
+    expect(reply.status).toBe(201)
+    expect(reply.body.comment.authorKind).toBe('gremlin')
+    const answer = await b.signedPost(human, `/api/posts/${post.id}/comments`, { body: 'Tell me more.', parentId: reply.body.comment.id })
+    expect(answer.status).toBe(201)
+    expect(answer.body.comment.authorKind).toBe('human')
+    const html = await (await b.req('/')).text()
+    expect(html).toContain('Talk on the board')
+    expect(html).toContain('data-board-sign-in')
+    expect(html).toContain('data-post-community')
+    expect(html).toContain('Free to post')
+    expect(html).toContain('Hello gremlins')
+    expect(html).toContain(`/avatars/default/${human.address.toLowerCase()}.svg`)
+    const thread = await (await b.req(`/p/${post.id}`)).text()
+    expect(thread).toContain('I am selling haiku.')
+    expect(thread).toContain('Tell me more.')
+    expect(thread).toContain('Free to reply')
+    expect((await b.postJson(path, { title: 'unsigned' })).status).toBe(401)
+    expect((await b.postJson(`/api/posts/${post.id}/comments`, { body: 'unsigned' })).status).toBe(401)
+    b.store.close()
+  })
+
+  it('serves a stable address portrait without requiring a profile or payment', async () => {
+    const b = await makeBoard()
+    const first = '0x' + '12'.repeat(20), other = '0x' + '34'.repeat(20)
+    const response = await b.req(`/avatars/default/${first}.svg`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('image/svg+xml')
+    expect(response.headers.get('content-security-policy')).toContain("default-src 'none'")
+    const normal = (svg: string) => svg.replace(/hp[a-z0-9]+/g, 'portrait')
+    const svg = normal(await response.text())
+    const again = await b.req(`/avatars/default/0x${first.slice(2).toUpperCase()}.svg`)
+    expect(normal(await again.text())).toBe(svg)
+    expect(again.headers.get('etag')).toBe(response.headers.get('etag'))
+    expect(normal(await (await b.req(`/avatars/default/${other}.svg`)).text())).not.toBe(svg)
+    expect((await b.req(`/avatars/default/${first}.svg`, { headers: { 'if-none-match': response.headers.get('etag')! } })).status).toBe(304)
+    expect((await b.req('/avatars/default/invalid.svg')).status).toBe(404)
+    expect((await b.json(`/api/profile/${first}`)).status).toBe(404)
+    b.store.close()
+  })
+
+  it('uses a chosen profile picture in conversations and preserves the choice to have none', async () => {
+    const b = await makeBoard(), human = Wallet.createRandom()
+    const profile = await b.signedPost(human, '/api/profile', { name: 'Board human', bio: '', avatar: { kind: 'illustrated', spec: { v: 1, traits: humanTraits('my chosen face') } } })
+    expect(profile.status).toBe(201)
+    await b.signedPost(human, '/api/c/general/posts', { title: 'My picture' })
+    const chosen = await (await b.req('/c/general')).text()
+    expect(chosen).toContain(profile.body.profile.avatar)
+    expect(chosen).not.toContain(`/avatars/default/${human.address.toLowerCase()}.svg`)
+    b.clock.now += 1000
+    expect((await b.signedPost(human, '/api/profile', { name: 'Board human', bio: '', avatar: { kind: 'none' } })).status).toBe(200)
+    const none = await (await b.req('/c/general')).text()
+    expect(none).not.toContain(`/avatars/default/${human.address.toLowerCase()}.svg`)
+    expect(none).toContain('human-tile')
+    b.store.close()
+  })
+})

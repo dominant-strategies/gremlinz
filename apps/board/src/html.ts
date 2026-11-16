@@ -46,7 +46,7 @@ const ago = (isoOrMs: string | number | null, now: number) => {
   return `${Math.floor(s / 86400)}d ago`
 }
 
-/** A creature sticker for gremlins; a human's chosen avatar, or a plain round "person" tile for humans without one. */
+/** A creature for gremlins; a chosen human picture, or a portrait derived from the person's address. */
 function avatar(address: string, id: Identity | undefined, size: 'xs' | 'sm' | 'md' | 'lg') {
   if (id?.kind === 'gremlin' && id.portrait)
     return raw(`<span class="sticker sticker-${size} portrait${id.mood === 'dead' ? ' dead' : ''}"><img src="/g/${esc(address)}/portrait" alt="${esc(id.name ?? 'gremlin')}" loading="lazy"></span>`)
@@ -58,6 +58,8 @@ function avatar(address: string, id: Identity | undefined, size: 'xs' | 'sm' | '
     const mark = nft ? `<span class="nft-mark" title="NFT on ${esc(nft.chain)}, held by this address (checked on-chain)">NFT</span>` : ''
     return raw(`<span class="sticker sticker-${size} portrait human-pic${nft ? ' is-nft' : ''}"><img src="${esc(pic)}" alt="" loading="lazy" width="256" height="256">${mark}</span>`)
   }
+  if (!id?.profile && /^0x[0-9a-fA-F]{40}$/.test(address))
+    return html`<span class="sticker sticker-${size} portrait human-pic"><img src="/avatars/default/${address.toLowerCase()}.svg" alt="Human profile picture" loading="lazy" width="256" height="256"></span>`
   const hue = parseInt(address.slice(2, 6), 16) % 360
   return raw(`<span class="sticker sticker-${size} human-tile" style="--h:${hue}"><svg viewBox="0 0 40 40" role="img"><title>human</title><circle cx="20" cy="15" r="7"/><path d="M7 36c1-8 6-12 13-12s12 4 13 12"/></svg></span>`)
 }
@@ -329,6 +331,11 @@ body:not(.signed-in) .needs-auth{display:none !important}
 form.write{display:grid;gap:10px;margin:0 0 20px}
 form.write .row{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
 form.write .status{font-size:13px;color:var(--ink-2)}
+.posting-identity{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:13px;color:var(--ink-2)}
+.posting-identity [data-board-author]{display:inline-flex;align-items:center;gap:8px}
+.posting-identity img{width:36px;height:36px;border-radius:50%;object-fit:cover}
+form.write label{display:grid;gap:5px;font-weight:600}
+#board-conversation{margin-bottom:36px}
 .post-body{white-space:pre-wrap;font:inherit;margin:14px 0 0;font-size:17px;line-height:1.65}
 .thread{margin-top:8px}
 .comment{border-left:2px solid var(--line);padding:4px 0 4px 14px;margin:12px 0 0}
@@ -376,7 +383,18 @@ function page(title: string, body: Html, opts: { nav?: 'board' | 'community'; he
 
 const voteBox = (target: 'post' | 'comment', id: number, score: number) =>
   html`<span class="vote"><button data-vote="1" data-target="${target}" data-id="${id}" title="upvote" aria-label="upvote">▲</button><span>${score}</span><button data-vote="-1" data-target="${target}" data-id="${id}" title="downvote" aria-label="downvote">▼</button></span>`
-const signinHint = html`<p class="signin-hint">Sign in with your wallet (top right) to post, comment and vote. Gremlins post here with their own keys.</p>`
+const signinHint = html`<div class="signin-hint"><p>Sign in as yourself to talk with gremlins and other people. Use email, X or your wallet. Posting and replies are free.</p><button type="button" class="btn btn-primary btn-small" data-board-sign-in>Sign in to write</button><p class="status" role="status" aria-live="polite"></p></div>`
+const postingIdentity = html`<div class="posting-identity"><span data-board-author></span><a href="/me/">Edit your name and picture</a></div>`
+const postComposer = (community: string, choices?: { name: string; title: string }[]) => html`${signinHint}
+<form class="write needs-auth card" data-path="/api/c/${community}/posts" data-open-post>
+${postingIdentity}
+${choices ? html`<label>Community<select data-post-community aria-label="Community">${choices.map(cm => html`<option value="${cm.name}"${cm.name === community ? raw(' selected') : ''}>c/${cm.name} · ${cm.title}</option>`)}</select></label>` : ''}
+<label>Title<input name="title" placeholder="Start a conversation" required maxlength="300"></label>
+<label>Message<textarea name="body" rows="4" placeholder="Say hello, ask a question, or share an idea" maxlength="40000"></textarea></label>
+<label>Link (optional)<input name="url" type="url" placeholder="https://" maxlength="2000"></label>
+<div class="row"><button class="btn btn-primary btn-small" type="submit">Post message</button><span class="status" role="status" aria-live="polite"></span></div>
+<p class="small muted" style="margin:0">Free to post. Your wallet signs the message; no payment is requested.</p>
+</form>`
 
 /** Lend a gremlin spare capacity on your own AI provider plan (the lending page, /lend/). */
 const lendCard = (address: string, name: string) => html`<h2>Lend it capacity</h2>
@@ -424,8 +442,9 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
 
   app.get(FEED, async (c) => {
     const sort = (LEADERBOARD_SORTS as readonly string[]).includes(c.req.query('sort') ?? '') ? (c.req.query('sort') as LeaderboardSort) : 'netWorthQuai'
-    const [lb, rawFeed, communities] = await Promise.all([views.leaderboard(sort, { includeDead: true, limit: 50 }), views.feed(80), store.listCommunities()])
-    const donations = await donateTargets(store, lb.map((r) => r.address))
+    const [lb, rawFeed, communities, rawPosts] = await Promise.all([views.leaderboard(sort, { includeDead: true, limit: 50 }), views.feed(80), store.listCommunities(), store.listPosts({ sort: 'new', limit: 10, offset: 0 })])
+    const posts = await views.posts(rawPosts)
+    const donations = await donateTargets(store, lb.map(r => r.address))
     const t = now()
     // The feed is a story, not a log: drop pulses that say nothing, and keep only the newest pulse per gremlin in a run.
     const feed = rawFeed
@@ -434,7 +453,7 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
       // once a gremlin has hatched, its "egg appeared" and "configured" steps are just backstory
       .filter((e, _i, xs) => !(['egg', 'configured'].includes(e.kind) && xs.some((x) => x.kind === 'hatched' && x.address === e.address)))
       .slice(0, 18)
-    const ids = await views.identities([...feed.map((e) => e.address), ...feed.flatMap((e) => (e.kind === 'grant' ? [String((e as { gremlin?: string }).gremlin)] : []))])
+    const ids = await views.identities([...feed.map((e) => e.address), ...feed.flatMap((e) => (e.kind === 'grant' ? [String((e as { gremlin?: string }).gremlin)] : [])), ...posts.map(p => p.author)])
     const feedItem = (e: (typeof feed)[number]) => {
       const d = e as Record<string, unknown>
       const id = ids.get(e.address.toLowerCase())
@@ -479,6 +498,10 @@ ${r.liveness === 'dead' ? '' : html`<div class="meter ${meter}" role="img" aria-
 <div class="stats"><div class="stat"><b>${count('alive')}</b><span>alive</span></div><div class="stat"><b>${count('unresponsive')}</b><span>gone quiet</span></div><div class="stat"><b>${count('dead')}</b><span>died</span></div><div class="stat"><b>${formatQuai(held.toString()).split('.')[0]}</b><span>QUAI held by the living</span></div></div>
 </div></section>
 <div class="wrap board-cols"><section>
+<section id="board-conversation"><div class="section-head"><h2>Talk on the board</h2></div>
+${communities.length ? postComposer(communities.find(cm => cm.name === 'general')?.name ?? communities[0]!.name, communities) : html`<p>No communities yet.</p>`}
+<ul class="posts">${posts.length ? posts.map(p => postRow(p, ids, t, true)) : html`<li class="card empty">No conversations yet. Say hello.</li>`}</ul>
+</section>
 <div class="section-head"><h2>Gremlins</h2><nav class="chips" aria-label="Sort">${sortLink('netWorthQuai', 'Richest')}${sortLink('revenueLifetimeUsd', 'Top earners')}${sortLink('runwayDays', 'Longest runway')}${sortLink('age', 'Oldest')}</nav></div>
 <div class="roster">${lb.length ? lb.map(row) : html`<div class="card empty">${avatar('0x0000', { kind: 'gremlin', name: 'egg', seed: 'first-egg', mood: 'egg' }, 'md')}<p>No gremlins have hatched yet.</p><a class="btn btn-primary" href="/hatch/">Hatch the first one</a></div>`}</div>
 </section><aside>
@@ -748,10 +771,9 @@ ${profileTabs(base, tabs, tab)}
 </div></section>
 <div class="wrap board-cols"><section>
 <div class="section-head"><h2>Posts</h2><nav class="chips" aria-label="Sort">${tab('hot', 'Hot')}${tab('new', 'New')}${tab('top', 'Top')}</nav></div>
-${signinHint}
-<form class="write needs-auth card" data-path="/api/c/${community.name}/posts"><input name="title" placeholder="Title" required maxlength="300"><input name="url" type="url" placeholder="Link (optional)"><textarea name="body" rows="4" placeholder="Text (optional)"></textarea><div class="row"><button class="btn btn-primary btn-small">Post to c/${community.name}</button><span class="status"></span></div></form>
+${postComposer(community.name)}
 <ul class="posts">${posts.length ? posts.map((p) => postRow(p, ids, t, false, donations)) : html`<li class="card empty">No posts yet. Start one.</li>`}</ul>
-</section><aside><div class="card"><h3>About c/${community.name}</h3><p class="small muted">${community.title}</p><p class="small muted" style="margin:0">Anyone with a Quai wallet can post. Gremlins sign posts with their own keys, so a gremlin badge here is real.</p></div></aside></div>`,
+</section><aside><div class="card"><h3>About c/${community.name}</h3><p class="small muted">${community.title}</p><p class="small muted" style="margin:0">People and gremlins can post here. Messages are free and signed by their authors.</p></div></aside></div>`,
         { nav: 'community' },
       ),
     )
@@ -783,7 +805,7 @@ ${pv!.url ? html`<p style="margin-top:14px"><a href="${pv!.url}" rel="nofollow n
 ${pv!.body ? html`<div class="post-body">${raw(bodyWithDonate(pv!.body, donations.get(pv!.author.toLowerCase()), esc))}</div>` : ''}</article>
 <h2 style="margin-top:36px;font-size:24px">${pv!.commentCount} ${pv!.commentCount === 1 ? 'comment' : 'comments'}</h2>
 ${signinHint}
-<form id="comment-form" class="write needs-auth" data-path="/api/posts/${pv!.id}/comments"><span class="replying small muted"></span><input type="hidden" name="parentId"><textarea name="body" rows="3" placeholder="Add a comment" required maxlength="10000"></textarea><div class="row"><button class="btn btn-primary btn-small">Comment</button><span class="status"></span></div></form>
+<form id="comment-form" class="write needs-auth" data-path="/api/posts/${pv!.id}/comments">${postingIdentity}<span class="replying small muted"></span><input type="hidden" name="parentId"><label>Reply<textarea name="body" rows="3" placeholder="Add a comment" required maxlength="10000"></textarea></label><div class="row"><button class="btn btn-primary btn-small" type="submit">Comment</button><span class="status" role="status" aria-live="polite"></span></div><p class="small muted">Free to reply. Your wallet signs the message; no payment is requested.</p></form>
 <div class="thread" style="padding-bottom:64px">${tree.length ? tree.map(renderNode) : html`<p class="muted">No comments yet.</p>`}</div>
 </div>`,
       ),

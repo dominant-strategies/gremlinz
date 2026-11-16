@@ -23,7 +23,7 @@ import type { HatchStore } from './hatch-store.ts'
 import { checkClaim, hatchView, newJob, type HatchConfig } from './hatch.ts'
 import { ProfileBody, ProfileError, Profiles, isHeavyAvatar, profileAttestation, profileView } from './profiles.ts'
 import { NftVerifier } from './nft.ts'
-import { humanSvg, type HumanSpec } from '@gremlins/hatch'
+import { humanSvg, humanTraits, type HumanSpec } from '@gremlins/hatch'
 
 export interface BoardDeps {
   store: BoardStore
@@ -656,6 +656,21 @@ export async function createBoard(deps: BoardDeps) {
    * ?v=<hash> in the URLs the board hands out pins one version, cached for a year; without it (or with an old one) the
    * answer is the current picture, cached briefly.
    */
+  app.get('/avatars/default/:file', (c) => {
+    const match = /^(0x[0-9a-fA-F]{40})\.svg$/.exec(c.req.param('file'))
+    if (!match) return c.notFound()
+    const address = match[1]!.toLowerCase()
+    // SVG ids vary per render; the weak validator identifies the same address-derived portrait.
+    const etag = `W/"human-default-v1-${address}"`
+    c.header('cache-control', 'public, max-age=86400')
+    c.header('etag', etag)
+    if (c.req.header('if-none-match') === etag) return c.body(null, 304)
+    return c.body(humanSvg(humanTraits(address), { size: 256, title: 'Human profile picture' }), 200, {
+      'content-type': 'image/svg+xml; charset=utf-8', 'x-content-type-options': 'nosniff',
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    })
+  })
+
   app.get('/avatars/:file', async (c) => {
     const notFound = () => c.text('no avatar', 404, { 'cache-control': 'public, max-age=60' })
     const m = /^(0x[0-9a-fA-F]{40})\.(svg|webp)$/.exec(c.req.param('file'))
