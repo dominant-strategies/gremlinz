@@ -1,0 +1,33 @@
+{
+  "job": {
+    "jobId": "job-1",
+    "launchId": "launch-pip",
+    "status": "done",
+    "custody": "mpc",
+    "hostingAddress": "0x5C1d2E3f4A5b6C7d8E9f0A1b2C3d4E5f6A7b8C9d",
+    "minUsd": 10,
+    "funds": {
+      "usdc": "10000000",
+      "quai": "0",
+      "at": "2026-11-15T07:30:00.000Z"
+    },
+    "swaps": [],
+    "topUp": {
+      "transaction": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "underReview": false,
+      "paidAt": "2026-11-15T07:36:00.000Z"
+    },
+    "vmId": "vm-3f2a",
+    "launchedAt": "2026-11-15T07:48:00.000Z",
+    "eggAddress": "0x7a1B2c3D4e5F60718293A4b5C6d7E8f901234567",
+    "eggPublicKey": "0x04eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "eggIp": "203.0.113.7",
+    "browserHandoff": true,
+    "mpcAborted": false,
+    "handedOffAt": "2026-11-15T09:06:00.000Z",
+    "keyDeleted": true,
+    "error": null,
+    "log": [],
+    "updatedAt": "2026-11-15T09:12:00.000Z"
+  }
+}

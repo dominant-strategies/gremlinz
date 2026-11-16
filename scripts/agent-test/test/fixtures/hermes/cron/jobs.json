@@ -1,0 +1,14 @@
+{
+  "jobs": [
+    {
+      "id": "a0a0a0a0a0a1",
+      "name": "wake",
+      "last_status": "ok",
+      "last_error": null,
+      "last_run_at": "2026-11-16T11:40:00.000+00:00",
+      "next_run_at": "2026-11-16T12:25:00.000+00:00",
+      "failure_streak": 0,
+      "enabled": true
+    }
+  ]
+}

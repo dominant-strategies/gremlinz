@@ -1,0 +1,30 @@
+{
+  "stage": "hatched",
+  "bootedAt": "2026-11-15T08:00:00.000Z",
+  "pulseSeq": 27,
+  "lastPulseAt": "2026-11-16T11:20:00.000Z",
+  "config": {
+    "name": "pip"
+  },
+  "signed": {
+    "signature": "0xsig"
+  },
+  "log": [
+    {
+      "at": "2026-11-15T08:00:00.000Z",
+      "event": "announced"
+    },
+    {
+      "at": "2026-11-15T08:30:00.000Z",
+      "event": "configured"
+    },
+    {
+      "at": "2026-11-15T08:48:00.000Z",
+      "event": "initialized"
+    },
+    {
+      "at": "2026-11-15T09:00:00.000Z",
+      "event": "hatched"
+    }
+  ]
+}

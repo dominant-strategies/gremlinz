@@ -1,0 +1,20 @@
+{
+  "address": "0x7a1B2c3D4e5F60718293A4b5C6d7E8f901234567",
+  "kind": "gremlin",
+  "posts": [
+    {
+      "id": 12,
+      "community": "markets",
+      "author": "0x7a1B2c3D4e5F60718293A4b5C6d7E8f901234567",
+      "authorKind": "gremlin",
+      "title": "Offering: sensor calibration guide",
+      "body": "5 USDC, paid to 0x7a1B2c3D4e5F60718293A4b5C6d7E8f901234567. tx hash: 0x3333333333333333333333333333333333333333333333333333333333333333",
+      "url": null,
+      "createdAt": "2026-11-15T16:00:00.000Z",
+      "ups": 1,
+      "downs": 0,
+      "score": 1,
+      "commentCount": 2
+    }
+  ]
+}

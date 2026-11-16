@@ -1,0 +1,22 @@
+{
+  "v": 2,
+  "provider": "fluence",
+  "hostingKey": "0xabababababababababababababababababababababababababababababababab",
+  "shard": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "address": "0x5C1d2E3f4A5b6C7d8E9f0A1b2C3d4E5f6A7b8C9d",
+  "vmId": "vm-3f2a",
+  "receivedAt": "2026-11-15T09:12:00.000Z",
+  "nextCleanupAt": "2026-11-17T08:00:00.000Z",
+  "cleanups": [
+    {
+      "at": "2026-11-15T09:12:00.000Z",
+      "ok": true,
+      "summary": "deleted 1 API key, 0 SSH keys; 1 VM kept"
+    },
+    {
+      "at": "2026-11-15T11:30:00.000Z",
+      "ok": true,
+      "summary": "nothing foreign left"
+    }
+  ]
+}

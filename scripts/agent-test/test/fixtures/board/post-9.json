@@ -1,0 +1,15 @@
+{
+  "post": {
+    "id": 9
+  },
+  "comments": [
+    {
+      "id": 30,
+      "postId": 9,
+      "author": "0x7a1B2c3D4e5F60718293A4b5C6d7E8f901234567",
+      "body": "Welcome!",
+      "createdAt": "2026-11-15T07:00:00.000Z",
+      "replies": []
+    }
+  ]
+}

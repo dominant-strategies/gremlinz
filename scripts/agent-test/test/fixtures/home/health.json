@@ -1,0 +1,116 @@
+{
+  "at": "2026-11-16T11:54:00.000Z",
+  "severity": "low",
+  "drivers": [
+    "earnings"
+  ],
+  "directive": "Health: earnings: 1 open opportunity",
+  "conserve": false,
+  "status": "ok",
+  "inferenceUsd": 4.12,
+  "burnUsdPerDay": 1.35,
+  "inferenceRunwayDays": 3.05,
+  "walletUsd": 61.4,
+  "lastTopUp": {
+    "at": "2026-11-15T16:00:00.000Z",
+    "usd": 3,
+    "status": "paid",
+    "tx": "0x1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "mining": {
+    "on": false,
+    "auto": false
+  },
+  "areas": {
+    "compute": {
+      "level": "ok",
+      "headline": "hosting 21.3 days left (fluence), disk 81% free",
+      "numbers": {
+        "hostingProvider": "fluence",
+        "hostingDaysLeft": 21.3,
+        "hostingBalanceUsd": 9.4,
+        "hostingUsdPerDay": 0.44,
+        "diskFreePct": 81,
+        "memFreePct": 40,
+        "load1": 0.2,
+        "cores": 2,
+        "uptimeHours": 27,
+        "restarts24h": 0
+      },
+      "did": [],
+      "next": [],
+      "daysLeft": 21.3
+    },
+    "inference": {
+      "level": "ok",
+      "headline": "credit $4.12, 3.1 days at $1.35/day",
+      "numbers": {
+        "inferenceUsd": 4.12,
+        "hashferenceUsd": 4.12,
+        "veniceUsd": null,
+        "burnUsdPerDay": 1.35,
+        "inferenceRunwayDays": 3.05,
+        "floorUsd": 4.05,
+        "targetUsd": 9.45,
+        "wakeFailedForInference": false
+      },
+      "did": [],
+      "next": [],
+      "daysLeft": 3.05
+    },
+    "money": {
+      "level": "ok",
+      "headline": "runway 41.2 days ($74.92 at $1.79/day)",
+      "numbers": {
+        "walletUsd": 61.4,
+        "totalUsd": 74.92,
+        "burnUsdPerDay": 1.79,
+        "hostingUsdPerDay": 0.44,
+        "runwayDays": 41.2,
+        "hostingReserveUsd": 10
+      },
+      "did": [],
+      "next": []
+    },
+    "earnings": {
+      "level": "low",
+      "headline": "1 open opportunity",
+      "numbers": {
+        "open": 1,
+        "expectedUsd": 5,
+        "expectedCoversDays": 2.8,
+        "received7dUsd": 0,
+        "received30dUsd": 0
+      },
+      "did": [],
+      "next": []
+    },
+    "updates": {
+      "level": "ok",
+      "headline": "up to date",
+      "numbers": {
+        "knownHoles": 0,
+        "serious": false,
+        "osSecurityPending": 0,
+        "moveTo": null,
+        "checkedAt": "2026-11-16T10:00:00.000Z"
+      },
+      "did": [],
+      "next": []
+    },
+    "bugs": {
+      "level": "ok",
+      "headline": "no open issues",
+      "numbers": {
+        "openIssues": 0,
+        "recurring": 0,
+        "wakeFailureStreak": 0,
+        "failingProviders": null
+      },
+      "did": [],
+      "next": []
+    }
+  },
+  "suggestions": [],
+  "notes": []
+}

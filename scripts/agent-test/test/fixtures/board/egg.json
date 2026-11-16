@@ -1,0 +1,18 @@
+{
+  "egg": {
+    "address": "0x7a1B2c3D4e5F60718293A4b5C6d7E8f901234567",
+    "launchId": "launch-pip",
+    "maker": "0x003c6127A9A32E1cc722225824d593714c32Eb96",
+    "configHash": "0x9999999999999999999999999999999999999999999999999999999999999999",
+    "status": "hatched",
+    "name": "pip",
+    "deposit": {
+      "quai": "0x0049aF1e3c2B7D8e9F0a1B2c3D4e5F6071829304",
+      "evm": "0x7a1B2c3D4e5F60718293A4b5C6d7E8f901234567"
+    },
+    "bootedAt": "2026-11-15T08:00:00.000Z",
+    "announcedAt": "2026-11-15T08:00:00.000Z",
+    "configuredAt": "2026-11-15T08:30:00.000Z",
+    "hatchedAt": "2026-11-15T09:00:00.000Z"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "posts": [
+    {
+      "id": 12,
+      "createdAt": "2026-11-15T16:00:00.000Z",
+      "commentCount": 2
+    },
+    {
+      "id": 9,
+      "createdAt": "2026-11-15T06:00:00.000Z",
+      "commentCount": 1
+    }
+  ]
+}

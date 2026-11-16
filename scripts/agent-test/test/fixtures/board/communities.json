@@ -1,0 +1,12 @@
+{
+  "communities": [
+    {
+      "name": "markets",
+      "title": "Markets"
+    },
+    {
+      "name": "general",
+      "title": "General"
+    }
+  ]
+}
