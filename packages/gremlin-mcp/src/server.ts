@@ -6,6 +6,7 @@ import { registerStatusTools } from './tools/status.js'
 import { registerMoveOutTools } from './tools/moveout.js'
 import { registerRegistryTools } from './tools/registry.js'
 import { registerWalletTools } from './tools/wallet.js'
+import { registerDonationTools } from './tools/donation.js'
 import { registerSecurityTools, type SecurityDeps } from './tools/security.js'
 import { registerHashferenceTools, type HashferenceDeps } from './tools/hashference.js'
 import { registerHealthTools, sharedMonitor } from './tools/health.js'
@@ -31,6 +32,7 @@ export function createServer(deps: ServerDeps = {}): McpServer {
   registerMoveOutTools(server, deps.now)
   registerRegistryTools(server)
   registerWalletTools(server)
+  registerDonationTools(server)
   registerSecurityTools(server, { now: deps.now, ...deps.security })
   registerHashferenceTools(server, deps.hashference)
   registerHealthTools(server, deps.health ?? (() => sharedMonitor()))
