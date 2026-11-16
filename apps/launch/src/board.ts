@@ -56,12 +56,12 @@ export function boardApi(baseUrl: string) {
       if (!res.ok) throw new Error(`the hatch service refused: ${((await res.json().catch(() => ({}))) as { error?: string }).error ?? res.status}`)
       return res.json()
     },
-    async hatchJob(jobId: string): Promise<HatchJobView> {
-      const res = await fetch(u(`/api/hatch/${encodeURIComponent(jobId)}`))
+    async hatchJob(jobId: string, options: { allowOtherChannel?: boolean; signal?: AbortSignal } = {}): Promise<HatchJobView> {
+      const res = await fetch(u(`/api/hatch/${encodeURIComponent(jobId)}`), options.signal ? { signal: options.signal } : undefined)
       if (!res.ok) throw new Error(`hatch status ${res.status}`)
       const job = ((await res.json()) as { job: HatchJobView }).job
       const canary = typeof window !== 'undefined' && new URL(window.location.href).searchParams.get('canary') === '1'
-      if ((job.channel === 'canary') !== canary) throw new Error('Resume this hatch through its original stable or canary URL')
+      if (!options.allowOtherChannel && (job.channel === 'canary') !== canary) throw new Error('Resume this hatch through its original stable or canary URL')
       return job
     },
     /** 2-of-2: our key shard, sealed to the egg (only it can open it). */

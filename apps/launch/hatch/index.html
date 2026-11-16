@@ -13,6 +13,12 @@
     @media (min-width: 900px) { .hatch { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); align-items: start; } .preview { position: sticky; top: 88px; order: 2; } }
     .flow { background: var(--card); border: 1.5px solid var(--line); border-radius: 24px; padding: clamp(20px, 4vw, 36px); }
     .flow h2 { font-size: clamp(26px, 3.4vw, 34px); }
+    .hatch-actions { display: flex; flex-wrap: wrap; gap: 10px; padding-bottom: 20px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
+    .hatch-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; box-sizing: border-box; padding: 24px; border: 1.5px solid var(--line); border-radius: 20px; background: var(--card); color: var(--ink); }
+    .hatch-dialog::backdrop { background: rgb(0 0 0 / .4); }
+    .hatch-dialog [data-cancel] { margin-top: 16px; }
+    .saved-hatch { display: flex; gap: 16px; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); padding: 12px 0; }
+    .saved-hatch p { overflow-wrap: anywhere; }
     .flow form, .flow fieldset { display: grid; gap: 14px; }
     .flow form { gap: 18px; }
     .flow button:not(.link) { justify-self: start; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; font: 800 15px/1 var(--display); padding: 0 22px; border-radius: 999px; border: 1.5px solid var(--ink); background: var(--ink); color: #f7f3ec; cursor: pointer; transition: background-color .12s; }
@@ -99,7 +105,19 @@
   </header>
   <main class="wrap hatch">
     <aside class="preview" id="preview" aria-live="polite"></aside>
-    <div class="flow" id="app"></div>
+    <div class="flow">
+      <div class="hatch-actions" aria-label="Hatch options">
+        <button type="button" class="secondary" id="hatch-start-over">Start over</button>
+        <button type="button" class="secondary" id="hatch-saved">Saved hatches</button>
+      </div>
+      <div id="app"></div>
+      <dialog class="hatch-dialog" id="hatch-session-dialog" aria-labelledby="hatch-session-title">
+        <h2 id="hatch-session-title"></h2>
+        <div data-content></div>
+        <p class="error" data-error role="alert" hidden></p>
+        <button type="button" class="secondary" data-cancel>Keep hatching</button>
+      </dialog>
+    </div>
   </main>
   <script type="module" src="/src/main.ts"></script>
 </body>

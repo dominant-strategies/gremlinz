@@ -70,6 +70,15 @@ The extra signed request selects the candidate on the server. Ordinary `/hatch/`
 a maker address in unsigned JSON cannot opt into the candidate. Canary mode is not silently downgraded to stable.
 The creator's browser must retain its MPC shard and remain open through handoff, as in the existing flow.
 
+The hatch page offers **Start over** throughout the flow, including the body editor and error screens. It saves
+the current hatch before creating a new launch ID. **Saved hatches** restores previous attempts in their original
+default or canary flow. Payment progress, the existing browser key share and reusable SporeStack credit are retained
+in this browser; existing servers and payments continue separately. Starting over keeps `?canary=1` when selected,
+and otherwise uses the site's current default launch settings. It does not change an old job's chosen image.
+Switching hatches reloads the page to stop old callbacks, and other open hatch tabs pause. If browser storage is
+full or unavailable, restarting fails without replacing the current hatch. Keep site data intact until paid hatches
+have completed their handoff; saved hatches remain local to the browser profile.
+
 Each new job saves its chosen image, bundle and dev public keys. Changing operator settings while that job is
 funding/provisioning does not replace its release. Jobs created before this feature retain the legacy behavior;
 finish or separately investigate those pending jobs before changing the global stable image. Do not change an

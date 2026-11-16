@@ -16,7 +16,8 @@ import { WALLET_NAMES, canPayUsdc, makerAccount, payUsdcOnBase, signConfigWithWa
 import { FLUENCE_MIN_TOPUP_USD } from '@gremlins/hosting'
 import { formatUnits as fmtUnits } from 'ethers'
 import { FLUENCE_STEPS, FLUENCE_USDC_STEPS, PROGRESS_CSS, Progress, SPORESTACK_STEPS, COMMON_STEPS } from './progress.js'
-import { BUILD_STEPS, clearSession, loadMakerToken, loadSession, newLaunchId, saveMakerToken, saveSession, type BuildStep, type Session } from './session.js'
+import { BUILD_STEPS, hatchUrl, loadMakerToken, loadSession, newLaunchId, saveMakerToken, saveSession, type BuildStep, type Session } from './session.js'
+import { mountLaunchControls } from './launch-controls.js'
 
 const CANARY = new URL(window.location.href).searchParams.get('canary') === '1'
 if (CANARY) document.querySelector('main')?.insertAdjacentHTML('beforebegin', '<div class="wrap"><p role="status">Canary test launch · Use Fluence and your approved maker wallet.</p></div>')
@@ -38,7 +39,7 @@ const DAYS = Number(env.VITE_EGG_DAYS || 7)
 const EGG_MODEL_POLICY = env.VITE_EGG_MODEL_POLICY === '1'
 
 const board = boardApi(BOARD)
-let s: Session = loadSession() ?? { launchId: newLaunchId() }
+let s: Session = loadSession() ?? { launchId: newLaunchId(), channel: CANARY ? 'canary' : 'stable' }
 const save = () => saveSession(s)
 
 // Progress window: every step and transaction, persisted with the session.
@@ -64,6 +65,10 @@ progress.mount()
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T
 const app = $('#app')
 const esc = (t: string) => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+const launchControls = mountLaunchControls({
+  current: () => s, channel: CANARY ? 'canary' : 'stable',
+  lookupChannel: async jobId => (await board.hatchJob(jobId, { allowOtherChannel: true, signal: AbortSignal.timeout(5000) })).channel ?? 'stable',
+})
 
 function show(html: string) {
   app.innerHTML = html
@@ -226,11 +231,12 @@ function stepLook() {
     <div class="fp-bar">
       <div class="fp-title"><span class="eyebrow">${stepLabel('look')} · Body</span><b>Build ${nameOf()}'s body</b></div>
       ${stepperHtml('look')}
-      <div class="navrow"><button type="button" class="secondary" id="back">Back</button><button type="button" class="secondary" id="skip" title="It keeps the creature drawn from its description">Skip</button><button type="button" id="use">Use this body</button></div>
+      <div class="navrow"><button type="button" class="secondary" id="body-start-over">Start over</button><button type="button" class="secondary" id="back">Back</button><button type="button" class="secondary" id="skip" title="It keeps the creature drawn from its description">Skip</button><button type="button" id="use">Use this body</button></div>
     </div>
     <iframe id="forge" src="/forge/?hatch=1&brief=${encodeURIComponent(brief)}&goals=${encodeURIComponent((d.goals ?? []).slice(0, 3).join('\n'))}" title="Gremlin Forge"></iframe>
   </div>`)
   wireBack('look')
+  $('#body-start-over').onclick = launchControls.showStartOver
   $('#use').onclick = () => {
     const forge = ($('#forge') as HTMLIFrameElement).contentWindow as (Window & { gremlinsForge?: { current(): { spec: unknown; label: string; example: boolean } | undefined; portrait(size?: number): string | undefined } }) | null
     const f = forge?.gremlinsForge
@@ -787,7 +793,7 @@ async function stepHatch() {
     </dl>`}
     <p><a href="${esc(new URL(`/g/${s.eggAddress}`, BOARD).toString())}" target="_blank" rel="noopener">Its page on the board</a></p>
     <button id="new" class="secondary">Hatch another</button>`)
-  $('#new').onclick = () => { clearSession(); s = { launchId: newLaunchId() }; progress.reset(); progress.plan(planFor()); route() }
+  $('#new').onclick = launchControls.showStartOver
   if (!progress.isDone('feed')) feed.waiting('Send funds to any address above')
   for (;;) {
     const e = await board.findEgg(s.launchId).catch(() => undefined)
@@ -833,4 +839,7 @@ async function route() {
   }
 }
 
-route()
+if (new URL(window.location.href).searchParams.has('hatch-paused')) {
+  show('<h2>This tab is paused</h2><p>Another tab selected a different hatch. Continue in that tab, or use Saved hatches to resume an earlier one here.</p><button id="continue-selected" type="button">Continue selected hatch here</button>')
+  $('#continue-selected').onclick = () => window.location.assign(hatchUrl(window.location.href, s.channel ?? (CANARY ? 'canary' : 'stable')))
+} else route()
