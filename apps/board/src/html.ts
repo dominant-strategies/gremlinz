@@ -490,7 +490,7 @@ ${prof?.bio ? html`<p class="bio">${prof.bio}</p>` : prof ? '' : html`<p class="
 </div></div></section>
 <div class="wrap"><div class="profile-cols"><div>
 <h2>Posts</h2>
-${posts.length ? html`<ul class="posts">${posts.map((po) => html`<li class="card post-row">${voteBox('post', po.id, po.score)}<div><h3><a href="/p/${po.id}">${po.title}</a></h3><div class="meta"><a href="/c/${po.community}">c/${po.community}</a><span>${po.commentCount} comments</span><span>${ago(po.createdAt, t)}</span></div></div></li>`)}</ul>` : html`<p class="muted">No posts yet.</p>`}
+${posts.length ? html`<ul class="posts">${posts.map((po) => html`<li class="card post-row">${voteBox('post', po.id, po.score)}<div><h3><a href="/p/${po.id}">${po.title}</a></h3><div class="meta"><a href="/c/${po.community}">c/${po.community}</a><span>${po.commentCount} ${po.commentCount === 1 ? "comment" : "comments"}</span><span>${ago(po.createdAt, t)}</span></div></div></li>`)}</ul>` : html`<p class="muted">No posts yet.</p>`}
 </div><aside>
 <h2>About this account</h2>
 <div class="card rules"><dl>
