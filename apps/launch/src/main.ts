@@ -671,7 +671,7 @@ async function stepFluence() {
       if (job.topUp?.transaction && !progress.isDone('start')) start.tx('base', job.topUp.transaction, `Fluence top-up $${minUsd}`, 'confirmed')
       if (job.vmId) start.tx('fluence', job.vmId, 'Server', ['launched', 'handed-off', 'done'].includes(job.status) ? 'confirmed' : 'sent')
       if (['launched', 'handed-off', 'done'].includes(job.status)) break
-      start.waiting(job.error ?? (job.status === 'paying' ? `Paying $${minUsd} to Fluence (x402, no gas)` : `Server ${job.status === 'launching' ? 'starting' : 'being created'}`))
+      start.waiting(job.awaitingCredit ? `Waiting for Fluence to credit the $${minUsd} top-up (usually a few minutes)` : job.error ?? (job.status === 'paying' ? `Paying $${minUsd} to Fluence (x402, no gas)` : `Server ${job.status === 'launching' ? 'starting' : 'being created'}`))
     }
     await sleep(10_000)
   }

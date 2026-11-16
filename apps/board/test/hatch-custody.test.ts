@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { SigningKey, Wallet, computeAddress, getAddress, hexlify, randomBytes, verifyMessage, verifyTypedData } from 'ethers'
 import { createSiweMessage } from 'viem/siwe'
 import { configHash, hatchProof, openHostingHandover, sealBrowserShard, signMessage } from '@gremlins/hatch'
-import { TopUpUnderReview, localSigner, type HostingSigner, type TopUpAuthorization, type TypedDataToSign } from '@gremlins/hosting'
+import { FluenceApiError, TopUpUnderReview, localSigner, type HostingSigner, type TopUpAuthorization, type TypedDataToSign } from '@gremlins/hosting'
 import { BASE_QUAI, BASE_USDC, COW_SETTLEMENT, COW_VAULT_RELAYER, browserKeygen, cosignOnce, decodeBatch, digestOf, encodeBatch, party2Sign, httpMpcTransport, mpcAuthOf, mpcCoordinator, shareScalar, type CosignEvent, type PolicyContext } from '@gremlins/hosting/mpc'
 import { ORDER_TYPES } from '@gremlins/treasury'
 import { EggLaunchData, announcement as eggAnnouncement, generatePhrase, hostingStep, httpBoardClient, keysFromPhrase, type HostingFile } from '@gremlins/egg'
@@ -51,6 +51,8 @@ function world(clock: { now: number }) {
     topUpMode: 'ok' as TopUpMode,
     /** Whether a "lost" payment actually settled on-chain. */
     lostSettles: false,
+    /** Fluence refuses servers for want of balance (its credit lags the x402 payment). */
+    creditLag: false,
   }
   const fluenceFor = (signer: HostingSigner): FluenceClient => {
     const address = signer.address
@@ -94,7 +96,12 @@ function world(clock: { now: number }) {
         w.vms.set(id, { status: 'draft' })
         return { id }
       },
-      async provision(id) { authed(); w.vms.get(id)!.status = 'launching'; return {} },
+      async provision(id) {
+        authed()
+        if (w.creditLag) throw new FluenceApiError(`Fluence POST /v3/vms/${id}/provision 409: {"code":"insufficient_balance"}`, 409, 'insufficient_balance')
+        w.vms.get(id)!.status = 'launching'
+        return {}
+      },
       async vm(id) { authed(); return { id, status: w.vms.get(id)!.status } },
     }
   }
@@ -462,6 +469,39 @@ describe('hatch custody: crash safety', () => {
     s.w.deposited.set(hostingAddress, 10) // review cleared, account credited
     await until(s, jobId, 'topped-up')
     expect(s.w.topUps).toHaveLength(1)
+  })
+
+  it('waits, without an error, while Fluence has not credited the top-up yet; shows the error after 30 minutes', async () => {
+    const s = await setup()
+    const { jobId, hostingAddress } = (await s.b.postJson('/api/hatch/fluence', s.body)).body
+    s.w.usdc.set(hostingAddress, 10n * MICRO)
+    s.w.creditLag = true
+    const launching = await until(s, jobId, 'launching')
+    for (let i = 0; i < 3; i++) {
+      s.b.clock.now += 60_000
+      await s.worker.tick()
+    }
+    let view = (await s.b.json(`/api/hatch/${jobId}`)).body.job
+    expect(view).toMatchObject({ status: 'launching', error: null, awaitingCredit: true })
+    expect(view.log.filter((l: { event: string }) => /credit the top-up/.test(l.event))).toHaveLength(1)
+    s.w.creditLag = false // credited
+    await s.worker.tick()
+    expect(s.w.vms.get(launching.vmId!)!.status).toBe('launching')
+    view = (await s.b.json(`/api/hatch/${jobId}`)).body.job
+    expect(view).toMatchObject({ error: null, awaitingCredit: false })
+    expect(s.w.topUps).toHaveLength(1)
+
+    // Never credited: after 30 minutes it is an error again (still retried, never paid twice).
+    const t = await setup()
+    const job2 = (await t.b.postJson('/api/hatch/fluence', t.body)).body
+    t.w.usdc.set(job2.hostingAddress, 10n * MICRO)
+    t.w.creditLag = true
+    await until(t, job2.jobId, 'launching')
+    await t.worker.tick()
+    t.b.clock.now += 31 * 60_000
+    await t.worker.tick()
+    expect(t.hatchStore.get(job2.jobId)!.error).toMatch(/insufficient_balance/)
+    expect(t.w.topUps).toHaveLength(1)
   })
 
   it('a crash after the authorization was recorded resolves from the chain, not by paying', async () => {

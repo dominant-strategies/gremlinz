@@ -36,6 +36,16 @@ export interface Estimate {
   monthlyTotal: string
 }
 
+/** A Fluence API refusal, with the HTTP status and the problem `code` when Fluence names one. */
+export class FluenceApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) {
+    super(message)
+  }
+}
+
+/** Fluence hasn't credited a top-up yet (it lags the x402 payment by a few minutes): wait, don't fail. */
+export const awaitingCredit = (e: unknown) => e instanceof FluenceApiError && e.status === 409 && e.code === 'insufficient_balance'
+
 /** x402 answered 409: the payment is held for review. Never pay again for it; wait for the credit or a human. */
 export class TopUpUnderReview extends Error {
   constructor() {
@@ -91,7 +101,13 @@ export function fluence(opts: { signer: HostingSigner; baseUrl?: string; fetchIm
       body: body === undefined ? undefined : JSON.stringify(body),
     })
     const text = await res.text()
-    if (!res.ok) throw new Error(`Fluence ${method} ${path} ${res.status}: ${text.slice(0, 300)}`)
+    if (!res.ok) {
+      let code: string | undefined
+      try {
+        code = (JSON.parse(text) as { code?: unknown }).code as string | undefined
+      } catch {}
+      throw new FluenceApiError(`Fluence ${method} ${path} ${res.status}: ${text.slice(0, 300)}`, res.status, typeof code === 'string' ? code : undefined)
+    }
     return (text ? JSON.parse(text) : undefined) as T
   }
 

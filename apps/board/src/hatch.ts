@@ -24,7 +24,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { Wallet, computeAddress, hexlify } from 'ethers'
 import { hatchProof, sealHostingHandover, type HatchClaim, type Sealed } from '@gremlins/hatch'
-import { TopUpUnderReview, eggVmName, localSigner, type HostingSigner, type Plan, type TopUpAuthorization } from '@gremlins/hosting'
+import { TopUpUnderReview, awaitingCredit, eggVmName, localSigner, type HostingSigner, type Plan, type TopUpAuthorization } from '@gremlins/hosting'
 import { MakerAway, MpcAbort, shareScalar, type MpcCoordinator } from '@gremlins/hosting/mpc'
 import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
 import type { HatchJob, HatchStore } from './hatch-store.ts'
@@ -73,6 +73,9 @@ export interface HatchConfig {
 }
 
 const MIN = 60_000
+/** How long a refused server waits for Fluence to credit the top-up before the hatch shows an error. */
+const CREDIT_WAIT_MS = 30 * MIN
+const CREDIT_EVENT = 'waiting for Fluence to credit the top-up'
 /** Re-sign-in before our token (2 h) runs out. */
 const SESSION_MS = 90 * MIN
 /** After an authorization's validBefore, allow this long before treating it as dead. */
@@ -272,7 +275,19 @@ async function step(deps: HatchDeps, cfg: HatchConfig, job: HatchJob, save: (eve
       // Provisioning is not replayed by Fluence: look before acting.
       const vm = await fl.vm(job.vmId!)
       if (vm.status === 'draft') {
-        await fl.provision(job.vmId!)
+        try {
+          await fl.provision(job.vmId!)
+        } catch (e) {
+          // Fluence credits an x402 top-up a few minutes after it settles; until then it refuses the server. Not an error
+          // for the maker: keep asking every tick. Past CREDIT_WAIT_MS it is one, and shows.
+          if (!awaitingCredit(e) || now - (job.topUp?.paidAt ?? now) > CREDIT_WAIT_MS) throw e
+          if (!job.creditWaitSince) {
+            job.creditWaitSince = now
+            save(CREDIT_EVENT)
+          } else save()
+          break
+        }
+        job.creditWaitSince = undefined
         save('provisioning')
       } else if (vm.status === 'launched') {
         job.launchedAt = deps.now()
@@ -363,6 +378,8 @@ export function hatchView(job: HatchJob) {
     handedOffAt: job.handedOffAt ? new Date(job.handedOffAt).toISOString() : null,
     keyDeleted: job.status === 'done',
     error: job.error ?? null,
+    /** Server refused until Fluence credits the top-up (normal for a few minutes): show as waiting, not an error. */
+    awaitingCredit: job.status === 'launching' && !!job.creditWaitSince,
     log: job.log.map((l) => ({ at: new Date(l.at).toISOString(), event: l.event })),
     updatedAt: new Date(job.updatedAt).toISOString(),
   }

@@ -30,6 +30,8 @@ export interface HatchJobView {
   mpcAborted?: boolean
   keyDeleted: boolean
   error: string | null
+  /** Fluence hasn't credited the top-up yet, so the server waits (normal for a few minutes; not an error). */
+  awaitingCredit?: boolean
 }
 
 export function boardApi(baseUrl: string) {

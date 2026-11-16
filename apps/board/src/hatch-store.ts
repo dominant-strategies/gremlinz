@@ -69,6 +69,8 @@ export interface HatchJob {
   keyDeletedAt?: number
   error?: string
   nextCheckAt?: number
+  /** Fluence refused the server for want of balance after our top-up: waiting for the credit to land, since then. */
+  creditWaitSince?: number
   log: { at: number; event: string }[]
 }
 
