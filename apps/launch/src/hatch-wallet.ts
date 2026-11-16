@@ -1,14 +1,15 @@
 /**
  * The maker's wallet in the hatch flow: whichever wallet they signed in with (auth.ts), not just Pelagus.
  *
- * - The config signature is EIP-712 typed data in the Gremlins domain (chain 9, Quai), verified by the egg, the board
- *   and GremlinRegistry by recovering the maker's key. Pelagus signs it natively; EVM wallets (MetaMask, Phantom,
- *   WalletConnect) sign it too once Quai's network is their active chain, since they refuse typed data for another.
+ * - The config signature binds maker, egg and config hash. Pelagus signs it as EIP-712 typed data on Quai (chain 9),
+ *   which GremlinRegistry can also verify. EVM wallets (MetaMask, Phantom, WalletConnect) sign the same message as
+ *   plain text (personal_sign, scheme 'personal'): no network switch. Switching them to Quai fails anyway, since
+ *   their addresses are not Quai addresses ("Address belongs to other zone").
  * - Quai Smart Wallet signs as a Safe (ERC-1271). The registry and eggs recover a key, so a Safe cannot be a maker yet.
  * - Paying for the egg: QUAI from Pelagus (bridged), or USDC on Base straight from an EVM wallet.
  */
-import { HATCH_DOMAIN, HATCH_TYPES, configHash, type GremlinConfig, type SignedConfig } from '@gremlins/hatch'
-import { Interface, toBeHex, verifyTypedData } from 'ethers'
+import { configHash, hatchSigner, hatchText, type GremlinConfig, type HatchMessage, type SignedConfig } from '@gremlins/hatch'
+import { Interface, hexlify, toBeHex, toUtf8Bytes } from 'ethers'
 import { account, isEvm, signIn, walletProvider, type Account, type WalletKind } from './auth.js'
 import { signConfigWithPelagus } from './pelagus.js'
 
@@ -16,13 +17,6 @@ export const WALLET_NAMES: Record<WalletKind, string> = {
   smartwallet: 'Quai Smart Wallet', pelagus: 'Pelagus', metamask: 'MetaMask', phantom: 'Phantom', walletconnect: 'your WalletConnect wallet',
 }
 
-const QUAI_NETWORK = {
-  chainId: '0x9',
-  chainName: 'Quai',
-  nativeCurrency: { name: 'Quai', symbol: 'QUAI', decimals: 18 },
-  rpcUrls: ['https://rpc.quai.network/cyprus1'],
-  blockExplorerUrls: ['https://quaiscan.io'],
-}
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
 const ERC20 = new Interface(['function transfer(address to, uint256 amount) returns (bool)'])
 
@@ -43,7 +37,7 @@ function sameMaker(maker: string): Account {
   return a
 }
 
-async function switchChain(p: Awaited<ReturnType<typeof walletProvider>>, chain: { chainId: string } & Partial<typeof QUAI_NETWORK>) {
+async function switchChain(p: Awaited<ReturnType<typeof walletProvider>>, chain: { chainId: string; chainName?: string }) {
   if ((await p.request({ method: 'eth_chainId' })) === chain.chainId) return
   try {
     await p.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: chain.chainId }] })
@@ -59,23 +53,16 @@ export async function signConfigWithWallet(maker: string, config: GremlinConfig,
   const a = sameMaker(maker)
   if (a.kind === 'pelagus') return signConfigWithPelagus(maker, config, gremlin)
   const p = await walletProvider()
-  try {
-    await switchChain(p, QUAI_NETWORK)
-  } catch {
-    throw new Error(`${WALLET_NAMES[a.kind]} would not switch to the Quai network, which the config signature names. Approve adding Quai (chain 9) in the wallet, or hatch with Pelagus or MetaMask.`)
-  }
-  const message = { maker, gremlin, configHash: configHash(config), issuedAt: BigInt(Math.floor(Date.now() / 1000)) }
-  const typedData = {
-    domain: HATCH_DOMAIN,
-    types: { EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }], ...HATCH_TYPES },
-    primaryType: 'Hatch',
-    message: { ...message, issuedAt: message.issuedAt.toString() },
-  }
-  const signature = (await p.request({ method: 'eth_signTypedData_v4', params: [maker, JSON.stringify(typedData)] })) as string
+  const message: HatchMessage = { maker, gremlin, configHash: configHash(config), issuedAt: BigInt(Math.floor(Date.now() / 1000)) }
+  // Plain text on whatever network the wallet is on: nothing here names a chain.
+  const signature = (await p.request({ method: 'personal_sign', params: [hexlify(toUtf8Bytes(hatchText(message))), maker] })) as string
+  const signed: SignedConfig = { config, message, signature, scheme: 'personal' }
   // Check before handing it over: the egg would reject a signature from anyone else.
-  if (verifyTypedData(HATCH_DOMAIN, HATCH_TYPES, message, signature).toLowerCase() !== maker.toLowerCase())
+  let signer = ''
+  try { signer = hatchSigner(signed) } catch { /* reported below */ }
+  if (signer.toLowerCase() !== maker.toLowerCase())
     throw new Error(`${WALLET_NAMES[a.kind]} signed with a different key than ${maker.slice(0, 8)}…. Try again, or hatch with Pelagus.`)
-  return { config, message, signature }
+  return signed
 }
 
 export const canPayUsdc = (kind: WalletKind) => isEvm(kind)

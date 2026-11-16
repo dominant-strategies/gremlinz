@@ -5,8 +5,16 @@
  * The maker signs *after* the egg has announced itself, and the message names the egg's Quai address
  * (`gremlin`). Without that binding, anyone who saw the signed config could register it on-chain from their
  * own address first. Only the config hash needs to exist before launch (it goes into cloud-init).
+ *
+ * Two ways to sign the same message:
+ * - 'eip712' (default): typed data in the Gremlins domain on Quai (chainId 9). Pelagus signs it; GremlinRegistry
+ *   verifies it on-chain, so these gremlins can register on Quai.
+ * - 'personal': EIP-191 personal_sign over `hatchText(message)`, which names no chain. For EVM wallets (MetaMask,
+ *   Phantom, WalletConnect): their keys are not Quai addresses, and switching them to Quai fails ("Address belongs
+ *   to other zone"). Same binding (maker, egg, config hash), but GremlinRegistry cannot verify it, so these
+ *   gremlins do not register on Quai.
  */
-import { keccak256, toUtf8Bytes, verifyTypedData, type Signer, type TypedDataDomain } from 'ethers'
+import { keccak256, toUtf8Bytes, verifyMessage, verifyTypedData, type Signer, type TypedDataDomain } from 'ethers'
 import { GremlinConfig, canonicalJson } from './config.js'
 
 export const QUAI_CHAIN_ID = 9
@@ -30,10 +38,37 @@ export interface HatchMessage {
   issuedAt: bigint
 }
 
+export type HatchScheme = 'eip712' | 'personal'
+
 export interface SignedConfig {
   config: GremlinConfig
   message: HatchMessage
   signature: string
+  /** How `signature` was made; absent means 'eip712'. */
+  scheme?: HatchScheme
+}
+
+/** The text an EVM wallet signs (personal_sign) for the 'personal' scheme. Exact bytes matter: keep it stable. */
+export function hatchText(m: HatchMessage): string {
+  return [
+    'gremlinz: hatch a gremlin',
+    '',
+    'I am this gremlin\'s maker and I approve its config for this egg.',
+    '',
+    `Maker: ${m.maker.toLowerCase()}`,
+    `Gremlin: ${m.gremlin.toLowerCase()}`,
+    `Config hash: ${m.configHash.toLowerCase()}`,
+    `Issued at: ${BigInt(m.issuedAt).toString()}`,
+    '',
+    'Gremlins v1',
+  ].join('\n')
+}
+
+/** Who signed a hatch message, by its scheme. Throws on a malformed signature. */
+export function hatchSigner(signed: Pick<SignedConfig, 'message' | 'signature' | 'scheme'>): string {
+  if (signed.scheme === 'personal') return verifyMessage(hatchText(signed.message), signed.signature)
+  if (signed.scheme !== undefined && signed.scheme !== 'eip712') throw new Error('unknown signature scheme')
+  return verifyTypedData(HATCH_DOMAIN, HATCH_TYPES, signed.message, signed.signature)
 }
 
 export function configHash(config: GremlinConfig): string {
@@ -66,7 +101,7 @@ export function verifySignedConfig(signed: SignedConfig, expected: { maker: stri
   if (parsed.data.maker.toLowerCase() !== expected.maker.toLowerCase()) return { ok: false, reason: 'config maker does not match launch data' }
   let recovered: string
   try {
-    recovered = verifyTypedData(HATCH_DOMAIN, HATCH_TYPES, signed.message, signed.signature)
+    recovered = hatchSigner(signed)
   } catch {
     return { ok: false, reason: 'malformed signature' }
   }

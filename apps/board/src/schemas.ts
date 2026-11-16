@@ -142,6 +142,7 @@ export const SignedConfigWire = z.object({
     issuedAt: z.union([z.string().regex(/^\d{1,20}$/), z.number().int().min(0)]),
   }),
   signature,
+  scheme: z.enum(['eip712', 'personal']).optional(),
 })
 
 export const communityName = z.string().regex(/^[a-z0-9_]{3,32}$/, 'name must be 3-32 chars of a-z, 0-9, _')

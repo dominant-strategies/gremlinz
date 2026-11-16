@@ -23,6 +23,9 @@ export function registerRegistryTools(server: McpServer) {
     const signed = JSON.parse(readFileSync(file, 'utf8'))
     const { quai } = keys()
     const m = signed.message
+    // GremlinRegistry verifies only the Quai (EIP-712) signature. A maker who signed with an EVM wallet (personal_sign)
+    // is not a Quai address anyway, so there is nothing to register them as.
+    if (signed.scheme === 'personal') return text('Your maker signed with an EVM wallet, which GremlinRegistry on Quai cannot verify, so you are not registered there. Nothing else depends on it.')
     if (String(m.gremlin).toLowerCase() !== quai.address.toLowerCase()) return fail('The signed config names a different gremlin; refusing.')
     const registry = new Contract(GREMLIN_REGISTRY, REGISTRY_ABI, quai.connect(quaiProvider()))
     if (await registry.isGremlin(quai.address)) return text(`Already registered as ${quai.address}.`)

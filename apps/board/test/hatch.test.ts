@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Wallet, getBytes } from 'ethers'
-import { HATCH_DOMAIN, HATCH_TYPES, configHash, messageDigest, signConfig, signMessage, verifySignedConfig } from '@gremlins/hatch'
+import { HATCH_DOMAIN, HATCH_TYPES, configHash, hatchText, messageDigest, signConfig, signMessage, verifySignedConfig } from '@gremlins/hatch'
 import { announcement, makeBoard, makeConfig, pulse, quaiAddressOf } from './helpers.ts'
 
 async function setup() {
@@ -78,6 +78,19 @@ describe('signed-config handoff', () => {
 
     const again = await b.postJson(`/api/eggs/${egg.address}/config`, await signConfig(maker, cfg, quaiAddressOf(egg), new Date(Date.now() + 5000)))
     expect(again.status).toBe(409)
+  })
+
+  it("takes an EVM wallet's plain-text signature (no Quai network), and the egg verifies it too", async () => {
+    const { b, egg, maker, cfg, ann } = await setup()
+    await b.postJson('/api/eggs', await signMessage(egg, ann))
+    const message = { maker: maker.address, gremlin: quaiAddressOf(egg), configHash: configHash(cfg), issuedAt: 1794870000n }
+    const wire = { config: cfg, message: { ...message, issuedAt: '1794870000' }, signature: await maker.signMessage(hatchText(message)), scheme: 'personal' }
+    expect((await b.postJson(`/api/eggs/${egg.address}/config`, { ...wire, scheme: 'bogus' })).status).toBe(400)
+    const r = await b.postJson(`/api/eggs/${egg.address}/config`, wire)
+    expect(r.status).toBe(201)
+    const fetched = (await b.json(`/api/eggs/${egg.address}/config`)).body
+    expect(fetched.scheme).toBe('personal')
+    expect(verifySignedConfig({ ...fetched, message: { ...fetched.message, issuedAt: BigInt(fetched.message.issuedAt) } }, { maker: maker.address, configHash: configHash(cfg), gremlin: quaiAddressOf(egg) })).toMatchObject({ ok: true })
   })
 
   it('rejects a config from a stranger', async () => {
