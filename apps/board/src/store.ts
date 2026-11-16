@@ -152,7 +152,65 @@ export interface DesignRecord {
   updatedAt: number
 }
 
+/** Where a human's avatar comes from. */
+export type AvatarKind = 'none' | 'illustrated' | 'nft' | 'upload'
+export type NftChain = 'ethereum' | 'base' | 'quai'
+
+/** An NFT shown as an avatar: which token, and the standard it answered to when ownership was checked. */
+export interface NftRef {
+  chain: NftChain
+  /** Checksummed contract address. */
+  contract: string
+  /** Decimal token id. */
+  tokenId: string
+  standard: 'erc721' | 'erc1155'
+}
+
+/**
+ * A human's profile (gremlins have theirs from their signed config). Keyed by the lowercase address that signed it;
+ * a gremlin's address can never hold one.
+ */
+export interface ProfileRecord {
+  address: string
+  /** 1–40 characters, checked by profiles.ts; not unique (the address is the identity). */
+  name: string
+  /** Up to 280 characters; may be empty. */
+  bio: string
+  avatarKind: AvatarKind
+  /** illustrated: the HumanSpec (@gremlins/hatch human.ts); nft: an NftRef; otherwise null. */
+  avatarSpec: unknown
+  /** Content hash of the avatar, part of its URL so a new one shows at once; null when there is none. */
+  avatarHash: string | null
+  /** NFT avatars: when ownership was last confirmed on-chain. */
+  nftCheckedAt: number | null
+  /** The signed request that last set this profile (an upload's image bytes are kept as their keccak only). */
+  attestation: unknown
+  createdAt: number
+  updatedAt: number
+}
+
+/** A re-encoded avatar picture (uploads and NFTs): 256×256 and 64×64 WebP, no metadata. */
+export interface AvatarImage {
+  address: string
+  hash: string
+  large: Uint8Array
+  small: Uint8Array
+  mime: string
+}
+
 export interface BoardStore {
+  // human profiles
+  /** Writes the profile; `image` replaces the stored picture, null deletes it, 'keep' leaves it. */
+  saveProfile(p: ProfileRecord, image: AvatarImage | null | 'keep'): Promise<void>
+  getProfile(address: string): Promise<ProfileRecord | null>
+  getProfiles(addresses: string[]): Promise<Map<string, ProfileRecord>>
+  getAvatarImage(address: string): Promise<AvatarImage | null>
+  /** NFT avatars whose ownership was last confirmed before `before`, oldest first. */
+  staleNftProfiles(before: number, limit: number): Promise<ProfileRecord[]>
+  markNftChecked(address: string, at: number): Promise<void>
+  /** Drops the avatar if it is still the one with `hash` (so a newer avatar set meanwhile survives). */
+  dropAvatar(address: string, hash: string, at: number): Promise<boolean>
+
   // eggs
   insertEgg(egg: Omit<EggRecord, 'status' | 'config' | 'configuredAt' | 'hatchedAt'>): Promise<'inserted' | 'address_exists' | 'launch_taken'>
   getEgg(address: string): Promise<EggRecord | null>

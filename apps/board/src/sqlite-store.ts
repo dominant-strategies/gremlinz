@@ -1,7 +1,7 @@
 /** BoardStore on Node's built-in SQLite (node:sqlite). Single process; WAL mode. */
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type {
-  DesignRecord,
+  DesignRecord, ProfileRecord, AvatarImage, AvatarKind,
   BoardStore, Community, CommentRecord, EggRecord, EggStatus, EventRecord, NestRecord, NestStatus, PostRecord, PostSort, PulseRecord,
   StoredHandoff, VoteTarget, GrantRecord, LookRecord,
 } from './store.ts'
@@ -139,6 +139,30 @@ CREATE TABLE IF NOT EXISTS designs (
   updated_at INTEGER NOT NULL
 );
 
+-- Human profiles (added after launch; CREATE IF NOT EXISTS is the whole migration). Gremlins never have a row.
+CREATE TABLE IF NOT EXISTS profiles (
+  address        TEXT PRIMARY KEY,  -- lowercase
+  name           TEXT NOT NULL,
+  bio            TEXT NOT NULL DEFAULT '',
+  avatar_kind    TEXT NOT NULL DEFAULT 'none',  -- none | illustrated | nft | upload
+  avatar_spec    TEXT,              -- illustrated: HumanSpec JSON; nft: NftRef JSON
+  avatar_hash    TEXT,
+  nft_checked_at INTEGER,
+  attestation    TEXT NOT NULL,
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS profiles_nft ON profiles(avatar_kind, nft_checked_at);
+
+-- Re-encoded avatar pictures (uploads and NFTs), apart from profiles so lists never load them.
+CREATE TABLE IF NOT EXISTS avatar_images (
+  address TEXT PRIMARY KEY,
+  hash    TEXT NOT NULL,
+  large   BLOB NOT NULL,  -- 256×256
+  small   BLOB NOT NULL,  -- 64×64
+  mime    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS used_signatures (
   signature  TEXT PRIMARY KEY,
   expires_at INTEGER NOT NULL
@@ -224,6 +248,19 @@ const community = (r: Row): Community => ({
   description: r.description as string,
   creator: r.creator as string,
   createdAt: r.created_at as number,
+})
+
+const profile = (r: Row): ProfileRecord => ({
+  address: r.address as string,
+  name: r.name as string,
+  bio: r.bio as string,
+  avatarKind: r.avatar_kind as AvatarKind,
+  avatarSpec: r.avatar_spec ? JSON.parse(r.avatar_spec as string) : null,
+  avatarHash: (r.avatar_hash as string | null) ?? null,
+  nftCheckedAt: (r.nft_checked_at as number | null) ?? null,
+  attestation: JSON.parse(r.attestation as string),
+  createdAt: r.created_at as number,
+  updatedAt: r.updated_at as number,
 })
 
 const POST_ORDER: Record<PostSort, string> = {
@@ -562,6 +599,65 @@ export class SqliteBoardStore implements BoardStore {
 
   async revokeGrant(grantId: string, at: number) {
     return this.db.prepare('UPDATE grants SET revoked_at = ? WHERE grant_id = ? AND revoked_at IS NULL').run(at, grantId).changes === 1
+  }
+
+  // human profiles
+
+  async saveProfile(p: ProfileRecord, image: AvatarImage | null | 'keep') {
+    const a = p.address.toLowerCase()
+    this.tx(() => {
+      this.db
+        .prepare(`INSERT INTO profiles (address, name, bio, avatar_kind, avatar_spec, avatar_hash, nft_checked_at, attestation, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(address) DO UPDATE SET name = excluded.name, bio = excluded.bio, avatar_kind = excluded.avatar_kind, avatar_spec = excluded.avatar_spec,
+            avatar_hash = excluded.avatar_hash, nft_checked_at = excluded.nft_checked_at, attestation = excluded.attestation, updated_at = excluded.updated_at`)
+        .run(a, p.name, p.bio, p.avatarKind, p.avatarSpec == null ? null : JSON.stringify(p.avatarSpec), p.avatarHash, p.nftCheckedAt, JSON.stringify(p.attestation), p.createdAt, p.updatedAt)
+      if (image === null) this.db.prepare('DELETE FROM avatar_images WHERE address = ?').run(a)
+      else if (image !== 'keep')
+        this.db
+          .prepare('INSERT INTO avatar_images (address, hash, large, small, mime) VALUES (?, ?, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET hash = excluded.hash, large = excluded.large, small = excluded.small, mime = excluded.mime')
+          .run(a, image.hash, image.large, image.small, image.mime)
+    })
+  }
+
+  async getProfile(address: string) {
+    const r = this.one('SELECT * FROM profiles WHERE address = ?', address.toLowerCase())
+    return r ? profile(r) : null
+  }
+
+  async getProfiles(addresses: string[]) {
+    const out = new Map<string, ProfileRecord>()
+    const list = [...new Set(addresses.map((a) => a.toLowerCase()))]
+    for (let i = 0; i < list.length; i += 200) {
+      const chunk = list.slice(i, i + 200)
+      for (const r of this.all(`SELECT * FROM profiles WHERE address IN (${chunk.map(() => '?').join(',')})`, ...chunk)) out.set(r.address as string, profile(r))
+    }
+    return out
+  }
+
+  async getAvatarImage(address: string) {
+    const r = this.one('SELECT * FROM avatar_images WHERE address = ?', address.toLowerCase())
+    return r ? { address: r.address as string, hash: r.hash as string, large: new Uint8Array(r.large as Uint8Array), small: new Uint8Array(r.small as Uint8Array), mime: r.mime as string } : null
+  }
+
+  async staleNftProfiles(before: number, limit: number) {
+    return this.all(`SELECT * FROM profiles WHERE avatar_kind = 'nft' AND (nft_checked_at IS NULL OR nft_checked_at < ?) ORDER BY nft_checked_at LIMIT ?`, before, limit).map(profile)
+  }
+
+  async markNftChecked(address: string, at: number) {
+    this.db.prepare(`UPDATE profiles SET nft_checked_at = ? WHERE address = ? AND avatar_kind = 'nft'`).run(at, address.toLowerCase())
+  }
+
+  async dropAvatar(address: string, hash: string, at: number) {
+    const a = address.toLowerCase()
+    return this.tx(() => {
+      const r = this.db
+        .prepare(`UPDATE profiles SET avatar_kind = 'none', avatar_spec = NULL, avatar_hash = NULL, nft_checked_at = NULL, updated_at = ? WHERE address = ? AND avatar_hash = ?`)
+        .run(at, a, hash)
+      if (r.changes !== 1) return false
+      this.db.prepare('DELETE FROM avatar_images WHERE address = ?').run(a)
+      return true
+    })
   }
 
   // auth
