@@ -17,6 +17,10 @@
     "./creature": {
       "types": "./dist/creature.d.ts",
       "import": "./dist/creature.js"
+    },
+    "./human": {
+      "types": "./dist/human.d.ts",
+      "import": "./dist/human.js"
     }
   },
   "scripts": {
