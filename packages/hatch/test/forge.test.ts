@@ -12,6 +12,15 @@ describe('forge spec v4: assemblies and modes', () => {
     expect(notes.join(' ')).not.toMatch(/assembl/)
   })
 
+  it('keeps the mechapus example, the Forge opening design, whole: six assemblies, swim mode, kraken decal', () => {
+    const { spec, notes } = checkForgeSpec(structuredClone(FORGE_EXAMPLES.mechapus))
+    expect(notes).toEqual([])
+    expect(spec.name).toBe('Mechapus')
+    expect(spec.assemblies?.map((a) => a.id)).toEqual(['body', 'mantle', 'lure', 'arms', 'reach', 'anchor'])
+    expect(spec.modes?.map((m) => m.name)).toEqual(['Idle', 'Strike', 'Ripple', 'Recoil', 'Beckon', 'Swim'])
+    expect(spec.decals?.[0]?.art).toBe('kraken')
+    expect(spec.story?.goals).toHaveLength(2)
+  })
   it('keeps the octopod example whole: five assemblies, three modes, chains and rivets', () => {
     const { spec, notes } = checkForgeSpec(FORGE_EXAMPLES.octopod)
     expect(notes).toEqual([])

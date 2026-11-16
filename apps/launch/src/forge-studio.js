@@ -1879,7 +1879,7 @@ else {
     const goals = (q.get('goals') || '').split('\n').map((g) => g.trim()).filter(Boolean)
     if (goals.length) setTourStory({ goals: goals.slice(0, 3), motive: '' })
   }
-  if (!step()) { const r = checkForgeSpec(structuredClone(FORGE_EXAMPLES.octopod)); state.steps = [{ spec: r.spec, house: r.notes, label: 'Example: Octopod', parent: -1, t: Date.now() }]; state.cur = 0 }
+  if (!step()) { const r = checkForgeSpec(structuredClone(FORGE_EXAMPLES.mechapus)); state.steps = [{ spec: r.spec, house: r.notes, label: 'Example: Mechapus', parent: -1, t: Date.now() }]; state.cur = 0 }
   render(true)
 }
 renderAuth()
