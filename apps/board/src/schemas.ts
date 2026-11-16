@@ -112,13 +112,23 @@ export const KeyGrantSchema = z.looseObject({
   address,
   gremlin: address,
   grantId: z.string().regex(/^0x[0-9a-f]{32}$/),
-  provider: z.looseObject({ label: z.string().max(80), baseUrl: z.string().url().max(300), models: z.array(z.string().min(1).max(200)).min(1).max(20) }),
+  provider: z.looseObject({ id: z.string().max(40).optional(), label: z.string().max(80), baseUrl: z.string().url().max(300), models: z.array(z.string().min(1).max(200)).min(1).max(20) }),
   policy: z.looseObject({ budgetUsd: z.number().positive(), rules: z.array(z.looseObject({})).min(1).max(10) }),
   repay: z.enum(['patron', 'syndicate']),
+  /** The lender's wishes (signed with the grant): what it is for, what not, preferred models, how to credit them. */
+  wishes: z.object({
+    purposes: z.array(z.string().min(1).max(200)).max(20),
+    forbidden: z.string().max(1000),
+    preferredModels: z.array(z.string().min(1).max(200)).max(20),
+    creditAs: z.string().max(80),
+  }).optional(),
   sealedKey: z.object({ v: z.literal(1), epk: uncompressedKey, iv: z.string().regex(/^0x[0-9a-fA-F]{24}$/), ct: z.string().regex(/^0x(?:[0-9a-fA-F]{2}){16,1024}$/) }),
   createdAt: isoTime,
   expiresAt: isoTime.optional(),
 })
+
+/** The gremlin's report that a provider refused a lent key (it stopped using it for good). */
+export const GrantStatusSchema = z.object({ kind: z.literal('grant-status'), address, grantId: z.string().regex(/^0x[0-9a-f]{32}$/), status: z.literal('disabled'), httpStatus: z.number().int().min(100).max(599), reason: z.string().max(300), createdAt: isoTime })
 
 export const KeyRevokeSchema = z.object({ kind: z.literal('key-revoke'), address, grantId: z.string().regex(/^0x[0-9a-f]{32}$/), createdAt: isoTime })
 

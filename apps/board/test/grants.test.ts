@@ -50,4 +50,47 @@ describe('key grants on the board', () => {
     const nobody = Wallet.createRandom()
     expect((await b.postJson('/api/grants', await grant(lender, nobody))).status).toBe(404)
   })
+
+  it('refuses grants for providers whose terms forbid lending, and keeps the lender\'s signed wishes', async () => {
+    const b = await makeBoard()
+    const { egg } = await hatch(b)
+    const lender = Wallet.createRandom()
+    const forbidden = await grant(lender, egg, { provider: { id: 'mistral', label: 'my Mistral key', baseUrl: 'https://api.mistral.ai/v1', models: ['mistral-large'], inputPerM: 1, outputPerM: 1, budgetApi: 'none' } })
+    const r = await b.postJson('/api/grants', forbidden)
+    expect(r.status).toBe(400)
+    expect(r.body.error).toMatch(/forbids lending: Mistral/)
+    // Calling it something else doesn't help: the host decides.
+    expect((await b.postJson('/api/grants', await grant(lender, egg, { provider: { label: 'x', baseUrl: 'https://api.openai.com/v1', models: ['gpt'], inputPerM: 1, outputPerM: 1, budgetApi: 'none' } }))).status).toBe(400)
+
+    const wishes = { purposes: ['sell 10 haiku'], forbidden: 'no spam', preferredModels: ['some/model'], creditAs: '@lender' }
+    const sg = await grant(lender, egg, { wishes })
+    expect((await b.postJson('/api/grants', sg)).status).toBe(201)
+    expect((await b.json(`/api/grants?gremlin=${egg.address}`)).body.grants[0].message.wishes).toEqual(wishes)
+    // Changing a wish breaks the signature: it takes a new grant.
+    const tampered = { ...sg, message: { ...sg.message, grantId: newGrantId(), wishes: { ...wishes, forbidden: '' } } }
+    expect((await b.postJson('/api/grants', tampered)).status).toBe(401)
+  })
+
+  it('takes the gremlin\'s report that a provider refused a lent key, and only from that gremlin', async () => {
+    const b = await makeBoard()
+    const { egg } = await hatch(b)
+    const lender = Wallet.createRandom()
+    const sg = await grant(lender, egg)
+    await b.postJson('/api/grants', sg)
+    const report = (who: { address: string }) => ({ kind: 'grant-status' as const, address: who.address, grantId: sg.message.grantId, status: 'disabled' as const, httpStatus: 401, reason: 'the provider refused the key (401)', createdAt: new Date().toISOString() })
+    expect((await b.postJson('/api/grants/status', await signMessage(lender, report(lender)))).status).toBe(403)
+    expect((await b.postJson('/api/grants/status', { ...(await signMessage(egg, report(egg))), message: { ...report(egg), httpStatus: 403 } })).status).toBe(401)
+    expect((await b.postJson('/api/grants/status', await signMessage(egg, report(egg)))).status).toBe(200)
+    expect((await b.postJson('/api/grants/status', await signMessage(egg, report(egg)))).status).toBe(409)
+    const g = (await b.json(`/api/grants?gremlin=${egg.address}`)).body.grants[0]
+    expect(g.status).toBe('disabled')
+    expect(g.statusDetail).toMatchObject({ httpStatus: 401, reason: 'the provider refused the key (401)' })
+  })
+
+  it('offers "Lend capacity" on a hatched gremlin\'s page', async () => {
+    const b = await makeBoard()
+    const { egg } = await hatch(b)
+    const page = await (await b.req(`/g/${egg.address}`)).text()
+    expect(page).toContain(`href="/lend/?gremlin=${egg.address}"`)
+  })
 })

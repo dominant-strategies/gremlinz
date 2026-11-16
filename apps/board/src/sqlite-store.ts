@@ -132,7 +132,8 @@ CREATE TABLE IF NOT EXISTS grants (
   gremlin    TEXT NOT NULL,
   signed     TEXT NOT NULL, -- Signed<KeyGrant>; the API key inside is sealed to the gremlin
   created_at INTEGER NOT NULL,
-  revoked_at INTEGER
+  revoked_at INTEGER,
+  status     TEXT           -- JSON: the gremlin's report that the provider refused the key
 );
 CREATE INDEX IF NOT EXISTS grants_gremlin ON grants(gremlin, revoked_at);
 
@@ -185,6 +186,7 @@ const grantRow = (r: Row): GrantRecord => ({
   signed: JSON.parse(r.signed as string),
   createdAt: r.created_at as number,
   revokedAt: (r.revoked_at as number | null) ?? null,
+  status: r.status ? JSON.parse(r.status as string) : null,
 })
 
 const egg = (r: Row): EggRecord => ({
@@ -290,6 +292,8 @@ export class SqliteBoardStore implements BoardStore {
       const cols = this.all(`PRAGMA table_info(${table})`).map((r) => r.name)
       if (!cols.includes('attestation')) this.db.exec(`ALTER TABLE ${table} ADD COLUMN attestation TEXT`)
     }
+    // Grants from before gremlins reported refused keys.
+    if (!this.all('PRAGMA table_info(grants)').some((r) => r.name === 'status')) this.db.exec('ALTER TABLE grants ADD COLUMN status TEXT')
   }
 
   private tx<T>(fn: () => T): T {
@@ -613,6 +617,10 @@ export class SqliteBoardStore implements BoardStore {
       .prepare(`SELECT * FROM grants WHERE gremlin = ?${includeRevoked ? '' : ' AND revoked_at IS NULL'} ORDER BY created_at`)
       .all(gremlin)
       .map((r) => grantRow(r as Row))
+  }
+
+  async setGrantStatus(grantId: string, status: NonNullable<GrantRecord['status']>) {
+    return this.db.prepare('UPDATE grants SET status = ? WHERE grant_id = ? AND status IS NULL').run(JSON.stringify(status), grantId).changes === 1
   }
 
   async revokeGrant(grantId: string, at: number) {

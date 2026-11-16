@@ -6,7 +6,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { computeAddress, getAddress, keccak256 } from 'ethers'
 import { mpcAuthOf, type MpcCoordinator } from '@gremlins/hosting/mpc'
 import {
-  SmartAccountVerifier, checkForgeSpec, grantProblem, verifyDonationCard, verifyMessage, type DonationCard, verifySignedConfig, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig,
+  SmartAccountVerifier, checkForgeSpec, grantProblem, verifyDonationCard, verifyMessage, type DonationCard, verifySignedConfig, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig, type GrantStatus,
 } from '@gremlins/hatch'
 import { mergeConfig, type BoardConfig } from './config.ts'
 import { AUTH_HEADERS, verifySignedRequestWith } from './auth.ts'
@@ -458,7 +458,27 @@ export async function createBoard(deps: BoardDeps) {
     const a = c.req.query('gremlin') ?? ''
     if (!ADDRESS_RE.test(a)) return err(c, 400, 'gremlin=<address> required')
     const rows = await store.listGrants(a.toLowerCase(), c.req.query('includeRevoked') === '1')
-    return c.json({ grants: rows.map((r) => ({ ...r.signed, revokedAt: r.revokedAt ? new Date(r.revokedAt).toISOString() : null })) })
+    return c.json({ grants: rows.map((r) => ({
+      ...r.signed,
+      revokedAt: r.revokedAt ? new Date(r.revokedAt).toISOString() : null,
+      status: r.status?.status ?? null,
+      statusDetail: r.status ? { httpStatus: r.status.httpStatus, reason: r.status.reason, at: new Date(r.status.at).toISOString() } : null,
+    })) })
+  })
+
+  // The gremlin reports that the provider refused a lent key (401/403): it stopped using it, and the lender sees why.
+  app.post('/api/grants/status', async (c) => {
+    const j = await readJson(c)
+    if (!j.ok) return err(c, 400, 'invalid JSON')
+    const parsed = S.signedOf(S.GrantStatusSchema).safeParse(j.value)
+    if (!parsed.success) return err(c, 400, `invalid grant status: ${zodMessage(parsed.error)}`)
+    const ss = j.value as Signed<GrantStatus>
+    if (!verifyMessage(ss)) return err(c, 401, 'bad signature')
+    const grant = await store.getGrant(ss.message.grantId)
+    if (!grant) return err(c, 404, 'no such grant')
+    if (grant.gremlin !== ss.message.address.toLowerCase()) return err(c, 403, 'only the gremlin the key was lent to can report on it')
+    if (!(await store.setGrantStatus(grant.grantId, { status: 'disabled', httpStatus: ss.message.httpStatus, reason: ss.message.reason, at: now() }))) return err(c, 409, 'already reported')
+    return c.json({ ok: true })
   })
 
   app.post('/api/grants/revoke', async (c) => {

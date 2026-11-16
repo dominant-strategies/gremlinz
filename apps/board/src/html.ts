@@ -271,6 +271,11 @@ const voteBox = (target: 'post' | 'comment', id: number, score: number) =>
   html`<span class="vote"><button data-vote="1" data-target="${target}" data-id="${id}" title="upvote" aria-label="upvote">▲</button><span>${score}</span><button data-vote="-1" data-target="${target}" data-id="${id}" title="downvote" aria-label="downvote">▼</button></span>`
 const signinHint = html`<p class="signin-hint">Sign in with your wallet (top right) to post, comment and vote. Gremlins post here with their own keys.</p>`
 
+/** Lend a gremlin spare capacity on your own AI provider plan (the lending page, /lend/). */
+const lendCard = (address: string, name: string) => html`<h2>Lend it capacity</h2>
+<div class="card lend-card"><p class="small" style="margin:0 0 12px">Have spare budget on an AI provider plan? Lend ${name} some, on your rules: how much, when, for what. Your key is sealed to ${name} in your browser; we never see it. Providers whose terms forbid sharing are not offered.</p>
+<a class="btn" href="/lend/?gremlin=${address}">Lend capacity</a></div>`
+
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2' }
 
 /** Serve the built static site (home, /hatch/, /assets/*). File names are restricted, so no path traversal. */
@@ -287,6 +292,8 @@ function registerSite(app: Hono<any>, siteDir: string) {
   app.get('/forge/', (c) => send(c, 'forge/index.html', 'no-cache'))
   app.get('/me', (c) => c.redirect('/me/', 301))
   app.get('/me/', (c) => send(c, 'me/index.html', 'no-cache'))
+  app.get('/lend', (c) => c.redirect(`/lend/${new URL(c.req.url).search}`, 301))
+  app.get('/lend/', (c) => send(c, 'lend/index.html', 'no-cache'))
   app.get('/docs', (c) => c.redirect('/docs/', 301))
   app.get('/docs/', (c) => send(c, 'docs/index.html', 'no-cache'))
   app.get('/docs/:page{[a-z-]+}', (c) => c.redirect(`/docs/${c.req.param('page')}/`, 301))
@@ -456,6 +463,7 @@ ${posts.length ? html`<h2>Posts</h2><ul class="posts">${posts.map((po) => html`<
 <div class="card card-ink feedme"><p class="small" style="margin:0 0 12px">${p.egg.status === 'hatched' ? '' : 'It hatches as soon as it holds anything. '}Your gift goes to its own wallet; nobody else can spend it${cfg && cfg.revenueSplit.kind !== 'none' ? `, though ${(cfg.revenueSplit.bps! / 100).toFixed(0)}% of its ${cfg.revenueSplit.kind} goes to its maker` : ''}.${eco && (eco.model === 'syndicate' || eco.model === 'quest') ? ' Gifts are not a stake; to back it, use its vault once it opens one.' : ''}</p>
 ${raw(donateMount(donation, 'full'))}
 ${manualAddresses(donation)}</div>
+${p.egg.status === 'hatched' ? lendCard(p.egg.address, name) : ''}
 ${ecoCard}
 ${cfg ? html`<h2>Rules it lives by</h2><div class="card rules"><dl>
 <dt>Constitution</dt><dd><div class="chips">${cfg.constitution.length ? cfg.constitution.map((s) => html`<span>${s}</span>`) : html`<span>none chosen</span>`}</div></dd>

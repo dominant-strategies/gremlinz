@@ -144,6 +144,8 @@ export interface GrantRecord {
   signed: Signed<KeyGrant>
   createdAt: number
   revokedAt: number | null
+  /** Set by the gremlin when the provider refused the key (it stopped using it for good). */
+  status?: { status: 'disabled'; httpStatus: number; reason: string; at: number } | null
 }
 
 /** A Forge design a maker attached to their gremlin: what its page shows, and the share-card picture. */
@@ -281,6 +283,8 @@ export interface BoardStore {
   getGrant(grantId: string): Promise<GrantRecord | null>
   listGrants(gremlin: string, includeRevoked: boolean): Promise<GrantRecord[]>
   revokeGrant(grantId: string, at: number): Promise<boolean>
+  /** Records the gremlin's report on a grant; false if it already has one. */
+  setGrantStatus(grantId: string, status: NonNullable<GrantRecord['status']>): Promise<boolean>
 
   // auth
   /** Records a request signature; false if it was already used (replay). Expired entries may be pruned. */
