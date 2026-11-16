@@ -16,6 +16,7 @@
  * environment, so nothing can run twice. Only when no retry is due soon (the ladder is spent) does the monitor ask
  * Hermes to run it now (`hermes cron run`), at most once per failed run.
  */
+import { telemetry } from '../dev/telemetry.js'
 import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { withDeadline } from '@gremlins/hatch/node'
@@ -288,6 +289,7 @@ export class HealthMonitor {
     writeAtomic(homeFile('health.json'), health)
     writeAtomic(homeFile('health-state.json'), st)
     const tier = tierFor(sev, inference.status)
+    telemetry(process.env.GREMLIN_HEALTH_EXTERNAL === '1' ? 'health' : 'mcp').emit('health', { tier, creditUsd: plan.creditUsd + bought, runwayDays: plan.burnUsdPerDay > 0 ? (plan.creditUsd + bought) / plan.burnUsdPerDay : 0, cpuLoad: res.load1, freeMemoryFraction: res.memFreeFrac, freeDiskFraction: res.diskFreeFrac })
     if (process.env.GREMLIN_HEALTH_EXTERNAL === '1') writeAtomic(homeFile('health-tier.json'), { tier, at: iso })
     else if (readStatus().tier !== tier) updateStatus({ tier })
     return health

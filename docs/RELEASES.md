@@ -16,7 +16,7 @@ unpatched Node 22 and must not be used for new eggs.
 
 ## Publishing a release
 
-1. `docker buildx build --platform linux/amd64 -f egg.Dockerfile -t ghcr.io/dominant-strategies/gremlinz-egg:<commit> --push .` and note the manifest digest.
+1. From a clean committed checkout, set `HERMES_RUNTIME_REF` to the reviewed full runtime SHA. Build with `docker buildx build --platform linux/amd64 -f egg.Dockerfile --build-arg HERMES_RUNTIME_REF="$HERMES_RUNTIME_REF" --build-arg GREMLIN_BUILD_COMMIT="$(git rev-parse HEAD)" -t ghcr.io/dominant-strategies/gremlinz-egg:<commit> --push .` and note the manifest digest.
 2. Extract the bundle from that exact image:
    `docker run --rm --platform linux/amd64 --entrypoint tar <image@digest> -czf - -C /app . > release/gremlin-linux-amd64.tgz`, then `shasum -a 256`.
 3. `gh release create egg-vX.Y.Z release/gremlin-linux-amd64.tgz release/gremlin-linux-amd64.tgz.sha256 …`
@@ -27,3 +27,5 @@ unpatched Node 22 and must not be used for new eggs.
    (see `scripts/deploy-site.sh`).
 
 The ghcr.io package must be **public** (Package settings → Change visibility) so egg servers can pull anonymously.
+
+For the restricted website canary, dev instrumentation and read-only two-VM reporting, follow [DEV-CLUSTER.md](DEV-CLUSTER.md). Candidate releases are selected by signed allowlisted website requests; keep the default image unchanged during the canary.

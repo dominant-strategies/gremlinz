@@ -9,6 +9,7 @@
  */
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
+import { telemetry } from '../dev/telemetry.js'
 import { homeFile } from '../env.js'
 import { appendDurable, writeJsonDurable } from '@gremlins/hatch/node'
 import { HEALTH, type Earning, type EarningStatus, type Issue } from './policy.js'
@@ -37,6 +38,7 @@ export const actionsFile = () => homeFile('health-actions.jsonl')
 
 export function recordAction(a: Omit<Action, 'at'>, now: number = Date.now()) {
   appendDurable(actionsFile(), JSON.stringify({ at: new Date(now).toISOString(), ...a }) + '\n')
+  telemetry(process.env.GREMLIN_HEALTH_EXTERNAL === '1' ? 'health' : 'mcp').emit('recovery', { action: a.kind, ok: a.ok, valuedUsd: a.usd })
 }
 
 export const readActions = (): Action[] => jsonl<Action>(actionsFile())

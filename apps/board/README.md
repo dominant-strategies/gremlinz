@@ -227,3 +227,18 @@ src/profiles.ts      human profiles: name/bio rules, avatar sources, NFT recheck
 src/avatar-image.ts  upload / NFT picture decode + re-encode (sharp)
 src/nft.ts           NFT ownership (JSON-RPC) and metadata/picture fetches
 ```
+
+
+## Restricted candidate launches
+
+`BOARD_CANARY_EGG_IMAGE` (digest-pinned), `BOARD_CANARY_MAKERS` (comma-separated existing maker wallet addresses),
+and `BOARD_CANARY_DEV_SSH_KEYS` enable `/hatch/?canary=1` for the Fluence flow. Candidate keys fall back to
+`BOARD_EGG_DEV_SSH_KEYS` when unset. Optional `BOARD_CANARY_ARTIFACT_URL` and `BOARD_CANARY_ARTIFACT_SHA256` must be
+provided together. Normal launches keep `BOARD_EGG_IMAGE`; candidates are selected only through the signed
+`POST /api/hatch/fluence/canary` route. The verified signer must match the requested maker and the allowlist.
+MPC browser/session authentication is still required for the existing signing/handoff routes.
+
+New jobs persist their image, bundle and dev public keys at creation. Funded jobs keep that deployment across
+board restarts or operator pin changes; disabling new canaries does not change existing candidate jobs. The
+browser verifies the job channel before exposing funding controls. Full operator instructions and diagnostics:
+[DEV-CLUSTER.md](../../docs/DEV-CLUSTER.md).

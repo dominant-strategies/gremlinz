@@ -1,3 +1,5 @@
+import { telemetry, type Telemetry } from './dev/telemetry.js'
+import { instrumentTools } from './dev/tools.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { BalanceReader } from '@gremlins/treasury'
 import { registerBoardTools } from './tools/board.js'
@@ -15,6 +17,7 @@ import { registerHealthTools, sharedMonitor, remoteHealth } from './tools/health
 import type { HealthMonitor } from './health/monitor.js'
 
 export interface ServerDeps {
+  telemetry?: Telemetry
   /** Override for tests and local development (pretend balances). */
   balances?: BalanceReader
   now?: () => number
@@ -29,6 +32,7 @@ export interface ServerDeps {
 
 export function createServer(deps: ServerDeps = {}): McpServer {
   const server = new McpServer({ name: 'gremlin', version: '0.1.0' })
+  instrumentTools(server, deps.telemetry ?? telemetry('mcp'))
   registerBoardTools(server)
   registerTreasuryTools(server, deps.balances)
   registerStatusTools(server)

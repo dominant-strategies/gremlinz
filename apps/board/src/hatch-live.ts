@@ -32,8 +32,20 @@ export function hatchFromEnv(env: NodeJS.ProcessEnv, boardDbPath: string): { cfg
   if (!(topUpUsd >= FLUENCE_MIN_TOPUP_USD)) throw new Error(`BOARD_HATCH_TOPUP_USD must be at least ${FLUENCE_MIN_TOPUP_USD}`)
   const custody = (env.BOARD_HATCH_CUSTODY || 'mpc') as HatchConfig['custody']
   if (custody !== 'mpc' && custody !== 'local') throw new Error('BOARD_HATCH_CUSTODY must be mpc or local')
+  let canary: HatchConfig['canary']
+  const canaryKeys = String(env.BOARD_CANARY_DEV_SSH_KEYS || env.BOARD_EGG_DEV_SSH_KEYS || '').split(/[\n,]+/).map(k => k.trim()).filter(Boolean)
+  if (env.BOARD_CANARY_EGG_IMAGE) {
+    const makers = String(env.BOARD_CANARY_MAKERS ?? '').split(/[\n,]+/).map(a => a.trim().toLowerCase()).filter(Boolean)
+    if (!makers.length || makers.some(a => !/^0x[0-9a-f]{40}$/.test(a))) throw new Error('canary needs BOARD_CANARY_MAKERS with approved wallet addresses')
+    if (!canaryKeys.length || canaryKeys.some(k => !/^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+( [^\n']*)?$/.test(k))) throw new Error('canary needs valid dev SSH public keys for monitoring')
+    if (!/^[a-z0-9][a-z0-9._/:\-]*@sha256:[a-f0-9]{64}$/.test(env.BOARD_CANARY_EGG_IMAGE)) throw new Error('canary egg image must be pinned by digest')
+    const url = env.BOARD_CANARY_ARTIFACT_URL, sum = env.BOARD_CANARY_ARTIFACT_SHA256
+    if (!!url !== !!sum || (sum && !/^[a-f0-9]{64}$/.test(sum))) throw new Error('canary bundle needs a matching URL and SHA256')
+    if (url && new URL(url).protocol !== 'https:') throw new Error('canary bundle needs HTTPS')
+    canary = { image: env.BOARD_CANARY_EGG_IMAGE, makers: [...new Set(makers)], devSshKeys: canaryKeys, ...(url && sum ? { artifact: { url, sha256: sum } } : {}) }
+  } else if (env.BOARD_CANARY_MAKERS || env.BOARD_CANARY_ARTIFACT_URL || env.BOARD_CANARY_ARTIFACT_SHA256) throw new Error('canary settings require BOARD_CANARY_EGG_IMAGE')
   const dbPath = env.BOARD_HATCH_DB ?? (boardDbPath === ':memory:' ? ':memory:' : join(dirname(boardDbPath), 'hatch.db'))
-  return { cfg: { image, artifact, devSshKeys, publicUrl: new URL(publicUrl).origin, topUpUsd, custody }, store: new HatchStore(dbPath, secret), mpc: mpcCoordinator() }
+  return { cfg: { image, artifact, devSshKeys, publicUrl: new URL(publicUrl).origin, topUpUsd, custody, ...(canary ? { canary } : {}) }, store: new HatchStore(dbPath, secret), mpc: mpcCoordinator() }
 }
 
 /**

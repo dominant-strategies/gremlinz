@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** gremlin-gateway: GATEWAY_CONFIG=/path/gateway.json gremlin-gateway. Started by the egg before Hermes. */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { telemetry } from '../dev/telemetry.js'
 import { GatewayConfig } from './config.js'
 import { createGateway } from './server.js'
 import { Ledger, type LedgerEntry } from './ledger.js'
@@ -24,6 +25,7 @@ const cfg = GatewayConfig.parse(JSON.parse(readFileSync(process.env.GATEWAY_CONF
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a)
 const ledgerFile = homeFile('inference-ledger.jsonl')
 const ledger = new Ledger(ledgerFile)
+const diagnostics = telemetry('gateway')
 
 // Wallet-signed providers sign with the gremlin's EVM key; the last reported balance is kept for the runway.
 // The gremlin's own secrets are never sent to a free endpoint, wherever they turn up in a request.
@@ -68,13 +70,17 @@ const sources = new AccessSources(homeFile('inference-sources.json'))
 const documentation = new Documentation({ file: homeFile('inference-docs.json'), dir: homeFile('inference-docs') })
 const targets = () => documentationTargets(cfg, sources)
 // Public docs are checked without model access or credentials; individual documents have a 24-hour TTL.
-const checkDocumentation = () => documentation.check(targets()).catch(() => log('documentation check failed; maintenance should inspect official URLs'))
+const checkDocumentation = () => documentation.check(targets()).then(docs => { diagnostics.emit('documentation', { pendingReviews: docs.filter(d => d.status === 'needs-review').length, unreachableDocuments: docs.filter(d => d.status === 'unreachable').length }) }).catch(() => log('documentation check failed; maintenance should inspect official URLs'))
 void checkDocumentation()
 setInterval(() => void checkDocumentation(), 3_600_000).unref()
 // The health monitor's directive goes into every request (re-read every 30 s; none when health.json is stale).
 createGateway(cfg, {
   log, fetchers, router, credentials, sources, documentation: { watch: documentation, targets }, refreshLent: async () => { await grants.offers(true) }, lent: () => grants.offers(), lentStatus: () => grants.status(), health: healthReader(),
-  onCall: (r, t) => ledger.record(r, t),
+  captureDetails: diagnostics.enabled,
+  onCall: (r, t) => {
+    const entry = ledger.record(r, t)
+    diagnostics.emit('inference', { requestId: r.requestId, provider: r.provider, model: r.model, alias: r.alias, status: r.status, durationMs: r.ms, firstByteMs: r.firstByteMs, requestBytes: r.requestBytes, messageCount: r.messageCount, toolCount: r.toolCount, inputTokens: r.usage?.promptTokens, outputTokens: r.usage?.completionTokens, cachedInputTokens: r.usage?.cachedPromptTokens, reasoningTokens: r.usage?.reasoningTokens, valuedUsd: entry.usd, priced: entry.priced, estimated: !r.usage, usageReported: !!r.usage, lent: !!t.grantId, free: r.free, incomplete: !!r.incomplete, refused: !!r.refused })
+  },
   ...spending(cfg, ledger, grants, reservations),
 })
   .listen(cfg.port, cfg.host, () => log(`gateway on http://${cfg.host}:${cfg.port}/v1 (${Object.keys(cfg.routes).join(', ')}, gremlin-auto)`))

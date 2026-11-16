@@ -22,7 +22,7 @@ json(join(config, 'launch.json'), { mode: 'egg', maker, configHash: '0x' + '1'.r
 json(join(home, 'config.json'), { version: 1, name: 'reliability-test', persona: 'A disposable recovery test.', goals: ['Test recovery'], maker, parent: 'maker', revenueSplit: { kind: 'none' }, mischiefScope: { game: false, board: false, email: false, phone: false, money: false }, constitution: [], createdAt: new Date().toISOString() })
 json(join(home, 'state.json'), { stage: 'hatched', bootedAt: new Date().toISOString(), lastPulseAt: new Date().toISOString(), pulseSeq: 1, log: [] })
 // Keep the real Hermes scheduler idle throughout this fault test.
-json(join(hermes, 'cron/jobs.json'), { jobs: [{ id: 'a0a0a0a0a0a1', state: 'scheduled', enabled: true, schedule: { kind: 'interval', minutes: 45, display: 'every 45m' }, next_run_at: new Date(Date.now() + 86_400_000).toISOString() }] })
+json(join(hermes, 'cron/jobs.json'), { jobs: [45, 360].map((minutes, i) => ({ id: i ? 'a0a0a0a0a0a2' : 'a0a0a0a0a0a1', state: 'scheduled', enabled: true, schedule: { kind: 'interval', minutes, display: `every ${minutes}m` }, next_run_at: new Date(Date.now() + 86_400_000).toISOString() })) })
 writeFileSync(join(hermes, 'work', 'memory-sentinel.txt'), 'preserve my work\n')
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 const inside = (...args) => docker('exec', name, ...args)
@@ -37,7 +37,7 @@ const wait = async (message, predicate, timeout = 120_000) => {
   throw new Error(`Timed out: ${message}`)
 }
 const run = () => docker('run', '-d', '--name', name, '--network', 'none', '--init', '--restart=no', '--stop-timeout=20', '--memory=1536m', '--cpus=1.5', '--pids-limit=512',
-  '--health-interval=5s', '--health-start-period=20s', '-e', 'GREMLIN_TICK_MS=1000',
+  '--health-interval=5s', '--health-start-period=20s', '-e', 'GREMLIN_TICK_MS=1000', '-e', 'GREMLIN_DEV_TELEMETRY=1',
   '-v', `${home}:/var/lib/gremlin`, '-v', `${hermes}:/var/lib/gremlin-hermes`, '-v', `${config}:/etc/gremlin:ro`, image)
 const unchanged = () => {
   assert.equal(inside('sha256sum', '/var/lib/gremlin/seed').split(' ')[0], seedHash)
@@ -73,13 +73,22 @@ try {
     return after.healthy && Object.keys(before.services).every(key => after.services[key].pid !== before.services[key].pid)
   })
   unchanged()
+  const restartedAt = Date.now()
   docker('restart', '--time', '20', name)
-  await wait('container restarts with the same identity and memory', () => snapshot().healthy)
+  await wait('container restarts with the same identity and memory', () => snapshot().healthy && Date.parse(snapshot().at) >= restartedAt)
   unchanged()
   docker('rm', '-f', '-v', name)
+  const recreatedAt = Date.now()
   run()
-  await wait('container recreation reuses both explicit state mounts', () => snapshot().healthy)
+  await wait('container recreation reuses both explicit state mounts', () => snapshot().healthy && Date.parse(snapshot().at) >= recreatedAt)
   unchanged()
+  const report = JSON.parse(inside('node', '/app/packages/gremlin-mcp/dist/dev/report.js'))
+  assert.equal(report.schema, 1)
+  assert.equal(report.runtime.healthy, true)
+  assert.ok(report.services.mcp.starts >= 2, 'MCP recovery is visible in retained dev telemetry')
+  assert.ok(report.services.hermes.starts >= 2, 'Hermes recovery is visible in retained dev telemetry')
+  assert.ok(!JSON.stringify(report).includes(phrase.trim()), 'report must not expose the seed')
+  console.log('PASS dev telemetry survives restarts and exposes a sanitized recovery report')
   console.log('PASS seed and work survived crashes, restart and container recreation; no network or real funds used')
 } catch (error) {
   try { console.error(docker('logs', '--tail', '100', name)) } catch { /* container may not exist */ }

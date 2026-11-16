@@ -25,6 +25,7 @@ import { gatewayConfig } from '../bootstrap/gateway-config.js'
 import { boardUrl, home, homeFile } from '../env.js'
 import { GremlinConfig } from '@gremlins/hatch'
 import { writeJsonDurable } from '@gremlins/hatch/node'
+import { telemetry, devTelemetryEnabled } from '../dev/telemetry.js'
 import { Supervisor } from './supervisor.js'
 import { schedulerResponsive } from './progress.js'
 import { processIdentity, sameProcess } from './identity.js'
@@ -84,7 +85,9 @@ if (stoppedLeftovers) await new Promise((r) => setTimeout(r, 3_000)) // let them
 
 // 1. Hermes home from the signed config
 const healthPort = Number(process.env.GREMLIN_HEALTH_PORT ?? 8713)
-const env = { ...process.env, HERMES_HOME: hermesHome, GREMLIN_SKILLS: skillsDir, GREMLIN_BOARD_URL: boardUrl(),
+const telemetryLaunch = (() => { try { return JSON.parse(readFileSync(existsSync(homeFile('launch.json')) ? homeFile('launch.json') : process.env.GREMLIN_LAUNCH ?? '/etc/gremlin/launch.json', 'utf8')) } catch { return undefined } })()
+const telemetryOn = devTelemetryEnabled(process.env, telemetryLaunch)
+const env = { ...process.env, GREMLIN_DEV_TELEMETRY: telemetryOn ? '1' : '0', HERMES_HOME: hermesHome, GREMLIN_SKILLS: skillsDir, GREMLIN_BOARD_URL: boardUrl(),
   ...(mcpHttp ? { GREMLIN_MCP_TOKEN: mcpToken! } : {}),
   ...(independentHealth ? { GREMLIN_HEALTH_URL: `http://127.0.0.1:${healthPort}` } : {}) }
 const bootEnv = { ...env, ...(mcpHttp ? { GREMLIN_MCP_URL: `http://127.0.0.1:${mcpPort}/mcp`, GREMLIN_MCP_TOKEN: mcpToken! } : {}) }
@@ -145,12 +148,21 @@ if (!gatewayConfigPath || !existsSync(gatewayConfigPath)) {
   if (gremlinIds) chownSync(gatewayConfigPath, gremlinIds.uid, gremlinIds.gid)
 }
 
+if (telemetryOn) {
+  try {
+    const dir = homeFile('dev-telemetry')
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    if (gremlinIds) chownSync(dir, gremlinIds.uid, gremlinIds.gid)
+  } catch { /* Optional diagnostics must not prevent service startup. */ }
+}
+const diagnostics = telemetry('runner', env)
 // Each service recovers independently; provider/network errors are handled by the gateway, not by restarting Hermes.
 const supervisor = new Supervisor(e => {
   if (e.event === 'service-start' && typeof e.pid === 'number') {
     const identity = processIdentity(e.pid)
     if (identity) writeJsonDurable(pidFile(String(e.child)), identity)
   } else if (e.event === 'exit') rmSync(pidFile(String(e.child)), { force: true })
+  diagnostics.emit('service', { service: e.child, action: e.event, status: typeof e.code === 'number' && e.code >= 0 ? e.code : undefined, ok: e.event === 'service-start' })
   event(e); log(e.event, e.child, e.error ?? '')
 })
 const heartbeat = setInterval(() => {

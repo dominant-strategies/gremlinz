@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { signedPost } from '../src/auth.js'
+vi.mock('../src/auth.js', () => ({ signedPost: vi.fn() }))
 import { boardApi } from '../src/board.js'
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks() })
 
 describe('hatch callback URL', () => {
   it('uses the current server callback instead of the local or previously built URL', async () => {
@@ -32,4 +34,29 @@ describe('hatch callback URL', () => {
     await expect(boardApi('http://localhost:8790').createHatch({ maker: '', configHash: '', launchId: 'disabled', boardUrl: 'http://localhost:8790' })).rejects.toThrow('hatching on Fluence is not configured here')
     expect(fetch).toHaveBeenCalledTimes(1)
   })
+})
+
+
+describe('website canary selection', () => {
+  it('uses the signed opt-in endpoint while preserving the server callback URL', async () => {
+    vi.stubGlobal('window', { location: { href: 'https://gremlinz.ai/hatch/?canary=1', origin: 'https://gremlinz.ai' } })
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ fluence: { boardUrl: 'https://gremlinz.ai', canary: true } })))
+    vi.mocked(signedPost).mockResolvedValue(Response.json({ jobId: 'canary', image: 'candidate' }, { status: 201 }))
+    const body = { maker: '0x' + '1'.repeat(40), configHash: '0x' + '2'.repeat(64), launchId: 'canary', boardUrl: 'http://old.example' }
+    expect(await boardApi('https://gremlinz.ai').createHatch(body)).toMatchObject({ jobId: 'canary' })
+    expect(signedPost).toHaveBeenCalledWith('/api/hatch/fluence/canary', { ...body, boardUrl: 'https://gremlinz.ai' })
+  })
+  it('does not quietly launch a stable egg when the canary option is disabled', async () => {
+    vi.stubGlobal('window', { location: { href: 'https://gremlinz.ai/hatch/?canary=1', origin: 'https://gremlinz.ai' } })
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ fluence: { boardUrl: 'https://gremlinz.ai' } })))
+    await expect(boardApi('https://gremlinz.ai').createHatch({ maker: '', configHash: '', launchId: 'x', boardUrl: 'https://gremlinz.ai' })).rejects.toThrow('canary hatching is not enabled')
+    expect(signedPost).not.toHaveBeenCalled()
+  })
+})
+
+
+it('refuses a resumed hatch from the wrong channel before exposing funding controls', async () => {
+  vi.stubGlobal('window', { location: { href: 'https://gremlinz.ai/hatch/?canary=1', origin: 'https://gremlinz.ai' } })
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ job: { jobId: 'old', channel: 'stable', status: 'funding' } })))
+  await expect(boardApi('https://gremlinz.ai').hatchJob('old')).rejects.toThrow('original stable or canary URL')
 })

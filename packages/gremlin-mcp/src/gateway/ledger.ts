@@ -49,6 +49,7 @@ export class Ledger {
     // A lent key's calls are the lender's money: valued for repayment, not counted against the gremlin's budget.
     if (day(r.at) === this.today && !t.grantId) this.spentToday += usd
     appendDurable(this.file, JSON.stringify(entry) + '\n')
+    return entry
   }
 
   /** Value used on a lent key since `sinceMs` (for its allowance and for repaying the lender). */

@@ -8,7 +8,8 @@
 #   gremlin-helper runs delegated shell work and shares only Hermes' work folder by default.
 # /opt/gremlin-runtime (plugin, skills, Hermes source) and /app are root-owned.
 
-ARG HERMES_RUNTIME_REF=main
+ARG HERMES_RUNTIME_REF=319d126b58c954d7857628bfb67898d339bab46b
+ARG GREMLIN_BUILD_COMMIT=unknown
 
 FROM node:24.22.1-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS build
 # CVE-2026-111497 (Node2Shell, Brotli decoder out-of-bounds write): fail the build on a Node without the fix. The fix
@@ -27,6 +28,7 @@ RUN npm ci --workspaces --include-workspace-root \
 
 FROM node:24.22.1-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS hermes
 ARG HERMES_RUNTIME_REF
+RUN printf '%s' "$HERMES_RUNTIME_REF" | grep -Eq '^[a-f0-9]{40}$'
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates build-essential && rm -rf /var/lib/apt/lists/*
 ENV UV_PYTHON_INSTALL_DIR=/opt/python
@@ -37,6 +39,7 @@ RUN git init -q /opt/gremlin-runtime \
  && git fetch -q --depth 1 origin "$HERMES_RUNTIME_REF" \
  && git checkout -q FETCH_HEAD \
  && git log -1 --format='gremlin-runtime %H %s' \
+ && git rev-parse HEAD > .runtime-commit \
  && rm -rf .git
 RUN PY=$(uv python find 3.14) \
  && cd /opt/gremlin-runtime \
@@ -70,6 +73,10 @@ RUN set -eu; \
     /usr/local/bin/xmrig --version
 
 FROM node:24.22.1-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c
+ARG HERMES_RUNTIME_REF
+ARG GREMLIN_BUILD_COMMIT
+ENV HERMES_RUNTIME_REF=$HERMES_RUNTIME_REF GREMLIN_BUILD_COMMIT=$GREMLIN_BUILD_COMMIT
+LABEL org.opencontainers.image.revision=$GREMLIN_BUILD_COMMIT ai.gremlinz.runtime.revision=$HERMES_RUNTIME_REF
 LABEL org.opencontainers.image.source=https://github.com/dominant-strategies/gremlinz \
       org.opencontainers.image.description="Gremlin egg: egg supervisor + gremlin runtime (Hermes). Includes xmrig 6.26.0 (GPL-3.0-or-later, source: https://github.com/xmrig/xmrig/tree/v6.26.0) at /usr/local/bin/xmrig." \
       org.opencontainers.image.licenses="MIT AND GPL-3.0-or-later"

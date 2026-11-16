@@ -28,6 +28,8 @@ export interface HatchJob {
   maker: string
   configHash: string
   boardUrl: string
+  /** Immutable deployment chosen at creation; preserved through board restarts and release changes. */
+  release?: { image: string; artifact?: { url: string; sha256: string }; devSshKeys: string[]; canary: boolean }
   /** '' until 2-of-2 key generation has finished. */
   hostingAddress: string
   status: HatchStatus

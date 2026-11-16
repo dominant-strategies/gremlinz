@@ -861,24 +861,36 @@ export async function createBoard(deps: BoardDeps) {
   const hatch = deps.hatch
   app.get('/api/hatch/config', (c) => {
     c.header('cache-control', 'no-store')
-    return c.json({ fluence: hatch ? { boardUrl: hatch.cfg.publicUrl } : null })
+    return c.json({ fluence: hatch ? { boardUrl: hatch.cfg.publicUrl, ...(hatch.cfg.canary ? { canary: true } : {}) } : null })
   })
-  app.post('/api/hatch/fluence', async (c) => {
+  const createFluenceHatch = async (c: Context<Env>, canary: boolean) => {
     if (!hatch) return err(c, 503, 'hatching on Fluence is not configured here')
     const limited = rateLimited(c, 'hatch', clientIp(c))
     if (limited) return limited
-    const j = await readJson(c)
+    const j = canary ? { ok: true as const, value: c.get('body') } : await readJson(c)
     if (!j.ok) return err(c, 400, 'invalid JSON')
     const p = HatchRequest.safeParse(j.value)
     if (!p.success) return err(c, 400, `invalid launch data: ${zodMessage(p.error)}`)
     // The egg talks to this board: its claim and hand-over live here, so a maker can't route them elsewhere.
     if (!sameUrl(p.data.boardUrl, hatch.cfg.publicUrl)) return err(c, 400, `boardUrl must be ${hatch.cfg.publicUrl}`)
-    const mpc = hatch.cfg.custody === 'mpc'
-    if (mpc && !p.data.mpcAuth) return err(c, 400, 'this board hatches with 2-of-2 keys: the hatch page must send mpcAuth')
     const existing = hatch.store.getByLaunchId(p.data.launchId)
+    let selected = hatch.cfg
+    if (canary) {
+      const candidate = hatch.cfg.canary
+      const signer = c.get('address').toLowerCase()
+      if (signer !== p.data.maker.toLowerCase()) return err(c, 403, 'canary launch requires its maker signature')
+      if (!existing) {
+        if (!candidate) return err(c, 503, 'canary hatching is not enabled')
+        if (!candidate.makers.some(a => a.toLowerCase() === signer)) return err(c, 403, 'canary launch requires an approved maker signature')
+        selected = { ...hatch.cfg, image: candidate.image, artifact: candidate.artifact, devSshKeys: candidate.devSshKeys }
+      }
+    }
+    const mpc = (existing ? existing.custody : selected.custody) === 'mpc'
+    if (mpc && !p.data.mpcAuth) return err(c, 400, 'this board hatches with 2-of-2 keys: the hatch page must send mpcAuth')
     const reply = (job: NonNullable<typeof existing>, status: 200 | 201) =>
-      c.json({ jobId: job.id, custody: job.custody ?? 'local', status: job.status, hostingAddress: job.hostingAddress || null, minUsd: job.topUpUsd }, status)
+      c.json({ jobId: job.id, channel: job.release?.canary ? 'canary' : 'stable', image: job.release?.image ?? null, custody: job.custody ?? 'local', status: job.status, hostingAddress: job.hostingAddress || null, minUsd: job.topUpUsd }, status)
     if (existing) {
+      if (!!existing.release?.canary !== canary) return err(c, 409, 'resume this hatch through its original stable or canary flow')
       const same = existing.maker === p.data.maker.toLowerCase() && existing.configHash === p.data.configHash.toLowerCase()
       if (!same) return err(c, 409, 'launchId already has a hatch for another maker or config')
       // 2-of-2: the job belongs to the browser holding its shard.
@@ -886,10 +898,12 @@ export async function createBoard(deps: BoardDeps) {
       return reply(existing, 200)
     }
     if (await store.getEggByLaunchId(p.data.launchId)) return err(c, 409, 'launchId already belongs to an announced egg')
-    const job = newJob(hatch.cfg, { ...p.data, mpcAuth: mpc ? p.data.mpcAuth : undefined }, now())
+    const job = newJob(selected, { ...p.data, canary, mpcAuth: mpc ? p.data.mpcAuth : undefined }, now())
     if (!hatch.store.insert(job)) return reply(hatch.store.getByLaunchId(p.data.launchId)!, 200)
     return reply(job, 201)
-  })
+  }
+  app.post('/api/hatch/fluence', c => createFluenceHatch(c, false))
+  app.post('/api/hatch/fluence/canary', signed('hatch'), c => createFluenceHatch(c, true))
 
   app.post('/api/hatch/claim', async (c) => {
     if (!hatch) return err(c, 503, 'hatching on Fluence is not configured here')

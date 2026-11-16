@@ -17,6 +17,8 @@ import { formatUnits as fmtUnits } from 'ethers'
 import { FLUENCE_STEPS, PROGRESS_CSS, Progress, SPORESTACK_STEPS, COMMON_STEPS } from './progress.js'
 import { BUILD_STEPS, clearSession, loadMakerToken, loadSession, newLaunchId, saveMakerToken, saveSession, type BuildStep, type Session } from './session.js'
 
+const CANARY = new URL(window.location.href).searchParams.get('canary') === '1'
+if (CANARY) document.querySelector('main')?.insertAdjacentHTML('beforebegin', '<div class="wrap"><p role="status">Canary test launch · Use Fluence and your approved maker wallet.</p></div>')
 const env = import.meta.env
 // Served by the board itself by default, so the board is this origin.
 const BOARD = (env.VITE_BOARD_URL as string) || window.location.origin
@@ -567,7 +569,7 @@ function stepHost() {
     <p class="muted">The egg is a small rented server. It only lives until your gremlin moves to a home it pays for itself.</p>
     <div class="choice" style="margin:18px 0 22px">
       <label><input type="radio" name="host" value="fluence" checked><span><b>Fluence <span class="pill pill-alive" style="margin-left:6px">recommended</span></b><span class="muted small">From $${FLUENCE_MIN_TOPUP_USD}. Pay QUAI with Pelagus (bridged for you), or USDC on Base from MetaMask, Phantom or any WalletConnect wallet.</span></span></label>
-      <label><input type="radio" name="host" value="sporestack"><span><b>SporeStack</b><span class="muted small">USDT, BTC or XMR. A new account needs a $100 first deposit, which is reused for later eggs.</span></span></label>
+      <label><input type="radio" name="host" value="sporestack" ${CANARY ? 'disabled' : ''}><span><b>SporeStack</b><span class="muted small">USDT, BTC or XMR. A new account needs a $100 first deposit, which is reused for later eggs.</span></span></label>
     </div>
     <button id="go">Continue</button>`)
   $('#go').onclick = () => {
@@ -591,6 +593,7 @@ async function stepFluence() {
 
   s.hatch ??= await board.createHatch({ maker: s.maker!, configHash: configHash(s.config!), launchId: s.launchId, boardUrl: BOARD, mpcAuth: await mpc.mpcAuthFor(s.launchId) })
   save()
+  await board.hatchJob(s.hatch.jobId) // Verify the persisted channel before co-signing or showing payment controls.
   if (s.hatch.custody === 'mpc' && !s.hatch.hostingAddress) {
     show(`<p class="muted">Generating the egg's hosting account with the hatch service (one key share stays in this browser)…</p>`)
     s.hatch.hostingAddress = await mpc.ensureShard(BOARD, s.launchId, s.hatch)
@@ -793,6 +796,7 @@ async function route() {
   renderPreview()
   try {
     if (!IMAGE) return show('<p class="error">Hatching is not configured yet (VITE_EGG_IMAGE).</p>')
+    if (CANARY && s.host === 'sporestack') throw new Error('Canary testing uses Fluence. Resume this existing SporeStack launch without ?canary=1.')
     if (!s.maker) return stepConnect()
     if (!s.config) {
       const at = s.at ?? 'name'

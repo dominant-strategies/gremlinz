@@ -170,7 +170,7 @@ describe('hatch custody: jobs', () => {
     const s = await setup()
     const r = await s.b.postJson('/api/hatch/fluence', s.body)
     expect(r.status).toBe(201)
-    expect(r.body).toEqual({ jobId: expect.any(String), custody: 'local', status: 'funding', hostingAddress: expect.stringMatching(/^0x[0-9a-fA-F]{40}$/), minUsd: 10 })
+    expect(r.body).toEqual({ jobId: expect.any(String), channel: 'stable', image: cfg.image, custody: 'local', status: 'funding', hostingAddress: expect.stringMatching(/^0x[0-9a-fA-F]{40}$/), minUsd: 10 })
     const job = s.hatchStore.get(r.body.jobId)!
     expect(new Wallet(job.key!).address).toBe(r.body.hostingAddress)
     // at rest: encrypted, not in the JSON data

@@ -68,6 +68,8 @@ export interface HatchConfig {
   topUpUsd: number
   /** New jobs: 2-of-2 with the maker's page ('mpc', production) or a board-held key ('local', dev and tests). */
   custody?: 'local' | 'mpc'
+  /** Opt-in, signed website launches only; the stable image remains the default. */
+  canary?: { image: string; artifact?: { url: string; sha256: string }; devSshKeys: string[]; makers: string[] }
 }
 
 const MIN = 60_000
@@ -79,21 +81,23 @@ const SETTLE_GRACE_MS = 2 * MIN
 const usdMicro = (usd: number) => BigInt(Math.round(usd * 1e6))
 const rec = (job: HatchJob, at: number, event: string) => { job.log = [...job.log.slice(-49), { at, event }] }
 
-export function eggCloudInit(cfg: HatchConfig, job: Pick<HatchJob, 'maker' | 'configHash' | 'boardUrl' | 'launchId'>, secret: string): string {
+export function eggCloudInit(cfg: HatchConfig, job: Pick<HatchJob, 'maker' | 'configHash' | 'boardUrl' | 'launchId' | 'release'>, secret: string): string {
+  const release = job.release ?? cfg
   return renderCloudInit({
     launch: {
       maker: job.maker, configHash: job.configHash, boardUrl: job.boardUrl, launchId: job.launchId, hatch: { secret },
-      ...(cfg.devSshKeys.length ? { dev: { sshKeys: cfg.devSshKeys } } : {}),
+      ...(release.devSshKeys.length ? { dev: { sshKeys: release.devSshKeys } } : {}),
     },
-    image: cfg.image,
-    artifact: cfg.artifact,
+    image: release.image,
+    artifact: release.artifact,
   })
 }
 
 /** `mpcAuth` (2-of-2 only): SHA-256 of the maker page's per-job secret. */
-export function newJob(cfg: HatchConfig, input: { maker: string; configHash: string; launchId: string; boardUrl: string; mpcAuth?: string }, now: number): HatchJob {
+export function newJob(cfg: HatchConfig, input: { maker: string; configHash: string; launchId: string; boardUrl: string; mpcAuth?: string; canary?: boolean }, now: number): HatchJob {
   const base = {
     id: randomUUID(), launchId: input.launchId, maker: input.maker.toLowerCase(), configHash: input.configHash.toLowerCase(), boardUrl: input.boardUrl,
+    release: { image: cfg.image, ...(cfg.artifact ? { artifact: { ...cfg.artifact } } : {}), devSshKeys: [...cfg.devSshKeys], canary: !!input.canary },
     topUpUsd: cfg.topUpUsd, createdAt: now, updatedAt: now, secret: hexlify(randomBytes(32)), log: [{ at: now, event: 'created' }],
   }
   let job: HatchJob
@@ -337,6 +341,8 @@ async function resolveTopUp(deps: HatchDeps, job: HatchJob): Promise<'paid' | 'w
 export function hatchView(job: HatchJob) {
   return {
     jobId: job.id,
+    channel: job.release?.canary ? 'canary' : 'stable',
+    image: job.release?.image ?? null,
     launchId: job.launchId,
     status: job.status,
     custody: job.custody ?? 'local',

@@ -46,6 +46,8 @@ node scripts/e2e-local.mjs && node scripts/e2e-moveout.mjs
 GREMLINS_MAINNET=1 npx vitest run packages/treasury/test   # live mainnet quotes (no funds move)
 ```
 
+Dev canary instrumentation and the two-gremlin website rollout: [docs/DEV-CLUSTER.md](docs/DEV-CLUSTER.md).
+
 ## Build and deploy
 
 - Egg image + release bundle: `scripts/build-release.sh linux/amd64 <tag>`; publishing steps in `docs/RELEASES.md`.

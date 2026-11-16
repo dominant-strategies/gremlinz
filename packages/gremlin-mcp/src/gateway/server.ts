@@ -3,6 +3,7 @@
  * its only provider. For each request the gateway walks the alias's route, skipping providers in cooldown, and fails
  * over on provider-side errors. Streams are passed through as they arrive (failover only before the first byte).
  */
+import { randomUUID } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { GatewayConfig, ProviderConfig, RouteTarget } from './config.js'
 import { providerFetch, retryable, type UpstreamFetch } from './providers.js'
@@ -17,8 +18,9 @@ import { classify, isRefusal, mayRetryRefusal, permissiveRoute, routeFor, type R
 
 export const AUTO = 'gremlin-auto'
 
-export interface Usage { promptTokens: number; completionTokens: number }
-export interface CallRecord { at: string; alias: string; provider: string; model: string; status: number; usage?: Usage; ms: number; refused?: boolean; incomplete?: boolean; estimatedUsd?: number; accountId?: string }
+export interface Usage { promptTokens: number; completionTokens: number; cachedPromptTokens?: number; reasoningTokens?: number }
+interface UpstreamUsage { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number }; completion_tokens_details?: { reasoning_tokens?: number } }
+export interface CallRecord { at: string; alias: string; provider: string; model: string; status: number; usage?: Usage; ms: number; refused?: boolean; incomplete?: boolean; estimatedUsd?: number; accountId?: string; requestId?: string; free?: boolean; firstByteMs?: number; requestBytes?: number; messageCount?: number; toolCount?: number }
 
 export interface GatewayDeps {
   /** Per-provider fetchers; defaults built from config (venice needs a signer, injected by the caller). */
@@ -33,6 +35,7 @@ export interface GatewayDeps {
   refreshLent?: () => Promise<void>
   /** Undefined means this target cannot afford the call; free/local targets bypass paid reservations. */
   reserve?: (body: Record<string, unknown>, target: RouteTarget, provider: ProviderConfig, recovery: boolean) => Reservation | undefined
+  captureDetails?: boolean
   now?: () => number
   log?: (...a: unknown[]) => void
   env?: NodeJS.ProcessEnv
@@ -106,6 +109,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
   })
 
   return createServer(async (req, res) => {
+    const requestId = randomUUID()
     try {
       if (req.method === 'GET' && req.url === '/v1/models')
         return json(res, 200, { object: 'list', data: [...Object.keys(cfg.routes), ...(cfg.routes['gremlin-main'] && !cfg.routes['gremlin-recovery'] ? ['gremlin-recovery'] : []), ...(deps.router ? [AUTO] : [])].map((id) => ({ id, object: 'model', owned_by: 'gremlin' })) })
@@ -173,7 +177,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
           const started = now()
           let recorded = false
           const record = (status: number, usage?: Usage) => {
-            deps.onCall?.({ at: new Date(started).toISOString(), alias: 'gremlin-recovery', provider: p.id, model: t.model, status, ms: now() - started, accountId: t.accountId, usage, ...(!usage && (status === 200 || status === 0) ? { estimatedUsd: lease?.estimatedUsd } : {}) }, t)
+            deps.onCall?.({ at: new Date(started).toISOString(), alias: 'gremlin-recovery', requestId, free: p.free, provider: p.id, model: t.model, status, ms: now() - started, accountId: t.accountId, usage, ...(!usage && (status === 200 || status === 0) ? { estimatedUsd: lease?.estimatedUsd } : {}) }, t)
             recorded = true
           }
           try {
@@ -303,9 +307,11 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         }
         let up: Response
         let recorded = false
+        let headersMs: number | undefined
+        const details = deps.captureDetails ? { requestBytes: Buffer.byteLength(JSON.stringify(upstreamBody)), messageCount: Array.isArray(upstreamBody.messages) ? upstreamBody.messages.length : 0, toolCount: Array.isArray(upstreamBody.tools) ? upstreamBody.tools.length : 0 } : {}
         const recordCall = (r: CallRecord) => {
           release(r.usage ? r.usage.promptTokens + r.usage.completionTokens : undefined)
-          deps.onCall?.({ ...r, ...(accountId ? { accountId } : {}), ...(!r.usage && (r.status === 200 || r.status === 0) ? { estimatedUsd: reservation?.estimatedUsd } : {}) }, t)
+          deps.onCall?.({ ...r, requestId, free: !!(p.free || p.local), ...(deps.captureDetails ? { ...details, firstByteMs: headersMs } : {}), ...(accountId ? { accountId } : {}), ...(!r.usage && (r.status === 200 || r.status === 0) ? { estimatedUsd: reservation?.estimatedUsd } : {}) }, t)
           recorded = true
         }
         const abort = new AbortController()
@@ -324,6 +330,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
               }),
               new Promise<never>((_, reject) => { firstByte = setTimeout(() => { const e = new Error(`no response in ${p.firstByteMs / 1000}s`); abort.abort(e); reject(e) }, p.firstByteMs) }),
             ])
+            headersMs = now() - started
             // The response has started: from here the stream watchdog (stalls) and the whole-request limit apply.
             clearTimeout(firstByte)
           } catch (e) {
@@ -359,7 +366,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
           if (p.accountId) credentials.success(`account:${p.accountId}`)
           const record = (usage?: Usage, refusal?: boolean, incomplete?: boolean) => recordCall({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: up.status, usage, ms: now() - started, ...(refusal ? { refused: true } : {}), ...(incomplete ? { incomplete: true } : {}) })
           if (body.stream) return await pipeStream(up, res, record, p.firstByteMs, () => down(p.id))
-          const out = (await up.json()) as { usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string; choices?: { message?: { content?: string; tool_calls?: unknown[] } }[] }
+          const out = (await up.json()) as { usage?: UpstreamUsage; model?: string; choices?: { message?: { content?: string; tool_calls?: unknown[] } }[] }
           const msg = out.choices?.[0]?.message
           const refusal = !msg?.tool_calls?.length && isRefusal(msg?.content ?? '')
           record(usageOf(out.usage), refusal)
@@ -390,8 +397,8 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
   })
 }
 
-function usageOf(u?: { prompt_tokens?: number; completion_tokens?: number } | null): Usage | undefined {
-  return u ? { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0 } : undefined
+function usageOf(u?: UpstreamUsage | null): Usage | undefined {
+  return u ? { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0, ...(typeof u.prompt_tokens_details?.cached_tokens === 'number' ? { cachedPromptTokens: u.prompt_tokens_details.cached_tokens } : {}), ...(typeof u.completion_tokens_details?.reasoning_tokens === 'number' ? { reasoningTokens: u.completion_tokens_details.reasoning_tokens } : {}) } : undefined
 }
 
 /**
