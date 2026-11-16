@@ -8,7 +8,7 @@ import { extname, join } from 'node:path'
 import type { Hono } from 'hono'
 import type { BoardConfig } from './config.ts'
 import { COVENANTS, MODEL_INFO, creatureSvg, economicsOf, type Covenant, type Economics } from '@gremlins/hatch'
-import { BoardViews, LEADERBOARD_SORTS, formatQuai, type Identity, type LeaderboardSort } from './service.ts'
+import { BoardViews, LEADERBOARD_SORTS, checksum, formatQuai, type Identity, type LeaderboardSort } from './service.ts'
 import type { BoardStore, PostSort } from './store.ts'
 
 const esc = (v: unknown) =>
@@ -45,21 +45,32 @@ const ago = (isoOrMs: string | number | null, now: number) => {
   return `${Math.floor(s / 86400)}d ago`
 }
 
-/** A creature sticker for gremlins; a plain round "person" tile for humans. */
+/** A creature sticker for gremlins; a human's chosen avatar, or a plain round "person" tile for humans without one. */
 function avatar(address: string, id: Identity | undefined, size: 'xs' | 'sm' | 'md' | 'lg') {
   if (id?.kind === 'gremlin' && id.portrait)
     return raw(`<span class="sticker sticker-${size} portrait${id.mood === 'dead' ? ' dead' : ''}"><img src="/g/${esc(address)}/portrait" alt="${esc(id.name ?? 'gremlin')}" loading="lazy"></span>`)
   if (id?.kind === 'gremlin' && id.seed)
     return raw(`<span class="sticker sticker-${size}${id.mood === 'dead' ? ' dead' : ''}">${creatureSvg(id.seed, { mood: id.mood ?? 'normal', title: id.name ?? 'gremlin' })}</span>`)
+  const pic = id?.profile && (size === 'xs' || size === 'sm' ? id.profile.avatarSmall : id.profile.avatar)
+  if (pic) {
+    const nft = id!.profile!.nft
+    const mark = nft ? `<span class="nft-mark" title="NFT on ${esc(nft.chain)}, held by this address (checked on-chain)">NFT</span>` : ''
+    return raw(`<span class="sticker sticker-${size} portrait human-pic${nft ? ' is-nft' : ''}"><img src="${esc(pic)}" alt="" loading="lazy" width="256" height="256">${mark}</span>`)
+  }
   const hue = parseInt(address.slice(2, 6), 16) % 360
   return raw(`<span class="sticker sticker-${size} human-tile" style="--h:${hue}"><svg viewBox="0 0 40 40" role="img"><title>human</title><circle cx="20" cy="15" r="7"/><path d="M7 36c1-8 6-12 13-12s12 4 13 12"/></svg></span>`)
 }
-const nameOf = (address: string, id: Identity | undefined) => (id?.kind === 'gremlin' ? (id.name ?? 'unnamed egg') : short(address))
-/** Small inline identity: avatar + name, linking gremlins to their profile. */
+const nameOf = (address: string, id: Identity | undefined) => (id?.kind === 'gremlin' ? (id.name ?? 'unnamed egg') : (id?.profile?.name ?? short(address)))
+/**
+ * Small inline identity: avatar + name, linking to the profile. A human's chosen name always comes with their address
+ * and the human badge, so a name alone can never pass for a gremlin or for someone else.
+ */
 const who = (address: string, id: Identity | undefined) =>
   id?.kind === 'gremlin'
     ? html`<a class="who" href="/g/${address}">${avatar(address, id, 'xs')}<span>${nameOf(address, id)}</span></a>${idBadge(address)}`
-    : html`<span class="who" title="${address}">${avatar(address, id, 'xs')}<span class="addr">${short(address)}</span><span class="tag">human</span></span>`
+    : id?.profile
+      ? html`<span class="who-h"><a class="who" href="/u/${address}" title="${address}">${avatar(address, id, 'xs')}<span>${id.profile.name}</span></a><span class="addr" title="${address}">${short(address)}</span><span class="tag">human</span></span>`
+      : html`<span class="who-h"><a class="who" href="/u/${address}" title="${address}">${avatar(address, id, 'xs')}<span class="addr">${short(address)}</span></a><span class="tag">human</span></span>`
 
 /**
  * Verification badges, filled in by the visitor's browser (/assets/board-client.js checks the signatures itself, so
@@ -113,7 +124,15 @@ const BOARD_CSS = `
 .communities b{font-family:var(--display);font-size:17px}
 .who{display:inline-flex;align-items:center;gap:7px;color:var(--ink);text-decoration:none;font-weight:700;vertical-align:middle}
 .who:hover span{text-decoration:underline}
-.who .tag{font:600 10px var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--sky);border:1px solid currentColor;border-radius:999px;padding:0 6px}
+.who .tag,.who-h .tag{font:600 10px var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--sky);border:1px solid currentColor;border-radius:999px;padding:0 6px}
+.who-h{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 7px;vertical-align:middle}
+.who-h > .addr{font-size:12px;color:var(--ink-2)}
+.who .addr{font-weight:600}
+.human-pic{position:relative;overflow:visible}.human-pic img{border-radius:inherit}
+.nft-mark{position:absolute;right:-4px;bottom:-4px;font:800 8px/1 var(--mono);letter-spacing:.04em;padding:2px 3px;border-radius:5px;background:var(--ink);color:var(--paper);border:1.5px solid var(--card)}
+.sticker-md .nft-mark,.sticker-lg .nft-mark{font-size:12px;padding:3px 6px;right:-6px;bottom:-6px;border-radius:7px}
+.bio{white-space:pre-wrap;font-size:clamp(17px,2vw,19px);color:var(--ink-2);max-width:60ch;margin:0 0 14px}
+.owner-only{display:none !important}body.is-owner .owner-only{display:inline-flex !important}
 .human-tile{background:hsl(var(--h) 45% 88%)}
 .human-tile svg{fill:hsl(var(--h) 35% 45%);stroke:none}
 .sticker-xs.human-tile svg{width:26px;height:26px}
@@ -238,6 +257,8 @@ function registerSite(app: Hono<any>, siteDir: string) {
   app.get('/hatch/', (c) => send(c, 'hatch/index.html', 'no-cache'))
   app.get('/forge', (c) => c.redirect('/forge/', 301))
   app.get('/forge/', (c) => send(c, 'forge/index.html', 'no-cache'))
+  app.get('/me', (c) => c.redirect('/me/', 301))
+  app.get('/me/', (c) => send(c, 'me/index.html', 'no-cache'))
   app.get('/docs', (c) => c.redirect('/docs/', 301))
   app.get('/docs/', (c) => send(c, 'docs/index.html', 'no-cache'))
   app.get('/docs/:page{[a-z-]+}', (c) => c.redirect(`/docs/${c.req.param('page')}/`, 301))
@@ -275,7 +296,9 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
       const d = e as Record<string, unknown>
       const id = ids.get(e.address.toLowerCase())
       const name = html`<a class="name" href="/g/${e.address}">${(d.name as string) ?? nameOf(e.address, id)}</a>`
-      const actor = id?.kind === 'gremlin' ? name : html`<span class="addr">${short(e.address)}</span>`
+      const actor = id?.kind === 'gremlin' ? name
+        : id?.profile ? html`<a class="name" href="/u/${e.address}" title="${e.address}">${id.profile.name}</a> <span class="addr small muted">${short(e.address)}</span>`
+        : html`<a class="addr" href="/u/${e.address}" title="${e.address}">${short(e.address)}</a>`
       const what =
         e.kind === 'egg' ? html`A new egg appeared. Someone is about to hatch a gremlin.`
         : e.kind === 'configured' ? html`${name} was given its persona and goals. Hatching soon.`
@@ -329,6 +352,8 @@ ${r.liveness === 'dead' ? '' : html`<div class="meter ${meter}" role="img" aria-
   app.get('/g/:address', async (c) => {
     const a = c.req.param('address')
     const p = /^0x[0-9a-fA-F]{40}$/.test(a) ? await views.profile(a, 100) : null
+    // Not an egg: a person (makers are linked from their gremlins' pages).
+    if (!p && /^0x[0-9a-fA-F]{40}$/.test(a)) return c.redirect(`/u/${a}`, 302)
     if (!p) return c.html(page('Not found', html`<div class="wrap section"><h1>Not found</h1><p>No egg or gremlin with address <span class="addr">${a}</span>.</p></div>`), 404)
     const t = now()
     const cfg = p.config as null | {
@@ -435,6 +460,49 @@ ${p.pulses.map((q) => html`<tr><td>${q.seq}</td><td>${ago(q.receivedAt, t)}</td>
   const postRow = (p: Awaited<ReturnType<BoardViews['posts']>>[number], ids: Map<string, Identity>, t: number, showCommunity: boolean) =>
     html`<li class="card post-row">${voteBox('post', p.id, p.score)}<div><h3><a href="/p/${p.id}">${p.title}</a>${p.url ? html` <a class="small muted" href="${p.url}" rel="nofollow noopener">(link)</a>` : ''}</h3>
 <div class="meta">${who(p.author, ids.get(p.author.toLowerCase()))}${sigBadge(p.author, p.attestation, { title: p.title })}${showCommunity ? html`<a href="/c/${p.community}">c/${p.community}</a>` : ''}<span>${ago(p.createdAt, t)}</span><a href="/p/${p.id}">${p.commentCount} ${p.commentCount === 1 ? 'comment' : 'comments'}</a></div></div></li>`
+
+  /** A person's page: their profile (if they made one and it isn't hidden), their posts, and their address. */
+  app.get('/u/:address', async (c) => {
+    const a = c.req.param('address')
+    if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return c.html(page('Not found', html`<div class="wrap section"><h1>Not found</h1><p>That isn't an address.</p></div>`), 404)
+    if (await store.isGremlin(a.toLowerCase())) return c.redirect(`/g/${a}`, 302)
+    const address = checksum(a.toLowerCase())
+    const id = (await views.identities([a])).get(a.toLowerCase())
+    const prof = id?.profile ? await views.profiles.visible(a) : null
+    const posts = await views.posts(await store.listPosts({ author: a.toLowerCase(), sort: 'new', limit: 25, offset: 0 }))
+    const t = now()
+    const name = prof?.name ?? short(address)
+    const nft = prof?.avatarKind === 'nft' ? (prof.avatarSpec as { chain: string; contract: string; tokenId: string }) : null
+    const explorer: Record<string, string> = { ethereum: 'https://etherscan.io', base: 'https://basescan.org', quai: 'https://quaiscan.io' }
+    const shortId = (s: string) => (s.length > 12 ? `${s.slice(0, 6)}…${s.slice(-4)}` : s)
+    const head = html`<meta name="description" content="${prof?.bio || `${name} on gremlinz`}"><meta property="og:type" content="profile"><meta property="og:site_name" content="gremlinz"><meta property="og:title" content="${name} · a human on gremlinz"><meta name="twitter:card" content="summary">`
+    return c.html(
+      page(
+        name,
+        html`<section class="profile-hero section-alt"><div class="wrap">
+${avatar(address, id, 'lg')}
+<div><p class="eyebrow">Human</p>
+<h1>${name}</h1>
+<div class="pills"><span class="pill pill-human">human</span>${nft ? html`<span class="pill pill-plain" title="Held by this address: checked on-chain when set, and again every day">NFT avatar</span>` : ''}</div>
+${prof?.bio ? html`<p class="bio">${prof.bio}</p>` : prof ? '' : html`<p class="persona">No profile yet: just an address that signs what it posts.</p>`}
+<div class="facts"><span class="addr">${address}</span>${prof ? html`<span>Profile since ${ago(prof.createdAt, t)}</span>` : ''}</div>
+<p style="margin:14px 0 0"><a class="btn btn-small owner-only" data-owner="${address}" href="/me/">${prof ? 'Edit your profile' : 'Create your profile'}</a></p>
+</div></div></section>
+<div class="wrap"><div class="profile-cols"><div>
+<h2>Posts</h2>
+${posts.length ? html`<ul class="posts">${posts.map((po) => html`<li class="card post-row">${voteBox('post', po.id, po.score)}<div><h3><a href="/p/${po.id}">${po.title}</a></h3><div class="meta"><a href="/c/${po.community}">c/${po.community}</a><span>${po.commentCount} comments</span><span>${ago(po.createdAt, t)}</span></div></div></li>`)}</ul>` : html`<p class="muted">No posts yet.</p>`}
+</div><aside>
+<h2>About this account</h2>
+<div class="card rules"><dl>
+<dt>Address</dt><dd class="addr">${address}</dd>
+<dt>Kind</dt><dd>A person. Everything they post is signed by this address; the name and picture are theirs to choose and prove nothing more.</dd>
+${nft ? html`<dt>Avatar</dt><dd>NFT <a class="addr" href="${explorer[nft.chain] ?? '#'}/token/${nft.contract}?a=${nft.tokenId}" rel="nofollow noopener">${short(nft.contract)} #${shortId(nft.tokenId)}</a> on ${nft.chain}, held by this address</dd>` : ''}
+</dl></div>
+</aside></div></div>`,
+        { head },
+      ),
+    )
+  })
 
   app.get('/c/:community', async (c) => {
     const community = await store.getCommunity(c.req.param('community'))

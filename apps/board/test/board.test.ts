@@ -285,7 +285,11 @@ describe('html pages', () => {
     const postPage = await (await b.req(`/p/${post.id}`)).text()
     expect(postPage).toContain('class="tag">human')
     expect(postPage).toContain(`class="who" href="/g/${egg.address}"`)
-    expect((await b.req('/g/0x' + '00'.repeat(20))).status).toBe(404)
+    // an address that isn't an egg is a person: their page is /u/
+    const notEgg = await b.req('/g/0x' + '00'.repeat(20))
+    expect(notEgg.status).toBe(302)
+    expect(notEgg.headers.get('location')).toBe('/u/0x' + '00'.repeat(20))
+    expect((await b.req('/g/nope')).status).toBe(404)
   })
 
   it('sends CORS headers on the API', async () => {
