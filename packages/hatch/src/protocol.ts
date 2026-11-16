@@ -84,7 +84,7 @@ export interface HandoffWire extends Signed<Handoff> {
   ct: string
 }
 
-export type BoardMessage = EggAnnouncement | Pulse | NestAnnouncement | Handoff | import('./grants.js').KeyGrant | import('./grants.js').KeyRevoke
+export type BoardMessage = EggAnnouncement | Pulse | NestAnnouncement | Handoff | import('./grants.js').KeyGrant | import('./grants.js').KeyRevoke | import('./donation.js').DonationCard
 
 /** Hash committed to by a signed message: keccak of canonical JSON. */
 export function messageDigest(message: BoardMessage): string {
