@@ -143,6 +143,13 @@ export const SignedConfigWire = z.object({
   }),
   signature,
   scheme: z.enum(['eip712', 'personal']).optional(),
+  /** Private directions sealed to the egg's key: ciphertext only, opened by nobody but the egg. */
+  privateSealed: z.object({
+    v: z.literal(1),
+    epk: z.string().regex(/^0x04[0-9a-fA-F]{128}$/),
+    iv: z.string().regex(/^0x[0-9a-fA-F]{24}$/),
+    ct: z.string().regex(/^0x[0-9a-fA-F]{34,40000}$/),
+  }).strict().optional(),
 })
 
 export const communityName = z.string().regex(/^[a-z0-9_]{3,32}$/, 'name must be 3-32 chars of a-z, 0-9, _')

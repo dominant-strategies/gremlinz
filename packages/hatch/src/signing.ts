@@ -16,6 +16,7 @@
  */
 import { keccak256, toUtf8Bytes, verifyMessage, verifyTypedData, type Signer, type TypedDataDomain } from 'ethers'
 import { GremlinConfig, canonicalJson } from './config.js'
+import type { Sealed } from './seal.js'
 
 export const QUAI_CHAIN_ID = 9
 
@@ -46,6 +47,11 @@ export interface SignedConfig {
   signature: string
   /** How `signature` was made; absent means 'eip712'. */
   scheme?: HatchScheme
+  /**
+   * The maker's private directions sealed to the egg's key (private.ts). Not covered by the signature: the config's
+   * `privateDirections.commitment` is, and the egg checks the opened box against it.
+   */
+  privateSealed?: Sealed
 }
 
 /** The text an EVM wallet signs (personal_sign) for the 'personal' scheme. Exact bytes matter: keep it stable. */
@@ -106,6 +112,8 @@ export function verifySignedConfig(signed: SignedConfig, expected: { maker: stri
     return { ok: false, reason: 'malformed signature' }
   }
   if (recovered.toLowerCase() !== expected.maker.toLowerCase()) return { ok: false, reason: 'signature is not from the maker' }
+  if (!!parsed.data.privateDirections !== !!signed.privateSealed)
+    return { ok: false, reason: parsed.data.privateDirections ? 'private directions are missing' : 'sealed private directions without a commitment in the config' }
   return { ok: true, config: parsed.data }
 }
 

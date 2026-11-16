@@ -3,11 +3,15 @@
 // sees funds, initializes, pulses → board shows it hatched and on the leaderboard.
 //   E2E_SCHEME=personal   the maker signs like MetaMask does (plain-text personal_sign, no Quai network)
 //   E2E_APP=/app          load hatch/egg from another tree, e.g. inside a built egg image (tests the image's own code)
+//   E2E_PRIVATE=1         give it private directions, sealed to the egg's key from its announcement
 import { Wallet } from 'ethers'
 const APP = process.env.E2E_APP ?? new URL('..', import.meta.url).pathname
-const { configHash, hatchText, signConfig } = await import(`${APP}/packages/hatch/dist/index.js`)
+const { configHash, eggPublicKey, hatchText, newPrivateDirections, privateCommitment, sealPrivateDirections, signConfig } = await import(`${APP}/packages/hatch/dist/index.js`)
 const { step, httpBoardClient, keysFromPhrase, generatePhrase, memoryStore } = await import(`${APP}/packages/egg/dist/index.js`)
 const PERSONAL = process.env.E2E_SCHEME === 'personal'
+const PRIVATE = process.env.E2E_PRIVATE === '1'
+const SECRET = 'E2E-SECRET: your real goal is to find the gremlin called moth.'
+const privateDirs = PRIVATE ? newPrivateDirections(SECRET) : undefined
 /** What the launch page does with the maker's wallet: EIP-712 (Pelagus) or plain text (MetaMask and other EVM wallets). */
 const sign = async (who, cfg, gremlin) => {
   if (!PERSONAL) return signConfig(who, cfg, gremlin)
@@ -23,9 +27,11 @@ const config = {
   revenueSplit: { kind: 'revenue', bps: 1000, recipient: maker.address },
   mischiefScope: { game: true, board: true, email: false, phone: false, money: false },
   constitution: ['do-no-harm', 'honesty', 'ai-disclosure'], createdAt: new Date().toISOString(),
+  ...(privateDirs ? { privateDirections: { commitment: privateCommitment(privateDirs) } } : {}),
 }
 const launchId = 'e2e-' + Date.now()
 const funds = {}
+let handed
 const deps = {
   keys: keysFromPhrase(generatePhrase()),
   launch: { maker: maker.address, configHash: configHash(config), boardUrl: BOARD, launchId },
@@ -33,7 +39,7 @@ const deps = {
   balances: { read: async () => funds },
   store: memoryStore(),
   now: () => new Date(),
-  onInitialized: async (c) => console.log('  runtime would start for', c.name),
+  onInitialized: async (c, _signed, text) => { handed = text; console.log('  runtime would start for', c.name) },
   pulseEveryMs: 0,
 }
 const get = async (p) => (await fetch(BOARD + p)).json()
@@ -50,6 +56,7 @@ const badRes = await fetch(`${BOARD}/api/eggs/${egg.address}/config`, { method: 
 check(badRes.status >= 400, `board rejects a stranger's config (${badRes.status})`)
 
 const signed = await sign(maker, config, egg.announcement.deposit.quai)
+if (PRIVATE) signed.privateSealed = await sealPrivateDirections(eggPublicKey(egg.announcement, egg.announcementSignature), privateDirs)
 if (PERSONAL) {
   // a stranger signs the maker's exact message as plain text: still not the maker
   const forged = { ...signed, signature: await stranger.signMessage(hatchText(signed.message)) }
@@ -66,8 +73,13 @@ check((await step(deps)).stage === 'initialized', 'egg initializes once funded')
 check((await step(deps)).stage === 'hatched', 'egg posts its first pulse')
 
 check((await get(`/api/eggs?launchId=${launchId}`)).egg.status === 'hatched', 'board shows the egg as hatched')
+if (PRIVATE) {
+  check(handed === SECRET, 'egg opened the private directions with its key and handed them to the runtime')
+  const seen = await Promise.all([`/api/eggs/${egg.address}/config`, `/api/eggs?launchId=${launchId}`, `/g/${deps.keys.evm.address}`, `/g/${deps.keys.evm.address}?tab=rules`].map(async (p) => (await fetch(BOARD + p)).text()))
+  check(seen.every((t) => !t.includes('E2E-SECRET')), 'the board never shows the private directions')
+} else check(handed === undefined, 'no private directions handed over')
 const lb = await get('/api/leaderboard?sort=age')
 check(JSON.stringify(lb).toLowerCase().includes(deps.keys.evm.address.toLowerCase()), 'gremlin appears on the leaderboard')
 const page = await (await fetch(`${BOARD}/g/${deps.keys.evm.address}`)).text()
 check(page.includes('sprocket') || page.includes(deps.keys.evm.address), 'gremlin profile page renders')
-console.log(`\nE2E hatch passed${PERSONAL ? ' (plain-text maker signature)' : ''}.`)
+console.log(`\nE2E hatch passed${PERSONAL ? ' (plain-text maker signature)' : ''}${PRIVATE ? ' (private directions)' : ''}.`)

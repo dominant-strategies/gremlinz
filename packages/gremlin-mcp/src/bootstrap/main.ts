@@ -31,7 +31,11 @@ const write = (rel: string, body: string, mode = 0o600) => {
   chmodSync(f, mode)
 }
 
-write('SOUL.md', soulMarkdown(config, { evmAddress: k.evm.address, quaiAddress: k.quai.address, boardUrl: boardUrl(), workdir: join(hermesHome, 'work') }), 0o444)
+// The maker's private directions (the egg opened them with its key): into SOUL.md, readable by the gremlin's own user only.
+const privateDirections = (() => {
+  try { return (JSON.parse(readFileSync(homeFile('private-directions.json'), 'utf8')) as { text?: string }).text || undefined } catch { return undefined }
+})()
+write('SOUL.md', soulMarkdown(config, { evmAddress: k.evm.address, quaiAddress: k.quai.address, boardUrl: boardUrl(), workdir: join(hermesHome, 'work'), privateDirections }), privateDirections ? 0o400 : 0o444)
 write('config.yaml', hermesConfig({
   gatewayUrl,
   mcp: process.env.GREMLIN_MCP_URL

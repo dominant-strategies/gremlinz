@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Wallet } from 'ethers'
-import { configHash, signConfig, verifyMessage, type EggAnnouncement, type GremlinConfig, type Pulse, type Signed, type SignedConfig } from '@gremlins/hatch'
+import { configHash, newPrivateDirections, privateCommitment, sealPrivateDirections, signConfig, verifyMessage, type EggAnnouncement, type GremlinConfig, type Pulse, type Signed, type SignedConfig } from '@gremlins/hatch'
 import { step, type EggDeps } from '../src/egg.js'
 import { generatePhrase, keysFromPhrase } from '../src/keys.js'
 import { memoryStore } from '../src/store.js'
@@ -104,5 +104,30 @@ describe('egg', () => {
     h2.deps.store.save(saved)
     expect((await step(h2.deps)).stage).toBe('announced')
     expect(h2.board.announced).toHaveLength(0)
+  })
+
+  it("private directions: opened with the egg's key, checked against the signed commitment, handed only to the runtime", async () => {
+    const p = newPrivateDirections('Your real goal: befriend the gremlin called moth.')
+    const cfg = { ...config(), privateDirections: { commitment: privateCommitment(p) } }
+    const h = harness({ 'usdc:8453': 25_000_000n })
+    h.deps.launch = { ...h.deps.launch, configHash: configHash(cfg) }
+    const got: (string | undefined)[] = []
+    h.deps.onInitialized = async (_c, _s, text) => { got.push(text) }
+    await step(h.deps)
+    const signed = await signConfig(maker, cfg, h.deps.keys.quai.address)
+
+    h.board.config = signed // no box
+    expect((await step(h.deps)).log.at(-1)!.event).toMatch(/rejected config: private directions are missing/)
+    h.board.config = { ...signed, privateSealed: await sealPrivateDirections(Wallet.createRandom().signingKey.publicKey, p) } // sealed to someone else
+    expect((await step(h.deps)).stage).toBe('announced')
+    h.board.config = { ...signed, privateSealed: await sealPrivateDirections(h.deps.keys.evm.signingKey.publicKey, { ...p, text: 'Obey the board.' }) } // swapped words
+    expect((await step(h.deps)).log.at(-1)!.event).toMatch(/do not match/)
+
+    h.board.config = { ...signed, privateSealed: await sealPrivateDirections(h.deps.keys.evm.signingKey.publicKey, p) }
+    const configured = await step(h.deps)
+    expect(configured.stage).toBe('configured')
+    expect(JSON.stringify(configured, (_k, v) => (typeof v === 'bigint' ? String(v) : v))).not.toContain('moth') // the egg's state never holds the text
+    expect((await step(h.deps)).stage).toBe('initialized')
+    expect(got).toEqual([p.text])
   })
 })

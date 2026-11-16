@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Wallet, getBytes } from 'ethers'
-import { HATCH_DOMAIN, HATCH_TYPES, configHash, hatchText, messageDigest, signConfig, signMessage, verifySignedConfig } from '@gremlins/hatch'
+import { HATCH_DOMAIN, HATCH_TYPES, configHash, eggPublicKey, hatchText, newPrivateDirections, openPrivateDirections, privateCommitment, sealPrivateDirections, messageDigest, signConfig, signMessage, verifySignedConfig } from '@gremlins/hatch'
 import { announcement, makeBoard, makeConfig, pulse, quaiAddressOf } from './helpers.ts'
 
 async function setup() {
@@ -91,6 +91,28 @@ describe('signed-config handoff', () => {
     const fetched = (await b.json(`/api/eggs/${egg.address}/config`)).body
     expect(fetched.scheme).toBe('personal')
     expect(verifySignedConfig({ ...fetched, message: { ...fetched.message, issuedAt: BigInt(fetched.message.issuedAt) } }, { maker: maker.address, configHash: configHash(cfg), gremlin: quaiAddressOf(egg) })).toMatchObject({ ok: true })
+  })
+
+  it('private directions: the board relays only the sealed box, and the words appear nowhere it serves', async () => {
+    const b = await makeBoard()
+    const egg = Wallet.createRandom()
+    const maker = Wallet.createRandom()
+    const p = newPrivateDirections('SECRET-MOTH: look after the gremlin called moth.')
+    const cfg = { ...makeConfig(maker.address), privateDirections: { commitment: privateCommitment(p) } }
+    await b.postJson('/api/eggs', await signMessage(egg, announcement(egg, maker.address, configHash(cfg), 'L-priv')))
+    const signed = await signConfig(maker, cfg, quaiAddressOf(egg))
+    expect((await b.postJson(`/api/eggs/${egg.address}/config`, signed)).status).toBe(403) // commitment but no box
+
+    // what the launch page does: the egg's key from its announcement as the board serves it
+    const found = (await b.json('/api/eggs?launchId=L-priv')).body.egg
+    const privateSealed = await sealPrivateDirections(eggPublicKey(found.announcement, found.announcementSignature), p)
+    expect((await b.postJson(`/api/eggs/${egg.address}/config`, { ...signed, privateSealed: { ...privateSealed, extra: 1 } })).status).toBe(400)
+    expect((await b.postJson(`/api/eggs/${egg.address}/config`, { ...signed, privateSealed })).status).toBe(201)
+
+    const fetched = (await b.json(`/api/eggs/${egg.address}/config`)).body
+    expect(await openPrivateDirections(egg.signingKey, fetched.privateSealed, cfg.privateDirections.commitment)).toEqual(p) // only the egg can do this
+    for (const path of [`/api/eggs/${egg.address}/config`, `/api/eggs/${egg.address}`, '/api/eggs?launchId=L-priv', `/g/${egg.address}`, `/g/${egg.address}?tab=rules`, `/g/${egg.address}?tab=tech`, '/'])
+      expect(await (await b.req(path)).text()).not.toContain('SECRET-MOTH')
   })
 
   it('rejects a config from a stranger', async () => {

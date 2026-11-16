@@ -7,7 +7,7 @@
  * Moving out to a server under the gremlin's own keys, and handing over to the agent runtime, happen after
  * `hatched` and live elsewhere.
  */
-import { signMessage, verifySignedConfig, type EggAnnouncement, type GremlinConfig, type Pulse, type SignedConfig } from '@gremlins/hatch'
+import { openPrivateDirections, signMessage, verifySignedConfig, type EggAnnouncement, type GremlinConfig, type Pulse, type SignedConfig } from '@gremlins/hatch'
 import { tokenKey, FUNDING_TOKENS, CHAIN } from '@gremlins/treasury'
 import type { BoardClient } from './board-client.js'
 import { hasFunds, type BalanceReader, type Balances } from '@gremlins/treasury'
@@ -42,7 +42,8 @@ export interface EggDeps {
   /** Latest runtime status, merged into pulses. */
   readStatus?: () => RuntimeStatus
   /** Called once when the egg initializes; starts the agent runtime with the verified config. */
-  onInitialized: (config: GremlinConfig, signed: SignedConfig) => Promise<void>
+  /** `privateText`: the maker's private directions, opened with the egg's key (never kept in the egg's state). */
+  onInitialized: (config: GremlinConfig, signed: SignedConfig, privateText?: string) => Promise<void>
   pulseEveryMs?: number
 }
 
@@ -52,6 +53,13 @@ export function initialState(now: Date): EggState {
 
 function record(state: EggState, now: Date, event: string): EggState {
   return { ...state, log: [...state.log.slice(-99), { at: now.toISOString(), event }] }
+}
+
+/** The maker's private directions, opened now (so the egg's state never holds the text). */
+async function privateText(deps: Pick<EggDeps, 'keys'>, config: GremlinConfig, signed: SignedConfig): Promise<string | undefined> {
+  if (!config.privateDirections) return undefined
+  if (!signed.privateSealed) throw new Error('private directions are missing')
+  return (await openPrivateDirections(deps.keys.evm.signingKey, signed.privateSealed, config.privateDirections.commitment)).text
 }
 
 export function announcement(deps: Pick<EggDeps, 'keys' | 'launch'>, bootedAt: string): EggAnnouncement {
@@ -121,12 +129,21 @@ export async function step(deps: EggDeps): Promise<EggState> {
         state = record(state, now, `rejected config: ${v.reason}`)
         break
       }
+      // Private directions: the box must open with this egg's key and match the commitment the maker signed.
+      if (v.config.privateDirections) {
+        const why = await privateText(deps, v.config, signed).then(() => '', (e: Error) => e.message)
+        if (why) {
+          state = record(state, now, `rejected config: ${why}`)
+          break
+        }
+      }
       state = record({ ...state, stage: 'configured', config: v.config, signed }, now, 'configured')
       break
     }
     case 'configured': {
       if (!hasFunds(await readAll(deps))) break
-      await deps.onInitialized(state.config!, { ...state.signed!, message: { ...state.signed!.message, issuedAt: BigInt(state.signed!.message.issuedAt) } })
+      const signed = { ...state.signed!, message: { ...state.signed!.message, issuedAt: BigInt(state.signed!.message.issuedAt) } }
+      await deps.onInitialized(state.config!, signed, await privateText(deps, state.config!, signed))
       state = record({ ...state, stage: 'initialized' }, now, 'initialized')
       break
     }

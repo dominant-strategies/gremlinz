@@ -31,6 +31,11 @@ export interface Session {
   look?: { spec: unknown; label?: string; image: string } | null
   lookPosted?: boolean
   signed?: SignedConfig & { message: { issuedAt: bigint | string } }
+  /**
+   * Private directions: kept only in this browser until they are sealed to the egg, then the text is wiped
+   * (`delivered`). Never sent to the Forge, never in the config (only its commitment is).
+   */
+  privateDirections?: { text: string; salt: string } | { delivered: true }
   /** Where the egg server runs. */
   host?: 'fluence' | 'sporestack'
   /** Fluence: the board's hatch job, which holds the egg's hosting account until the egg takes it over. */

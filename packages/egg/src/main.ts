@@ -166,9 +166,11 @@ async function runEgg() {
       const health = readJson<{ tier: RuntimeStatus['tier']; at: string }>(join(home, 'health-tier.json'))
       return { ...status, ...(health && Date.now() - Date.parse(health.at) < 45 * 60_000 ? { tier: health.tier } : {}) }
     },
-    async onInitialized(config: unknown, signed: unknown) {
+    async onInitialized(config: unknown, signed: unknown, privateText?: string) {
       writeJson(configPath, config)
       writeJson(join(home, 'signed-config.json'), signed)
+      // Only the gremlin reads this (mode 0600, its own home); it goes into its SOUL.md and nowhere else.
+      if (privateText) writeJson(join(home, 'private-directions.json'), { text: privateText })
       startRuntime()
     },
   }
@@ -193,7 +195,7 @@ async function runEgg() {
     collect: () => collectPayload({ phrase: keys.phrase, gremlinHome: home, runtimeDir, launch: el }),
     pulseSeq: () => store.load()?.pulseSeq ?? 0,
     wipe: async () => {
-      for (const f of ['seed', 'state.json', 'config.json', 'signed-config.json', 'status.json', 'hosting.json']) rmSync(join(home, f), { force: true })
+      for (const f of ['seed', 'state.json', 'config.json', 'signed-config.json', 'private-directions.json', 'status.json', 'hosting.json']) rmSync(join(home, f), { force: true })
       rmSync(runtimeDir, { recursive: true, force: true })
       writeFileSync(join(home, 'MOVED'), `${moveOut?.nestAddress ?? 'unknown nest'} at ${new Date().toISOString()}\n`)
     },

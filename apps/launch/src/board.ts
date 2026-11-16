@@ -3,6 +3,8 @@ import type { EggAnnouncement, Sealed, SignedConfig } from '@gremlins/hatch'
 
 export interface EggRecord {
   announcement: EggAnnouncement
+  /** The egg's signature on its announcement: its public key comes from it (to seal private directions to it). */
+  announcementSignature?: string
   status: 'announced' | 'configured' | 'hatched' | string
 }
 
@@ -73,8 +75,8 @@ export function boardApi(baseUrl: string) {
       const res = await fetch(u(`/api/eggs?launchId=${encodeURIComponent(launchId)}`))
       if (res.status === 404) return undefined
       if (!res.ok) throw new Error(`board ${res.status}`)
-      const { egg } = (await res.json()) as { egg?: { announcement: EggAnnouncement; status: string } }
-      return egg ? { announcement: egg.announcement, status: egg.status } : undefined
+      const { egg } = (await res.json()) as { egg?: { announcement: EggAnnouncement; announcementSignature?: string; status: string } }
+      return egg ? { announcement: egg.announcement, announcementSignature: egg.announcementSignature, status: egg.status } : undefined
     },
     async postConfig(eggAddress: string, signed: SignedConfig): Promise<void> {
       const res = await fetch(u(`/api/eggs/${eggAddress}/config`), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed, replacer) })

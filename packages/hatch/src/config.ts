@@ -47,6 +47,11 @@ export const GremlinConfig = z.object({
     money: z.boolean(),
   }),
   constitution: z.array(z.enum(CONSTITUTION_SECTIONS)).refine((a) => new Set(a).size === a.length, 'duplicate sections'),
+  /**
+   * The maker gave it private directions (private.ts): only this salted commitment is public. The text travels sealed
+   * to the egg's key next to the signed config and is read by nobody but the gremlin.
+   */
+  privateDirections: z.object({ commitment: z.string().regex(/^0x[0-9a-fA-F]{64}$/) }).optional(),
   createdAt: z.string().datetime(),
 }).superRefine((c, ctx) => {
   const problem = economicsProblem(c)
