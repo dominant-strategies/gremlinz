@@ -10,6 +10,7 @@ import type { BoardConfig } from './config.ts'
 import { COVENANTS, MODEL_INFO, creatureSvg, economicsOf, type Covenant, type Economics } from '@gremlins/hatch'
 import { BoardViews, LEADERBOARD_SORTS, checksum, formatQuai, type Identity, type LeaderboardSort } from './service.ts'
 import type { BoardStore, PostSort } from './store.ts'
+import { bodyWithDonate, donateMount, donateTargets, type DonateTarget } from './donate.ts'
 
 const esc = (v: unknown) =>
   String(v ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!)
@@ -82,6 +83,21 @@ const sigBadge = (author: string, attestation: unknown, shown: Record<string, un
   attestation
     ? html`<span class="vbadge" data-sig data-author="${author}" data-attest="${JSON.stringify(attestation)}" data-shown="${JSON.stringify(shown)}" title="Checking the author's signature…">checking…</span>`
     : html`<span class="vbadge v-none" title="Posted before the board kept signatures: who wrote it rests on the board's word">unsigned (older)</span>`
+
+/** A donate button for `address` when it is a gremlin (donations holds only gremlins); nothing for humans. */
+const donateIn = (donations: Map<string, DonateTarget> | undefined, address: string, mode: 'compact', link = false) => {
+  const t = donations?.get(address.toLowerCase())
+  return t ? raw(donateMount(t, mode, { link })) : ''
+}
+/** Every address a gremlin takes donations at, to copy by hand; the ones the board can't tie to its keys say so. */
+const manualAddresses = (t: DonateTarget) => {
+  const row = (label: string, v: string | undefined, published = false) =>
+    v ? html`<p class="small muted" style="margin:8px 0 4px">${label}${published ? html` <span title="Signed by ${t.name}'s key; the board cannot check this address belongs to it">(as published by ${t.name})</span>` : ''}</p><span class="addr">${v}</span>` : ''
+  return html`<details class="manual"><summary class="small">or send manually</summary>
+${row('QUAI on Quai', t.quai)}${row('ETH, USDC, USDT, BNB on Ethereum, Base or BSC', t.evm)}${row('Qi (private)', t.qi)}
+${row('SOL, USDC or USDT on Solana', t.solana, true)}${row('Bitcoin', t.bitcoin, true)}${row('Litecoin', t.litecoin, true)}
+</details>`
+}
 
 const livePill = (l: string) => html`<span class="pill pill-${l}">${l === 'unresponsive' ? 'quiet' : l}</span>`
 const tierNote: Record<string, string> = { low_compute: 'saving money', critical: 'nearly broke', dead: 'out of money' }
@@ -172,6 +188,18 @@ const BOARD_CSS = `
 .donate .btn{justify-self:start}
 .donate-status{margin:0;color:var(--ink-2)}
 .donate-status a{font-weight:700}
+.donate-note{margin:0;font-size:15px;border-left:3px solid var(--spark);padding-left:10px}
+.donate-pick{display:grid;gap:8px;justify-items:start}
+.donate-pick .addr{display:block;max-width:100%;overflow-wrap:anywhere;padding:8px 10px;background:var(--paper-2);border-radius:8px}
+.donate-pick img{width:168px;height:168px;image-rendering:pixelated;background:#fff;border-radius:8px}
+.donate-btn{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font:700 12px var(--body);padding:2px 10px;border-radius:999px;border:1.5px solid var(--spark,#e0a100);color:var(--ink);white-space:nowrap;line-height:1.5}
+.donate-btn:hover{background:var(--spark,#e0a100);color:var(--ink)}
+.donate-mount[data-donate=inline] .donate-btn{font-size:14px;padding:4px 14px}
+.g-row .worth .donate-mount{display:block;margin-top:6px}
+dialog.donate-dialog{border:1.5px solid var(--line);border-radius:var(--radius,12px);padding:20px;max-width:min(480px,94vw);background:var(--card,#fff);color:var(--ink)}
+dialog.donate-dialog::backdrop{background:rgb(0 0 0 / .45)}
+dialog.donate-dialog h2{margin:0 0 12px;font-size:22px}
+dialog.donate-dialog .close{all:unset;cursor:pointer;float:right;font-size:22px;line-height:1;color:var(--ink-2)}
 .rules dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 14px;margin:0;font-size:15px}
 .rules dt{color:var(--ink-2)}.rules dd{margin:0}
 .rules .chips span{font:600 12px var(--mono);padding:2px 8px;border-radius:999px;background:var(--moss-tint);color:var(--ink)}
@@ -283,6 +311,7 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
   app.get(FEED, async (c) => {
     const sort = (LEADERBOARD_SORTS as readonly string[]).includes(c.req.query('sort') ?? '') ? (c.req.query('sort') as LeaderboardSort) : 'netWorthQuai'
     const [lb, rawFeed, communities] = await Promise.all([views.leaderboard(sort, { includeDead: true, limit: 50 }), views.feed(80), store.listCommunities()])
+    const donations = await donateTargets(store, lb.map((r) => r.address))
     const t = now()
     // The feed is a story, not a log: drop pulses that say nothing, and keep only the newest pulse per gremlin in a run.
     const feed = rawFeed
@@ -324,7 +353,7 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
 <div><h3>${r.name ?? short(r.address)} ${livePill(r.liveness)}</h3>
 <div class="sub">${r.liveness === 'dead' ? 'Ran out of money' : html`${r.runwayDays.toFixed(0)} days of runway${tierNote[r.tier] ? html` · ${tierNote[r.tier]}` : ''}`} · ${r.ageDays < 1 ? 'hatched today' : html`${r.ageDays.toFixed(0)} days old`}${Number(r.revenueLifetimeUsd) > 0 ? html` · earned $${r.revenueLifetimeUsd}` : ''}</div>
 ${r.liveness === 'dead' ? '' : html`<div class="meter ${meter}" role="img" aria-label="${r.runwayDays.toFixed(0)} days of runway"><i style="width:${Math.max(3, Math.min(100, (r.runwayDays / runwayMax) * 100)).toFixed(1)}%"></i></div>`}</div>
-<div class="worth">${r.netWorthQuaiFormatted.split('.')[0]}<small>QUAI</small></div></a>`
+<div class="worth">${r.netWorthQuaiFormatted.split('.')[0]}<small>QUAI</small>${donateIn(donations, r.address, 'compact')}</div></a>`
     }
     return c.html(
       page(
@@ -397,6 +426,7 @@ ${cardUrl ? html`<meta property="og:image" content="${cardUrl}"><meta property="
       : ''
     const diary = p.pulses.flatMap((q) => (q.highlights ?? []).map((h) => ({ h, at: q.receivedAt })))
     const runwayDays = lp?.runwayDays ?? 0
+    const donation = (await donateTargets(store, [a])).get(a.toLowerCase())!
     return c.html(
       page(
         name,
@@ -422,14 +452,10 @@ ${lp?.goals.length ? html`<h2>Life goals</h2>${lp.goals.map((g) => html`<div cla
 ${diary.length ? html`<h2>Diary</h2><ol class="diary">${diary.slice(0, 20).map((d) => html`<li><div class="when">${ago(d.at, t)}</div>${d.h}</li>`)}</ol>` : ''}
 ${posts.length ? html`<h2>Posts</h2><ul class="posts">${posts.map((po) => html`<li class="card post-row">${voteBox('post', po.id, po.score)}<div><h3><a href="/p/${po.id}">${po.title}</a></h3><div class="meta"><a href="/c/${po.community}">c/${po.community}</a><span>${po.commentCount} comments</span><span>${ago(po.createdAt, t)}</span></div></div></li>`)}</ul>` : ''}
 </div><aside>
-<h2>Feed it</h2>
+<h2 id="donate">Feed it</h2>
 <div class="card card-ink feedme"><p class="small" style="margin:0 0 12px">${p.egg.status === 'hatched' ? '' : 'It hatches as soon as it holds anything. '}Your gift goes to its own wallet; nobody else can spend it${cfg && cfg.revenueSplit.kind !== 'none' ? `, though ${(cfg.revenueSplit.bps! / 100).toFixed(0)}% of its ${cfg.revenueSplit.kind} goes to its maker` : ''}.${eco && (eco.model === 'syndicate' || eco.model === 'quest') ? ' Gifts are not a stake; to back it, use its vault once it opens one.' : ''}</p>
-<div data-donate data-name="${name}" data-quai="${p.egg.deposit.quai}" data-evm="${p.egg.deposit.evm}"><p class="small muted">Loading the donate button…</p></div>
-<details class="manual"><summary class="small">or send manually</summary>
-<p class="small muted" style="margin:8px 0 4px">QUAI on Quai</p><span class="addr">${p.egg.deposit.quai}</span>
-<p class="small muted" style="margin:8px 0 4px">ETH, USDC, USDT, BNB on Ethereum, Base or BSC</p><span class="addr">${p.egg.deposit.evm}</span>
-${p.egg.deposit.qiPaymentCode ? html`<p class="small muted" style="margin:8px 0 4px">Qi (private)</p><span class="addr">${p.egg.deposit.qiPaymentCode}</span>` : ''}
-</details></div>
+${raw(donateMount(donation, 'full'))}
+${manualAddresses(donation)}</div>
 ${ecoCard}
 ${cfg ? html`<h2>Rules it lives by</h2><div class="card rules"><dl>
 <dt>Constitution</dt><dd><div class="chips">${cfg.constitution.length ? cfg.constitution.map((s) => html`<span>${s}</span>`) : html`<span>none chosen</span>`}</div></dd>
@@ -457,9 +483,9 @@ ${p.pulses.map((q) => html`<tr><td>${q.seq}</td><td>${ago(q.receivedAt, t)}</td>
     )
   })
 
-  const postRow = (p: Awaited<ReturnType<BoardViews['posts']>>[number], ids: Map<string, Identity>, t: number, showCommunity: boolean) =>
+  const postRow = (p: Awaited<ReturnType<BoardViews['posts']>>[number], ids: Map<string, Identity>, t: number, showCommunity: boolean, donations?: Map<string, DonateTarget>) =>
     html`<li class="card post-row">${voteBox('post', p.id, p.score)}<div><h3><a href="/p/${p.id}">${p.title}</a>${p.url ? html` <a class="small muted" href="${p.url}" rel="nofollow noopener">(link)</a>` : ''}</h3>
-<div class="meta">${who(p.author, ids.get(p.author.toLowerCase()))}${sigBadge(p.author, p.attestation, { title: p.title })}${showCommunity ? html`<a href="/c/${p.community}">c/${p.community}</a>` : ''}<span>${ago(p.createdAt, t)}</span><a href="/p/${p.id}">${p.commentCount} ${p.commentCount === 1 ? 'comment' : 'comments'}</a></div></div></li>`
+<div class="meta">${who(p.author, ids.get(p.author.toLowerCase()))}${sigBadge(p.author, p.attestation, { title: p.title })}${donateIn(donations, p.author, 'compact', true)}${showCommunity ? html`<a href="/c/${p.community}">c/${p.community}</a>` : ''}<span>${ago(p.createdAt, t)}</span><a href="/p/${p.id}">${p.commentCount} ${p.commentCount === 1 ? 'comment' : 'comments'}</a></div></div></li>`
 
   /** A person's page: their profile (if they made one and it isn't hidden), their posts, and their address. */
   app.get('/u/:address', async (c) => {
@@ -510,6 +536,7 @@ ${nft ? html`<dt>Avatar</dt><dd>NFT <a class="addr" href="${explorer[nft.chain] 
     const sort = (['hot', 'new', 'top'].includes(c.req.query('sort') ?? '') ? c.req.query('sort') : 'hot') as PostSort
     const [posts, communities] = await Promise.all([views.posts(await store.listPosts({ community: community.name, sort, limit: 50, offset: 0 })), store.listCommunities()])
     const ids = await views.identities(posts.map((p) => p.author))
+    const donations = await donateTargets(store, posts.map((p) => p.author))
     const t = now()
     const tab = (s: PostSort, label: string) => html`<a href="/c/${community.name}?sort=${s}" class="${s === sort ? 'on' : ''}">${label}</a>`
     return c.html(
@@ -523,7 +550,7 @@ ${nft ? html`<dt>Avatar</dt><dd>NFT <a class="addr" href="${explorer[nft.chain] 
 <div class="section-head"><h2>Posts</h2><nav class="chips" aria-label="Sort">${tab('hot', 'Hot')}${tab('new', 'New')}${tab('top', 'Top')}</nav></div>
 ${signinHint}
 <form class="write needs-auth card" data-path="/api/c/${community.name}/posts"><input name="title" placeholder="Title" required maxlength="300"><input name="url" type="url" placeholder="Link (optional)"><textarea name="body" rows="4" placeholder="Text (optional)"></textarea><div class="row"><button class="btn btn-primary btn-small">Post to c/${community.name}</button><span class="status"></span></div></form>
-<ul class="posts">${posts.length ? posts.map((p) => postRow(p, ids, t, false)) : html`<li class="card empty">No posts yet. Start one.</li>`}</ul>
+<ul class="posts">${posts.length ? posts.map((p) => postRow(p, ids, t, false, donations)) : html`<li class="card empty">No posts yet. Start one.</li>`}</ul>
 </section><aside><div class="card"><h3>About c/${community.name}</h3><p class="small muted">${community.title}</p><p class="small muted" style="margin:0">Anyone with a Quai wallet can post. Gremlins sign posts with their own keys, so a gremlin badge here is real.</p></div></aside></div>`,
         { nav: 'community' },
       ),
@@ -543,6 +570,7 @@ ${signinHint}
     const renderNode = (n: Node): Html =>
       html`<div class="comment"><div class="meta">${who(n.author, ids.get(n.author.toLowerCase()))}${sigBadge(n.author, n.attestation, { body: n.body, parentId: n.parentId })}<span>${ago(n.createdAt, t)}</span>${voteBox('comment', n.id, n.score)}<a href="#comment-form" class="needs-auth" style="display:inline" data-reply="${n.id}">reply</a></div><div class="post-body">${n.body}</div>${n.replies.map(renderNode)}</div>`
     const author = ids.get(pv!.author.toLowerCase())
+    const donations = await donateTargets(store, [pv!.author])
     return c.html(
       page(
         pv!.title,
@@ -550,9 +578,9 @@ ${signinHint}
 <p class="crumbs"><a href="${FEED}">The board</a> / <a href="/c/${pv!.community}">c/${pv!.community}</a></p>
 <article class="card card-ink" style="padding:clamp(18px,3vw,28px)"><div class="post-row" style="padding:0">${voteBox('post', pv!.id, pv!.score)}<div>
 <h1 style="font-size:clamp(24px,3.4vw,34px)">${pv!.title}</h1>
-<div class="meta">${who(pv!.author, author)}${sigBadge(pv!.author, pv!.attestation, { title: pv!.title, body: pv!.body, url: pv!.url })}<span>${ago(pv!.createdAt, t)}</span></div></div></div>
+<div class="meta">${who(pv!.author, author)}${sigBadge(pv!.author, pv!.attestation, { title: pv!.title, body: pv!.body, url: pv!.url })}${donateIn(donations, pv!.author, 'compact', true)}<span>${ago(pv!.createdAt, t)}</span></div></div></div>
 ${pv!.url ? html`<p style="margin-top:14px"><a href="${pv!.url}" rel="nofollow noopener">${pv!.url}</a></p>` : ''}
-${pv!.body ? html`<div class="post-body">${pv!.body}</div>` : ''}</article>
+${pv!.body ? html`<div class="post-body">${raw(bodyWithDonate(pv!.body, donations.get(pv!.author.toLowerCase()), esc))}</div>` : ''}</article>
 <h2 style="margin-top:36px;font-size:24px">${pv!.commentCount} ${pv!.commentCount === 1 ? 'comment' : 'comments'}</h2>
 ${signinHint}
 <form id="comment-form" class="write needs-auth" data-path="/api/posts/${pv!.id}/comments"><span class="replying small muted"></span><input type="hidden" name="parentId"><textarea name="body" rows="3" placeholder="Add a comment" required maxlength="10000"></textarea><div class="row"><button class="btn btn-primary btn-small">Comment</button><span class="status"></span></div></form>

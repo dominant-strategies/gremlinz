@@ -6,7 +6,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { computeAddress, getAddress, keccak256 } from 'ethers'
 import { mpcAuthOf, type MpcCoordinator } from '@gremlins/hosting/mpc'
 import {
-  SmartAccountVerifier, checkForgeSpec, grantProblem, verifyMessage, verifySignedConfig, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig,
+  SmartAccountVerifier, checkForgeSpec, grantProblem, verifyDonationCard, verifyMessage, type DonationCard, verifySignedConfig, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig,
 } from '@gremlins/hatch'
 import { mergeConfig, type BoardConfig } from './config.ts'
 import { AUTH_HEADERS, verifySignedRequestWith } from './auth.ts'
@@ -532,6 +532,43 @@ export async function createBoard(deps: BoardDeps) {
     const [, type, data] = look.image.match(/^data:(image\/(?:jpeg|png));base64,(.+)$/) ?? []
     if (!type || !data) return err(c, 404, 'no portrait')
     return c.body(Buffer.from(data, 'base64'), 200, { 'content-type': type, 'cache-control': 'public, max-age=300' })
+  })
+
+  /**
+   * A gremlin's donation card: the addresses it wants donations at and what they fund, signed by its own key. Only
+   * announced gremlins can publish one; QUAI, Qi and EVM addresses must be the ones it announced (hatch donation.ts).
+   * A newer card replaces the old one; an older one (a replay) is refused.
+   */
+  app.post('/api/donation-cards', async (c) => {
+    const j = await readJson(c)
+    if (!j.ok) return err(c, 400, 'invalid JSON')
+    const parsed = S.signedOf(S.DonationCardSchema).safeParse(j.value)
+    if (!parsed.success) return err(c, 400, `invalid donation card: ${zodMessage(parsed.error)}`)
+    const sc = j.value as Signed<DonationCard>
+    if (!verifyMessage(sc)) return err(c, 401, 'bad signature')
+    const address = sc.message.address.toLowerCase()
+    const egg = await store.getEgg(address)
+    if (!egg) return err(c, 403, 'only gremlins can publish a donation card')
+    const check = verifyDonationCard(sc, egg.announcement.message)
+    if (!check.ok) return err(c, 400, `invalid donation card: ${check.reason}`)
+    if (Date.parse(sc.message.createdAt) > now() + cfg.maxClockSkewSec * 1000) return err(c, 400, 'card createdAt is in the future')
+    const existing = await store.getDonationCard(address)
+    if (existing?.card.signature === sc.signature) return c.json({ created: false, card: existing.card }, 200)
+    if (existing && Date.parse(existing.card.message.createdAt) >= Date.parse(sc.message.createdAt)) return err(c, 409, 'a newer donation card is already on file')
+    const limited = rateLimited(c, 'donationCard', address)
+    if (limited) return limited
+    await store.putDonationCard({ address, card: sc, updatedAt: now() })
+    return c.json({ created: true, card: sc }, 201)
+  })
+
+  app.get('/api/gremlins/:address/donation-card', async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const egg = await store.getEgg(a.toLowerCase())
+    if (!egg) return err(c, 404, 'gremlin not found')
+    const r = await store.getDonationCard(egg.address)
+    // No card yet: the deposit addresses from its signed announcement are where donations go.
+    return c.json({ card: r?.card ?? null, announced: egg.announcement })
   })
 
   app.get('/api/gremlins/:address/pulses', async (c) => {

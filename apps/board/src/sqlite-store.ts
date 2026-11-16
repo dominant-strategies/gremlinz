@@ -1,7 +1,7 @@
 /** BoardStore on Node's built-in SQLite (node:sqlite). Single process; WAL mode. */
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type {
-  DesignRecord, ProfileRecord, AvatarImage, AvatarKind,
+  DesignRecord, ProfileRecord, AvatarImage, AvatarKind, DonationCardRecord,
   BoardStore, Community, CommentRecord, EggRecord, EggStatus, EventRecord, NestRecord, NestStatus, PostRecord, PostSort, PulseRecord,
   StoredHandoff, VoteTarget, GrantRecord, LookRecord,
 } from './store.ts'
@@ -15,6 +15,13 @@ CREATE TABLE IF NOT EXISTS looks (
   image       TEXT NOT NULL,
   attestation TEXT NOT NULL,
   created_at  INTEGER NOT NULL
+);
+
+-- A gremlin's latest signed donation card (Signed<DonationCard> JSON), one row per gremlin.
+CREATE TABLE IF NOT EXISTS donation_cards (
+  address    TEXT PRIMARY KEY,
+  card       TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS eggs (
@@ -361,6 +368,17 @@ export class SqliteBoardStore implements BoardStore {
       card: r.card ? new Uint8Array(r.card as Uint8Array) : null, cardMime: (r.card_mime as string | null) ?? null,
       by: r.by_addr as string, attestation: r.attestation ? JSON.parse(r.attestation as string) : null, updatedAt: r.updated_at as number,
     }
+  }
+
+  async putDonationCard(r: DonationCardRecord) {
+    this.db
+      .prepare('INSERT INTO donation_cards (address, card, updated_at) VALUES (?, ?, ?) ON CONFLICT(address) DO UPDATE SET card = excluded.card, updated_at = excluded.updated_at')
+      .run(r.address, JSON.stringify(r.card), r.updatedAt)
+  }
+
+  async getDonationCard(address: string) {
+    const r = this.one('SELECT * FROM donation_cards WHERE address = ?', address.toLowerCase())
+    return r ? { address: r.address as string, card: JSON.parse(r.card as string), updatedAt: r.updated_at as number } : null
   }
 
   async setEggConfig(address: string, config: unknown, at: number) {

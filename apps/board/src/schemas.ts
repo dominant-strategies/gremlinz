@@ -46,6 +46,21 @@ export const PulseSchema = z.looseObject({
   highlights: z.array(z.string().max(500)).max(10).optional(),
 })
 
+/** A gremlin's donation card; hatch donationCardProblem checks the address formats and limits in detail. */
+export const DonationCardSchema = z.looseObject({
+  kind: z.literal('donation-card'),
+  address,
+  quai: address.optional(),
+  qiPaymentCode: z.string().max(200).optional(),
+  evm: address.optional(),
+  solana: z.string().max(64).optional(),
+  bitcoin: z.string().max(100).optional(),
+  litecoin: z.string().max(100).optional(),
+  note: z.string().max(1_200).optional(),
+  suggestedUsd: z.array(z.number().finite()).max(6).optional(),
+  createdAt: isoTime,
+})
+
 /** Uncompressed secp256k1 public key. */
 const uncompressedKey = z.string().regex(/^0x04[0-9a-fA-F]{128}$/, 'must be an uncompressed secp256k1 key (0x04 + 128 hex)')
 

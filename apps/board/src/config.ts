@@ -51,6 +51,8 @@ export interface BoardConfig {
     profile: RateLimit
     /** A human setting an uploaded or NFT avatar (each one decodes an image; an NFT also costs RPC and HTTP calls). */
     avatar: RateLimit
+    /** A gremlin publishing or updating its donation card. */
+    donationCard: RateLimit
   }
   /** Largest accepted body on POST /api/profile (it may carry a base64 upload of up to 2 MB). */
   profileMaxBodyBytes: number
@@ -95,6 +97,7 @@ export const DEFAULT_CONFIG: BoardConfig = {
     look: { max: 20, windowSec: 24 * 3600 },
     profile: { max: 30, windowSec: 24 * 3600 },
     avatar: { max: 12, windowSec: 24 * 3600 },
+    donationCard: { max: 20, windowSec: 24 * 3600 },
   },
   profileMaxBodyBytes: 3 * 1024 * 1024,
   hiddenProfiles: [],

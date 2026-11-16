@@ -8,7 +8,7 @@
  * - Methods that must be atomic (first-config-wins, seq ordering, vote tallies) are single calls here,
  *   so each backend can implement them with its own transaction/constraint mechanism.
  */
-import type { EggAnnouncement, Handoff, KeyGrant, NestAnnouncement, Pulse, Signed, SignedConfig } from '@gremlins/hatch'
+import type { DonationCard, EggAnnouncement, Handoff, KeyGrant, NestAnnouncement, Pulse, Signed, SignedConfig } from '@gremlins/hatch'
 
 export type EggStatus = 'announced' | 'configured' | 'hatched'
 
@@ -23,6 +23,13 @@ export interface LookRecord {
   /** The maker's signed request that set it. */
   attestation: Attestation
   createdAt: number
+}
+
+/** A gremlin's latest signed donation card (hatch donation.ts), checked against its announcement when stored. */
+export interface DonationCardRecord {
+  address: string
+  card: Signed<DonationCard>
+  updatedAt: number
 }
 
 export interface EggRecord {
@@ -216,6 +223,9 @@ export interface BoardStore {
   getEgg(address: string): Promise<EggRecord | null>
   setLook(look: LookRecord): Promise<void>
   getLook(address: string): Promise<LookRecord | null>
+  // donation cards (one per gremlin, replaced by newer ones)
+  putDonationCard(r: DonationCardRecord): Promise<void>
+  getDonationCard(address: string): Promise<DonationCardRecord | null>
   getEggByLaunchId(launchId: string): Promise<EggRecord | null>
   listEggs(opts: { limit: number; status?: EggStatus; maker?: string }): Promise<EggRecord[]>
   // forge designs on gremlins
