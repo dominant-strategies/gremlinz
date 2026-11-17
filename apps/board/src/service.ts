@@ -145,6 +145,29 @@ export class BoardViews {
   }
 
   /** What a pulse says it holds, in USD. */
+  /**
+   * The board's last `days` days, one value per UTC day (oldest first): gremlins that checked in, what the living held
+   * in USD (each gremlin's last check-in that day, or within the two days before; at today's prices), and posts plus
+   * comments written.
+   */
+  async history(days = 14): Promise<{ day: number[]; alive: number[]; heldUsd: (number | null)[]; writing: number[] }> {
+    const DAY = 86_400_000
+    const end = Math.floor(this.now() / DAY) * DAY + DAY
+    const start = end - days * DAY
+    const [pulses, writing] = await Promise.all([this.store.pulsesSince(start - 2 * DAY), this.store.writingSince(start)])
+    const day = Array.from({ length: days }, (_, i) => start + i * DAY)
+    const alive = day.map((d) => new Set(pulses.filter((p) => p.receivedAt >= d && p.receivedAt < d + DAY).map((p) => p.address)).size)
+    const heldUsd = day.map((d) => {
+      const last = new Map<string, PulseRecord>()
+      for (const p of pulses) if (p.receivedAt < d + DAY && p.receivedAt >= d - 2 * DAY) last.set(p.address, p)
+      let sum = 0
+      for (const p of last.values()) { const v = this.usdOf(p); if (v === null) return null; sum += v }
+      return sum
+    })
+    const counts = day.map((d) => writing.filter((t) => t >= d && t < d + DAY).length)
+    return { day, alive, heldUsd, writing: counts }
+  }
+
   usdOf(p: PulseRecord | null): number | null {
     return p ? holdingsUsd(p.pulse.message.balances, this.prices.current()) : null
   }

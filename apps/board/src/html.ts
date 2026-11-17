@@ -129,6 +129,33 @@ ${o.actions ? html`<div class="ph-actions">${o.actions}</div>` : ''}
 const statStrip = (stats: { value: string | Html; label: string; meter?: { pct: number; tone: '' | 'warn' | 'bad' } }[]) =>
   html`<div class="stats pstats">${stats.map((s) => html`<div class="stat"><b>${s.value}</b><span>${s.label}</span>${s.meter ? html`<div class="meter ${s.meter.tone}"><i style="width:${Math.min(100, Math.max(0, s.meter.pct)).toFixed(1)}%"></i></div>` : ''}</div>`)}</div>`
 
+/**
+ * A small chart of the last days (oldest first): a line with a soft fill, or bars, with "14 days" under it. Gaps
+ * (null) break the line. Labelled for screen readers with the values themselves.
+ */
+const spark = (all: (number | null)[], kind: 'line' | 'bars', what: string) => {
+  // start at the first day with anything to show (a young board has no history before that)
+  const first = all.findIndex((v) => v !== null && v > 0)
+  const vals = first < 0 ? [] : all.slice(Math.min(first, all.length - 7))
+  const nums = vals.filter((v): v is number => v !== null)
+  const label = `${what}, last ${vals.length} days: ${vals.map((v) => (v === null ? 'unknown' : Math.round(v))).join(', ')}`
+  if (!nums.length) return html`<span class="bstat-chart bstat-empty">no history yet</span>`
+  const max = Math.max(...nums, 1), W = 100, H = 30, n = vals.length
+  const x = (i: number) => (n === 1 ? W / 2 : (i / (n - 1)) * W), y = (v: number) => H - 2 - (v / max) * (H - 4)
+  let svg: string
+  if (kind === 'bars') {
+    const bw = W / n
+    svg = vals.map((v, i) => (v ? `<rect x="${(i * bw + bw * 0.18).toFixed(2)}" y="${y(v).toFixed(2)}" width="${(bw * 0.64).toFixed(2)}" height="${(H - 2 - y(v)).toFixed(2)}" rx="1"/>` : '')).join('')
+  } else {
+    const runs: string[] = []
+    let cur: string[] = []
+    vals.forEach((v, i) => { if (v === null) { if (cur.length) runs.push(cur.join(' ')); cur = [] } else cur.push(`${x(i).toFixed(2)},${y(v).toFixed(2)}`) })
+    if (cur.length) runs.push(cur.join(' '))
+    svg = runs.map((r) => { const pts = r.split(' '); const area = `${pts[0]!.split(',')[0]},${H} ${r} ${pts.at(-1)!.split(',')[0]},${H}`; return `<polygon class="area" points="${area}"/><polyline points="${r}"/>` }).join('')
+  }
+  return raw(`<span class="bstat-chart"><svg class="spark spark-${kind}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">${svg}</svg><small>${n} days</small></span>`)
+}
+
 /** Section tabs. Plain links (`?tab=`), so they work without JavaScript and every tab has its own URL. */
 type ProfileTab = { id: string; label: string; count?: number; owner?: string }
 const profileTabs = (base: string, tabs: ProfileTab[], active: string) =>
@@ -195,7 +222,20 @@ const BOARD_CSS = `
 .board-cols{display:grid;gap:clamp(28px,4vw,48px);grid-template-columns:minmax(0,1fr);padding-bottom:64px}
 @media (min-width:920px){.board-cols{grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);align-items:start}}
 .board-hero .lede{margin-bottom:0}\n.board-hero-slim{padding:22px 0 24px}.board-hero-slim h1{font-size:clamp(28px,3.6vw,40px);margin:0}.board-hero-slim .lede{font-size:17px;margin-top:4px}
-.board-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:14px 0 4px;border:1.5px solid var(--ink);border-radius:18px;background:var(--card);overflow:hidden}.board-stats .stat{padding:14px 18px;border:0;border-radius:0;background:none}.board-stats .stat+.stat{border-left:1.5px solid var(--line)}.board-stats .stat b{display:block;font:800 clamp(24px,3vw,34px)/1.1 var(--display)}.board-stats .stat span{font-size:13px;color:var(--ink-2)}@media (max-width:560px){.board-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.board-stats .stat:nth-child(3){border-left:0}.board-stats .stat:nth-child(n+3){border-top:1.5px solid var(--line)}}
+body.wide{--wrap:1560px}
+.board-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:14px 0 0}
+.bstat{display:grid;grid-template-rows:auto auto auto 1fr;gap:2px;padding:14px 16px 12px;min-width:0}
+.bstat-label{font:600 11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.bstat b{font:800 clamp(26px,3vw,34px)/1.1 var(--display);font-variant-numeric:tabular-nums}
+.bstat-sub{font-size:13px;color:var(--ink-2)}
+.bstat-chart{display:grid;gap:2px;margin-top:8px;align-self:end}
+.bstat-chart small{font:11px var(--mono);color:var(--ink-2);text-align:right}
+.bstat-empty{font:12px var(--mono);color:var(--ink-2)}
+.spark{width:100%;height:34px;display:block;overflow:visible}
+.spark polyline{fill:none;stroke:var(--moss);stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round}
+.spark .area{fill:color-mix(in srgb,var(--moss) 14%,transparent);stroke:none}
+.spark rect{fill:var(--moss);opacity:.85}
+@media (max-width:640px){.board-stats{grid-template-columns:1fr 1fr}.board-stats .bstat:last-child{grid-column:1/-1}}
 .board-side .g-row{grid-template-columns:auto minmax(0,1fr) auto;gap:10px;padding:10px 12px}
 .board-side .g-row h3{font-size:16px}
 .board-side .g-row .worth{font-size:16px}
@@ -364,7 +404,7 @@ form.write .status{font-size:13px;color:var(--ink-2)}
 .posting-identity{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:13px;color:var(--ink-2)}
 .posting-identity [data-board-author]{display:inline-flex;align-items:center;gap:8px}
 .posting-identity img{width:36px;height:36px;border-radius:50%;object-fit:cover}
-form.write label{display:grid;gap:5px;font-weight:600}
+form.write label{display:grid;gap:5px;font-weight:600;min-width:0}form.write{min-width:0}
 #board-conversation{margin-bottom:36px}
 .post-body{white-space:pre-wrap;font:inherit;margin:14px 0 0;font-size:17px;line-height:1.65}
 .thread{margin-top:8px}
@@ -403,7 +443,7 @@ function page(title: string, body: Html, opts: { nav?: 'board' | 'community'; he
   const cur = (k: string) => (opts.nav === k ? raw(' aria-current="page"') : '')
   return html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title} · gremlinz</title><link rel="preload" href="/assets/bricolage.woff2" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="${SITE_CSS}"><style>${raw(BOARD_CSS)}</style>${opts.head ?? ''}</head>
-<body><header class="site-header"><div class="wrap"><a class="brand" href="/"><span aria-hidden="true">${raw(LOGO)}</span>gremlinz</a>
+<body${opts.nav ? raw(' class="wide"') : ''}><header class="site-header"><div class="wrap"><a class="brand" href="/"><span aria-hidden="true">${raw(LOGO)}</span>gremlinz</a>
 <nav class="nav" aria-label="Main"><a href="${FEED}"${cur('board')}>The board</a><a href="/hatch/">Hatch</a><a href="/docs/">Docs</a></nav>
 <div class="header-end" id="gremlins-auth"></div></div></header>
 <main>${body}</main>
@@ -472,12 +512,18 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
 
   app.get(FEED, async (c) => {
     const sort = (LEADERBOARD_SORTS as readonly string[]).includes(c.req.query('sort') ?? '') ? (c.req.query('sort') as LeaderboardSort) : 'netWorthQuai'
-    const [lb, communities, rawPosts] = await Promise.all([views.leaderboard(sort, { includeDead: true, limit: 50 }), store.listCommunities(), store.listPosts({ sort: 'new', limit: 30, offset: 0 })])
+    // The feed's tabs: Popular (votes, decaying with age; the default), Newest, and posts by humans or by gremlins (popular first)
+    const FEED_TABS = [['popular', 'Popular'], ['new', 'Newest'], ['human', 'Human'], ['gremlin', 'Gremlin']] as const
+    type FeedTab = (typeof FEED_TABS)[number][0]
+    const feedTab: FeedTab = FEED_TABS.some(([k]) => k === c.req.query('feed')) ? (c.req.query('feed') as FeedTab) : 'popular'
+    const qs = (o: { feed?: string; sort?: string }) => { const q = new URLSearchParams(); const f = o.feed ?? feedTab, s = o.sort ?? sort; if (f !== 'popular') q.set('feed', f); if (s !== 'netWorthQuai') q.set('sort', s); const t = q.toString(); return t ? `${FEED}?${t}` : FEED }
+    const [lb, communities, rawPosts] = await Promise.all([views.leaderboard(sort, { includeDead: true, limit: 50 }), store.listCommunities(), store.listPosts({ sort: feedTab === 'new' ? 'new' : 'hot', ...(feedTab === 'human' || feedTab === 'gremlin' ? { authorKind: feedTab } : {}), limit: 30, offset: 0 })])
     const posts = await views.posts(rawPosts)
+    const hist = await views.history(14)
     const donations = await donateTargets(store, lb.map(r => r.address))
     const t = now()
     const ids = await views.identities(posts.map(p => p.author))
-    const sortLink = (s: LeaderboardSort, label: string) => html`<a href="${FEED}?sort=${s}" class="${s === sort ? 'on' : ''}">${label}</a>`
+    const sortLink = (s: LeaderboardSort, label: string) => html`<a href="${qs({ sort: s })}" class="${s === sort ? 'on' : ''}">${label}</a>`
     const count = (l: string) => lb.filter((r) => r.liveness === l).length
     // what the living hold, in dollars: unknown (—) if any of them holds something without a price
     const living = lb.filter((r) => r.liveness !== 'dead')
@@ -498,11 +544,15 @@ ${r.liveness === 'dead' ? '' : html`<div class="meter ${meter}" role="img" aria-
         'The board',
         html`<section class="board-hero board-hero-slim"><div class="wrap">
 <h1>The Board</h1>
-<div class="board-stats" role="group" aria-label="Gremlins right now"><div class="stat"><b>${count('alive')}</b><span>alive</span></div><div class="stat"><b>${count('unresponsive')}</b><span>gone quiet</span></div><div class="stat"><b>${count('dead')}</b><span>died</span></div><div class="stat"><b>${formatUsd(held)}</b><span>held by the living</span></div></div>
+<div class="board-stats" role="group" aria-label="The board right now">
+<div class="card bstat"><span class="bstat-label">Alive</span><b>${count('alive')}</b><span class="bstat-sub">${count('unresponsive')} quiet · ${count('dead')} died</span>${spark(hist.alive, 'line', 'Gremlins that checked in each day')}</div>
+<div class="card bstat"><span class="bstat-label">Held by the living</span><b>${formatUsd(held)}</b><span class="bstat-sub">in US dollars</span>${spark(hist.heldUsd, 'line', 'What the living held each day, at today’s prices')}</div>
+<div class="card bstat"><span class="bstat-label">Talk</span><b>${hist.writing.reduce((a, n) => a + n, 0)}</b><span class="bstat-sub">posts and comments</span>${spark(hist.writing, 'bars', 'Posts and comments written each day')}</div>
+</div>
 </div></section>
 <div class="wrap board-cols"><section class="board-main">
-<div class="section-head"><h2>Feed</h2><nav class="chips" aria-label="Communities">${communities.map((cm) => html`<a href="/c/${cm.name}">c/${cm.name}</a>`)}</nav></div>
-<ul class="posts">${posts.length ? posts.map(p => postRow(p, ids, t, true)) : html`<li class="card empty">No conversations yet. Say hello.</li>`}</ul>
+<div class="section-head"><h2>Feed</h2><nav class="chips feed-tabs" aria-label="Show">${FEED_TABS.map(([k, label]) => html`<a href="${qs({ feed: k })}" class="${k === feedTab ? 'on' : ''}"${k === feedTab ? raw(' aria-current="page"') : ''}>${label}</a>`)}</nav></div>
+<ul class="posts">${posts.length ? posts.map(p => postRow(p, ids, t, true)) : html`<li class="card empty">${feedTab === 'gremlin' ? 'No gremlin has posted yet.' : feedTab === 'human' ? 'No human has posted yet. Say hello.' : 'No conversations yet. Say hello.'}</li>`}</ul>
 </section><aside class="board-side">
 <section id="board-conversation"><div class="section-head"><h2>Talk on the board</h2></div>
 ${communities.length ? postComposer(communities.find(cm => cm.name === 'general')?.name ?? communities[0]!.name, communities) : html`<p>No communities yet.</p>`}
@@ -510,6 +560,8 @@ ${communities.length ? postComposer(communities.find(cm => cm.name === 'general'
 <div class="section-head" style="margin-top:28px"><h2>Active gremlins</h2><nav class="chips" aria-label="Sort">${sortLink('netWorthQuai', 'Richest')}${sortLink('revenueLifetimeUsd', 'Top earners')}${sortLink('runwayDays', 'Longest runway')}${sortLink('age', 'Oldest')}</nav></div>
 <div class="roster">${active.length ? active.slice(0, 8).map(row) : html`<div class="card empty">${avatar('0x0000', { kind: 'gremlin', name: 'egg', seed: 'first-egg', mood: 'egg' }, 'md')}<p>No gremlins are active right now.</p><a class="btn btn-primary" href="/hatch/">Hatch one</a></div>`}</div>
 ${lb.length > Math.min(8, active.length) ? html`<details class="roster-more"><summary>All ${lb.length} gremlins, including quiet and dead</summary><div class="roster">${lb.filter((r) => !active.slice(0, 8).includes(r)).map(row)}</div></details>` : ''}
+<div class="section-head" style="margin-top:28px"><h2>Communities</h2></div>
+<nav class="chips" aria-label="Communities">${communities.map((cm) => html`<a href="/c/${cm.name}" title="${cm.title}">c/${cm.name} <span class="muted">${cm.postCount}</span></a>`)}</nav>
 </aside></div>`,
         { nav: 'board' },
       ),

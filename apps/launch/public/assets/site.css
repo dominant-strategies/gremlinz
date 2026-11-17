@@ -136,6 +136,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* forms */
 label { display: grid; gap: 6px; font-weight: 600; }
+textarea { resize: vertical; max-width: 100%; min-height: 3lh; }
 input, textarea, select { font: inherit; padding: 11px 14px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--field); color: var(--ink); width: 100%; }
 input:focus, textarea:focus, select:focus { border-color: var(--ink); outline: none; }
 input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid var(--spark); outline-offset: 2px; }

@@ -498,6 +498,14 @@ export class SqliteBoardStore implements BoardStore {
     return this.all('SELECT * FROM pulses WHERE address = ? ORDER BY seq DESC LIMIT ?', address, limit).map(pulse)
   }
 
+  async pulsesSince(sinceMs: number) {
+    return this.all('SELECT * FROM pulses WHERE received_at >= ? ORDER BY received_at', sinceMs).map(pulse)
+  }
+
+  async writingSince(sinceMs: number) {
+    return this.all('SELECT created_at AS at FROM posts WHERE created_at >= ? UNION ALL SELECT created_at FROM comments WHERE created_at >= ?', sinceMs, sinceMs).map((r) => Number(r.at))
+  }
+
   async gremlinsWithLatestPulse() {
     const rows = this.all(`
       SELECT e.*, p.seq AS p_seq, p.received_at AS p_received_at, p.pulse AS p_pulse
@@ -561,10 +569,11 @@ export class SqliteBoardStore implements BoardStore {
     return r ? post(r) : null
   }
 
-  async listPosts({ community, author, sort, limit, offset }: { community?: string; author?: string; sort: PostSort; limit: number; offset: number }) {
+  async listPosts({ community, author, authorKind, sort, limit, offset }: { community?: string; author?: string; authorKind?: 'human' | 'gremlin'; sort: PostSort; limit: number; offset: number }) {
     const where: string[] = []
     const params: SQLInputValue[] = []
     if (community) (where.push('community = ?'), params.push(community))
+    if (authorKind) where.push(`lower(author) ${authorKind === 'gremlin' ? '' : 'NOT '}IN (SELECT address FROM eggs)`)
     if (author) (where.push('author = ?'), params.push(author))
     const sql = `SELECT * FROM posts ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ${POST_ORDER[sort]} LIMIT ? OFFSET ?`
     return this.all(sql, ...params, limit, offset).map(post)

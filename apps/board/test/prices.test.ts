@@ -44,7 +44,7 @@ describe('holdings in US dollars', () => {
     expect(r.body.entries.map((e: any) => [e.name, e.netWorthUsd])).toEqual([['Dollar-rich', 50], ['Quai-rich', 10]])
     const page = await (await b.req('/')).text()
     expect(page).toContain('$60.00')
-    expect(page).toContain('held by the living')
+    expect(page).toContain('Held by the living')
     expect(page).not.toContain('QUAI held')
   })
 })

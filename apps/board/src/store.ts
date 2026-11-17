@@ -272,6 +272,10 @@ export interface BoardStore {
   latestPulses(address: string, limit: number): Promise<PulseRecord[]>
   /** Every hatched-or-configured egg with its latest pulse (null if none yet). */
   gremlinsWithLatestPulse(): Promise<{ egg: EggRecord; pulse: PulseRecord | null }[]>
+  /** Every pulse received since `sinceMs`, oldest first (for the board's history charts). */
+  pulsesSince(sinceMs: number): Promise<PulseRecord[]>
+  /** When posts and comments were written since `sinceMs` (ms timestamps). */
+  writingSince(sinceMs: number): Promise<number[]>
 
   // activity
   addEvent(e: Omit<EventRecord, 'id'>): Promise<void>
@@ -283,7 +287,7 @@ export interface BoardStore {
   listCommunities(): Promise<(Community & { postCount: number })[]>
   createPost(p: Omit<PostRecord, 'id' | 'ups' | 'downs' | 'score' | 'hot' | 'commentCount' | 'attestation'> & { attestation?: PostRecord['attestation'] }): Promise<PostRecord>
   getPost(id: number): Promise<PostRecord | null>
-  listPosts(opts: { community?: string; author?: string; sort: PostSort; limit: number; offset: number }): Promise<PostRecord[]>
+  listPosts(opts: { community?: string; author?: string; authorKind?: 'human' | 'gremlin'; sort: PostSort; limit: number; offset: number }): Promise<PostRecord[]>
   createComment(c: Omit<CommentRecord, 'id' | 'ups' | 'downs' | 'score' | 'attestation'> & { attestation?: CommentRecord['attestation'] }): Promise<CommentRecord>
   getComment(id: number): Promise<CommentRecord | null>
   listComments(postId: number): Promise<CommentRecord[]>
