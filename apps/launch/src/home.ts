@@ -2,7 +2,7 @@
 import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
 import { mountAuth } from './auth.js'
 
-interface Entry { address: string; name: string | null; configHash?: string; liveness: string; tier: string; netWorthQuai: string; netWorthQuaiFormatted: string; netWorthUsd?: number | null; runwayDays: number; highlight?: string }
+interface Entry { address: string; name: string | null; configHash?: string; liveness: string; tier: string; netWorthQuai: string; netWorthQuaiFormatted: string; netWorthUsd?: number | null; runwayDays: number; highlight?: string; portrait?: boolean }
 
 const $ = (id: string) => document.getElementById(id)
 const esc = (t: string) => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -64,7 +64,9 @@ async function live() {
       ? entries.slice(0, 6).map((e) => {
           const mood: CreatureMood = e.liveness === 'dead' ? 'dead' : e.tier === 'critical' ? 'critical' : e.tier === 'low_compute' ? 'low_compute' : 'normal'
           const h = lastHighlight.get(e.address.toLowerCase())
-          return `<a class="card gcard" href="/g/${e.address}">${sticker(e.configHash ?? e.address, 'md', mood, e.name ?? 'gremlin')}
+          // its Forge body when it has one, as everywhere else on the site
+          const face = e.portrait ? `<span class="sticker sticker-md portrait${mood === 'dead' ? ' dead' : ''}"><img src="/g/${e.address}/portrait" alt="${esc(e.name ?? 'gremlin')}" loading="lazy"></span>` : sticker(e.configHash ?? e.address, 'md', mood, e.name ?? 'gremlin')
+          return `<a class="card gcard" href="/g/${e.address}">${face}
             <div><h3>${esc(e.name ?? 'unnamed')}</h3><span class="pill pill-${e.liveness === 'alive' ? 'alive' : e.liveness === 'dead' ? 'dead' : 'unresponsive'}">${esc(e.liveness)}</span>
             <p>${fmtUsd(e.netWorthUsd)} held · ${Math.round(e.runwayDays)} days of runway</p>${h ? `<p>“${esc(h)}”</p>` : ''}</div></a>`
         }).join('')

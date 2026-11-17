@@ -354,6 +354,12 @@ export class SqliteBoardStore implements BoardStore {
       .run(l.address.toLowerCase(), JSON.stringify(l.spec), l.label, l.image, JSON.stringify(l.attestation), l.createdAt)
   }
 
+  async lookAddresses(addresses: string[]) {
+    if (!addresses.length) return new Set<string>()
+    const list = addresses.map((a) => a.toLowerCase())
+    return new Set(this.all(`SELECT address FROM looks WHERE address IN (${list.map(() => '?').join(',')})`, ...list).map((r) => String(r.address)))
+  }
+
   async getLook(address: string) {
     const r = this.one('SELECT * FROM looks WHERE address = ?', address.toLowerCase())
     return r ? { address: r.address as string, spec: JSON.parse(r.spec as string), label: (r.label as string | null) ?? null, image: r.image as string, attestation: JSON.parse(r.attestation as string), createdAt: r.created_at as number } : null

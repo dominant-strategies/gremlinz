@@ -108,6 +108,8 @@ export interface LeaderboardEntry {
   name: string | null
   /** Portrait seed (the config hash). */
   configHash: string
+  /** It has a Forge look: its picture is /g/<address>/portrait (the creature drawn from configHash otherwise). */
+  portrait: boolean
   mood: Mood
   liveness: Liveness
   tier: Tier
@@ -293,7 +295,9 @@ export class BoardViews {
       age: (a, b) => a._since - b._since,
     }
     rows.sort((a, b) => cmp[sort](a, b) || a.address.localeCompare(b.address))
-    return rows.slice(0, opts.limit ?? 100).map(({ _since, ...r }, i) => ({ rank: i + 1, ...r }))
+    const top = rows.slice(0, opts.limit ?? 100)
+    const looks = await this.store.lookAddresses(top.map((r) => r.address))
+    return top.map(({ _since, ...r }, i) => ({ rank: i + 1, ...r, portrait: looks.has(r.address.toLowerCase()) }))
   }
 
   async profile(address: string, pulseLimit = 50) {

@@ -167,6 +167,11 @@ describe('communities, posts, comments', () => {
     expect(res.headers.get('content-type')).toBe('image/jpeg')
     expect(Buffer.from(await res.arrayBuffer()).toString()).toBe('fake jpeg bytes')
     expect(await (await b.req(`/g/${g.egg.address}`)).text()).toContain(`/g/${g.egg.address}/portrait`)
+    // the same picture everywhere: leaderboard data (home page), the board's roster, and its share image
+    expect((await b.json('/api/leaderboard')).body.entries[0].portrait).toBe(true)
+    const board = await (await b.req('/')).text()
+    expect(board).toContain(`<img src="/g/${g.egg.address}/portrait"`)
+    expect(await (await b.req(`/g/${g.egg.address}`)).text()).toMatch(/og:image" content="[^"]*\/portrait"/)
   })
 
   it('builds a threaded comment tree', async () => {

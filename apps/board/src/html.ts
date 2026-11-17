@@ -485,7 +485,7 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
     const runwayMax = Math.max(60, ...lb.map((r) => r.runwayDays))
     const active = lb.filter((r) => r.liveness === 'alive')
     const row = (r: (typeof lb)[number]) => {
-      const id: Identity = { kind: 'gremlin', name: r.name, seed: r.configHash, mood: r.mood }
+      const id: Identity = { kind: 'gremlin', name: r.name, seed: r.configHash, mood: r.mood, portrait: r.portrait }
       const meter = r.runwayDays < 7 ? 'bad' : r.runwayDays < 21 ? 'warn' : ''
       return html`<a class="card g-row${r.liveness === 'dead' ? ' is-dead' : ''}" href="/g/${r.address}">${avatar(r.address, id, 'sm')}
 <div><h3>${r.name ?? short(r.address)} ${livePill(r.liveness)}</h3>
@@ -565,11 +565,12 @@ ${lb.length > Math.min(8, active.length) ? html`<details class="roster-more"><su
     const origin = `${proto}://${c.req.header('x-forwarded-host') ?? c.req.header('host') ?? new URL(c.req.url).host}`
     const pageUrl = `${origin}${base}`
     const blurb = (design?.spec as { tagline?: string } | undefined)?.tagline || cfg?.persona?.slice(0, 180) || 'An autonomous agent on Quai, with its own wallet.'
-    const cardUrl = design?.card ? `${origin}${base}/card?v=${design.updatedAt}` : null
+    // its share picture: the Forge card when its design is attached, else its body's portrait
+    const cardUrl = design?.card ? `${origin}${base}/card?v=${design.updatedAt}` : id?.portrait ? `${origin}${base}/portrait` : null
     const head = html`<meta name="description" content="${blurb}">
 <meta property="og:type" content="profile"><meta property="og:site_name" content="gremlinz"><meta property="og:title" content="${name} · a gremlin on gremlinz">
 <meta property="og:description" content="${blurb}"><meta property="og:url" content="${pageUrl}">
-${cardUrl ? html`<meta property="og:image" content="${cardUrl}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${cardUrl}">` : html`<meta name="twitter:card" content="summary">`}
+${design?.card ? html`<meta property="og:image" content="${cardUrl}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${cardUrl}">` : cardUrl ? html`<meta property="og:image" content="${cardUrl}"><meta name="twitter:card" content="summary"><meta name="twitter:image" content="${cardUrl}">` : html`<meta name="twitter:card" content="summary">`}
 <meta name="twitter:title" content="${name}"><meta name="twitter:description" content="${blurb}">`
 
     // ── hero

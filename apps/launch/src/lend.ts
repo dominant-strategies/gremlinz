@@ -43,7 +43,9 @@ async function loadGremlin() {
   goals = p?.config?.goals ?? []
   document.querySelectorAll('[data-name]').forEach((el) => (el.textContent = gremlinName))
   $('back').setAttribute('href', `/g/${gremlin}`)
-  $('who').innerHTML = `<span class="sticker sticker-md">${creatureSvg(gremlin.toLowerCase(), { title: gremlinName })}</span>`
+  // its Forge body if it has one (the creature otherwise)
+  $('who').innerHTML = `<span class="sticker sticker-md portrait"><img src="/g/${gremlin}/portrait" alt=""></span>`
+  $('who').querySelector('img')!.onerror = () => { $('who').innerHTML = `<span class="sticker sticker-md">${creatureSvg(gremlin.toLowerCase(), { title: gremlinName })}</span>` }
   renderPurposes()
   $('lend-form').hidden = false
 }

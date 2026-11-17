@@ -237,6 +237,8 @@ export interface BoardStore {
   getEgg(address: string): Promise<EggRecord | null>
   setLook(look: LookRecord): Promise<void>
   getLook(address: string): Promise<LookRecord | null>
+  /** Which of these addresses have a Forge look (lowercase). */
+  lookAddresses(addresses: string[]): Promise<Set<string>>
   // donation cards (one per gremlin, replaced by newer ones)
   putDonationCard(r: DonationCardRecord): Promise<void>
   getDonationCard(address: string): Promise<DonationCardRecord | null>
