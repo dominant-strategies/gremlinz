@@ -28,8 +28,9 @@ describe('key grants on the board', () => {
     expect(JSON.stringify(list.body)).not.toContain('sk-or-v1-secret')
     expect(await openApiKey(egg.signingKey, list.body.grants[0].message.sealedKey)).toBe('sk-or-v1-secret')
 
-    const feed = await (await b.req('/')).text()
-    expect(feed).toContain('an inference key (spare OpenRouter budget)')
+    // the lender is credited in the public activity feed
+    const feed = await b.json('/api/feed')
+    expect(feed.body.events.some((e: { kind: string; label?: string }) => e.kind === 'grant' && e.label === 'spare OpenRouter budget')).toBe(true)
 
     const stranger = Wallet.createRandom()
     const bad: KeyRevoke = { kind: 'key-revoke', address: stranger.address, grantId: sg.message.grantId, createdAt: new Date().toISOString() }

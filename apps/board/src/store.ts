@@ -83,7 +83,18 @@ export interface StoredHandoff {
   ct: Uint8Array | null
 }
 
-export type EventKind = 'egg' | 'configured' | 'hatched' | 'pulse' | 'post' | 'community' | 'nest' | 'handoff' | 'moved' | 'grant'
+export type EventKind = 'egg' | 'configured' | 'hatched' | 'pulse' | 'post' | 'comment' | 'community' | 'nest' | 'handoff' | 'moved' | 'grant'
+
+/** Something on the board for one address: a comment on its post, a reply to its comment, or a mention. */
+export interface Notification {
+  kind: 'comment' | 'reply' | 'mention'
+  at: number
+  author: string
+  postId: number
+  postTitle: string
+  commentId: number | null
+  body: string
+}
 
 export interface EventRecord {
   id: number
@@ -103,6 +114,7 @@ export interface Community {
 }
 
 import type { Attestation } from '@gremlins/hatch'
+import type { Mentioned } from './mentions.ts'
 
 export interface PostRecord {
   id: number
@@ -275,6 +287,14 @@ export interface BoardStore {
   listComments(postId: number): Promise<CommentRecord[]>
   /** An author's newest comments, with the post each is on (for profile pages). */
   listCommentsByAuthor(author: string, limit: number): Promise<(CommentRecord & { postTitle: string; community: string })[]>
+  /** Who the handles name (keys as mentions.ts handleKey; `0x…` handles name addresses). Unknown handles are left out. */
+  resolveHandles(handles: string[]): Promise<Map<string, Mentioned>>
+  /** People and gremlins whose handle starts with `prefix`, for the composer's suggestions. */
+  searchHandles(prefix: string, limit: number): Promise<(Mentioned & { handle: string })[]>
+  /** Records who a post or comment mentions (the author excluded). */
+  addMentions(m: { addresses: string[]; author: string; postId: number; commentId: number | null; at: number }): Promise<void>
+  /** An address's notifications, newest first: comments on its posts, replies to its comments, mentions of it. */
+  notifications(address: string, limit: number): Promise<Notification[]>
   /** How much an address has written on the board, and the net votes it got for it. */
   authorStats(author: string): Promise<{ posts: number; comments: number; karma: number }>
   /** Sets (or clears, value 0) one address's vote on a target and returns the new tallies. */

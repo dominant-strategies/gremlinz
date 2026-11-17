@@ -445,6 +445,31 @@ function chooseWallet(opts: { title: string; note: string; only?: WalletKind[] }
 const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`
 
 /** Renders the header's sign-in button (or the signed-in account menu) into `slot`, and keeps it current. */
+// ── notifications: a bell beside the account chip, with how many are new since you last looked ──
+const seenKey = (address: string) => `gremlins.notifications.seen.${address.toLowerCase()}`
+export const notificationsSeen = (address: string) => Number(localStorage.getItem(seenKey(address)) ?? 0) || 0
+export function markNotificationsSeen(address: string) {
+  try { localStorage.setItem(seenKey(address), String(Date.now())) } catch { /* private mode */ }
+  for (const n of document.querySelectorAll<HTMLElement>('.bell .bell-n')) n.hidden = true
+}
+const BELL_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v3.6L4.3 15.5A1 1 0 0 0 5.2 17h13.6a1 1 0 0 0 .9-1.5L18 12.6V9a6 6 0 0 0-6-6Zm-2.4 15.5a2.5 2.5 0 0 0 4.8 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+function bell(address: string): HTMLElement {
+  const a = h('a', { class: 'bell', href: `/u/${address}?tab=notifications`, title: 'Notifications', 'aria-label': 'Notifications' })
+  a.innerHTML = BELL_SVG
+  const n = h('span', { class: 'bell-n', hidden: '' })
+  a.append(n)
+  void fetch(`/api/notifications/${address}?limit=50&since=${notificationsSeen(address)}`, { cache: 'no-store' })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j: { unread?: number } | null) => {
+      const k = j?.unread ?? 0
+      if (!k) return
+      n.textContent = k > 9 ? '9+' : String(k); n.hidden = false
+      a.setAttribute('aria-label', `Notifications: ${k} new`); a.classList.add('has-new')
+    })
+    .catch(() => {})
+  return a
+}
+
 export function mountAuth(slot: HTMLElement | null = document.getElementById('gremlins-auth')) {
   if (!slot) return
   const extras = [...slot.childNodes] // anything the page put there (a call to action) stays after the button
@@ -472,7 +497,7 @@ export function mountAuth(slot: HTMLElement | null = document.getElementById('gr
       out.onclick = () => signOut()
       closeMenu = () => toggle(false)
       box.addEventListener('keydown', (e) => { if (e.key === 'Escape') { toggle(false); chip.focus() } })
-      box.append(chip, menu)
+      box.append(bell(a.address), chip, menu)
     }
     slot.replaceChildren(box, ...extras)
   }

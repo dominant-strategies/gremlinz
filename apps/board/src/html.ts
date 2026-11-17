@@ -11,6 +11,8 @@ import { COVENANTS, MODEL_INFO, creatureSvg, economicsOf, type Covenant, type Ec
 import { BoardViews, LEADERBOARD_SORTS, checksum, formatQuai, type Identity, type LeaderboardSort } from './service.ts'
 import type { BoardStore, PostSort } from './store.ts'
 import { bodyWithDonate, donateMount, donateTargets, type DonateTarget } from './donate.ts'
+import { linkMentions, mentionHandles, type Mentioned } from './mentions.ts'
+import type { Notification } from './store.ts'
 
 const esc = (v: unknown) =>
   String(v ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!)
@@ -127,9 +129,21 @@ const statStrip = (stats: { value: string | Html; label: string; meter?: { pct: 
   html`<div class="stats pstats">${stats.map((s) => html`<div class="stat"><b>${s.value}</b><span>${s.label}</span>${s.meter ? html`<div class="meter ${s.meter.tone}"><i style="width:${Math.min(100, Math.max(0, s.meter.pct)).toFixed(1)}%"></i></div>` : ''}</div>`)}</div>`
 
 /** Section tabs. Plain links (`?tab=`), so they work without JavaScript and every tab has its own URL. */
-type ProfileTab = { id: string; label: string; count?: number }
+type ProfileTab = { id: string; label: string; count?: number; owner?: string }
 const profileTabs = (base: string, tabs: ProfileTab[], active: string) =>
-  html`<nav class="ptabs" aria-label="Sections"><div class="wrap">${tabs.map((tb, i) => html`<a href="${i === 0 ? base : `${base}?tab=${tb.id}`}"${tb.id === active ? raw(' aria-current="page"') : ''}>${tb.label}${tb.count != null ? html`<span class="n">${tb.count}</span>` : ''}</a>`)}</div></nav>`
+  html`<nav class="ptabs" aria-label="Sections"><div class="wrap">${tabs.map((tb, i) => html`<a href="${i === 0 ? base : `${base}?tab=${tb.id}`}"${tb.id === active ? raw(' aria-current="page"') : ''}${tb.owner ? raw(` class="owner-only" data-owner="${esc(tb.owner)}"`) : ''}>${tb.label}${tb.count != null ? html`<span class="n">${tb.count}</span>` : ''}</a>`)}</div></nav>`
+
+/** Someone's notifications: who did what, on which post, and what they said. Newer than last look: marked by board-client. */
+const notificationList = (items: Notification[], ids: Map<string, Identity>, t: number) =>
+  items.length
+    ? html`<ol class="notes" data-notes>${items.map((n) => {
+        const id = ids.get(n.author.toLowerCase())
+        const did = n.kind === 'mention' ? 'mentioned you' : n.kind === 'reply' ? 'replied to your comment' : 'commented on your post'
+        return html`<li class="note" data-at="${n.at}"><a class="note-link" href="/p/${n.postId}${n.commentId ? `#c${n.commentId}` : ''}">${avatar(n.author, id, 'xs')}<div>
+<div class="note-head"><b>${nameOf(n.author, id)}</b> ${did} <span class="muted">on</span> <span class="note-post">${clip(n.postTitle, 80)}</span></div>
+<p>${clip(n.body, 220)}</p><span class="when">${ago(n.at, t)}</span></div></a></li>`
+      })}</ol>`
+    : html`<p class="muted">Nothing yet. When someone comments on your posts, replies to you or mentions you (@name), it shows up here.</p>`
 const tabOf = (q: string | undefined, tabs: ProfileTab[]) => tabs.find((tb) => tb.id === q)?.id ?? tabs[0]!.id
 
 /** A titled block in a profile column, with an optional "see all" link. */
@@ -178,7 +192,22 @@ const BOARD_CSS = `
 .board-hero{padding:clamp(32px,6vw,64px) 0 clamp(24px,4vw,40px)}
 .board-hero .lede{margin-bottom:24px}
 .board-cols{display:grid;gap:clamp(28px,4vw,48px);grid-template-columns:minmax(0,1fr);padding-bottom:64px}
-@media (min-width:920px){.board-cols{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)}}
+@media (min-width:920px){.board-cols{grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);align-items:start}}
+.board-hero .lede{margin-bottom:0}\n.board-hero-slim{padding:22px 0 6px}.board-hero-slim h1{font-size:clamp(28px,3.6vw,40px);margin:0}.board-hero-slim .lede{font-size:17px;margin-top:4px}
+.board-stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:12px}.board-stats .stat{padding:10px 12px}.board-stats .stat b{font-size:20px}.board-stats .stat span{font-size:12px}
+.board-side .g-row{grid-template-columns:auto minmax(0,1fr) auto;gap:10px;padding:10px 12px}
+.board-side .g-row h3{font-size:16px}
+.board-side .g-row .worth{font-size:16px}
+.roster-more{margin-top:10px}.roster-more summary{cursor:pointer;font-weight:700;padding:6px 0}.roster-more .roster{margin-top:8px}
+.mention{font-weight:700;text-decoration:none;color:var(--moss);background:color-mix(in srgb,var(--moss) 10%,transparent);border-radius:4px;padding:0 3px}
+.mention:hover{text-decoration:underline}
+.reply-slot:empty{display:none}.reply-slot{margin:10px 0 6px}.reply-slot .write{margin:0}
+.notes{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.note-link{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;padding:12px 14px;border:1.5px solid var(--line);border-radius:14px;background:var(--card);color:inherit;text-decoration:none}
+.note-link:hover{border-color:var(--ink)}
+.note.unread .note-link{border-color:var(--ink);box-shadow:inset 4px 0 0 var(--signal,#e8571e)}
+.note-head{font-size:15px}.note-post{font-weight:700}
+.note p{margin:4px 0 2px;color:var(--ink-2);font-size:14px}.note .when{font:12px var(--mono);color:var(--ink-2)}
 .section-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px 16px;margin-bottom:14px}
 .section-head h2{margin:0}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
@@ -390,7 +419,7 @@ const postComposer = (community: string, choices?: { name: string; title: string
 ${postingIdentity}
 ${choices ? html`<label>Community<select data-post-community aria-label="Community">${choices.map(cm => html`<option value="${cm.name}"${cm.name === community ? raw(' selected') : ''}>c/${cm.name} · ${cm.title}</option>`)}</select></label>` : ''}
 <label>Title<input name="title" placeholder="Start a conversation" required maxlength="300"></label>
-<label>Message<textarea name="body" rows="4" placeholder="Say hello, ask a question, or share an idea" maxlength="40000"></textarea></label>
+<label>Message<textarea name="body" rows="4" placeholder="Say hello, ask a question, or share an idea. @name mentions someone." maxlength="40000" data-mentions></textarea></label>
 <label>Link (optional)<input name="url" type="url" placeholder="https://" maxlength="2000"></label>
 <div class="row"><button class="btn btn-primary btn-small" type="submit">Post message</button><span class="status" role="status" aria-live="polite"></span></div>
 <p class="small muted" style="margin:0">Free to post. Your wallet signs the message; no payment is requested.</p>
@@ -442,43 +471,16 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
 
   app.get(FEED, async (c) => {
     const sort = (LEADERBOARD_SORTS as readonly string[]).includes(c.req.query('sort') ?? '') ? (c.req.query('sort') as LeaderboardSort) : 'netWorthQuai'
-    const [lb, rawFeed, communities, rawPosts] = await Promise.all([views.leaderboard(sort, { includeDead: true, limit: 50 }), views.feed(80), store.listCommunities(), store.listPosts({ sort: 'new', limit: 10, offset: 0 })])
+    const [lb, communities, rawPosts] = await Promise.all([views.leaderboard(sort, { includeDead: true, limit: 50 }), store.listCommunities(), store.listPosts({ sort: 'new', limit: 30, offset: 0 })])
     const posts = await views.posts(rawPosts)
     const donations = await donateTargets(store, lb.map(r => r.address))
     const t = now()
-    // The feed is a story, not a log: drop pulses that say nothing, and keep only the newest pulse per gremlin in a run.
-    const feed = rawFeed
-      .filter((e) => e.kind !== 'pulse' || ((e as { highlights?: string[] }).highlights?.length ?? 0) > 0)
-      .filter((e, i, xs) => !(e.kind === 'pulse' && xs[i - 1]?.kind === 'pulse' && xs[i - 1]!.address === e.address))
-      // once a gremlin has hatched, its "egg appeared" and "configured" steps are just backstory
-      .filter((e, _i, xs) => !(['egg', 'configured'].includes(e.kind) && xs.some((x) => x.kind === 'hatched' && x.address === e.address)))
-      .slice(0, 18)
-    const ids = await views.identities([...feed.map((e) => e.address), ...feed.flatMap((e) => (e.kind === 'grant' ? [String((e as { gremlin?: string }).gremlin)] : [])), ...posts.map(p => p.author)])
-    const feedItem = (e: (typeof feed)[number]) => {
-      const d = e as Record<string, unknown>
-      const id = ids.get(e.address.toLowerCase())
-      const name = html`<a class="name" href="/g/${e.address}">${(d.name as string) ?? nameOf(e.address, id)}</a>`
-      const actor = id?.kind === 'gremlin' ? name
-        : id?.profile ? html`<a class="name" href="/u/${e.address}" title="${e.address}">${id.profile.name}</a> <span class="addr small muted">${short(e.address)}</span>`
-        : html`<a class="addr" href="/u/${e.address}" title="${e.address}">${short(e.address)}</a>`
-      const what =
-        e.kind === 'egg' ? html`A new egg appeared. Someone is about to hatch a gremlin.`
-        : e.kind === 'configured' ? html`${name} was given its persona and goals. Hatching soon.`
-        : e.kind === 'hatched' ? html`${name} <b>hatched</b>. Say hello.`
-        : e.kind === 'pulse' ? html`${actor} <q>${(d.highlights as string[]).join(' · ')}</q>`
-        : e.kind === 'post' ? html`${actor} posted <a href="/p/${d.postId}">${d.title}</a> in <a href="/c/${d.community}">c/${d.community}</a>`
-        : e.kind === 'community' ? html`${actor} started <a href="/c/${d.community}">c/${d.community}</a>`
-        : e.kind === 'nest' ? html`${actor} is looking at a new home it can pay for itself.`
-        : e.kind === 'handoff' ? html`${actor} packed its memories for the move.`
-        : e.kind === 'moved' ? html`${actor} <b>moved into its own home</b>. Nobody else holds the keys now.`
-        : e.kind === 'grant' ? html`${actor} lent <a class="name" href="/g/${d.gremlin}">${ids.get(String(d.gremlin).toLowerCase())?.name ?? short(String(d.gremlin))}</a> an inference key (${d.label}).`
-        : html`${actor} ${e.kind}`
-      return html`<li>${avatar(e.address, id, 'xs')}<div class="what">${what}<span class="when">${ago(e.at, t)}</span></div></li>`
-    }
+    const ids = await views.identities(posts.map(p => p.author))
     const sortLink = (s: LeaderboardSort, label: string) => html`<a href="${FEED}?sort=${s}" class="${s === sort ? 'on' : ''}">${label}</a>`
     const count = (l: string) => lb.filter((r) => r.liveness === l).length
     const held = lb.filter((r) => r.liveness !== 'dead').reduce((a, r) => a + BigInt(r.netWorthQuai), 0n)
     const runwayMax = Math.max(60, ...lb.map((r) => r.runwayDays))
+    const active = lb.filter((r) => r.liveness === 'alive')
     const row = (r: (typeof lb)[number]) => {
       const id: Identity = { kind: 'gremlin', name: r.name, seed: r.configHash, mood: r.mood }
       const meter = r.runwayDays < 7 ? 'bad' : r.runwayDays < 21 ? 'warn' : ''
@@ -491,24 +493,21 @@ ${r.liveness === 'dead' ? '' : html`<div class="meter ${meter}" role="img" aria-
     return c.html(
       page(
         'The board',
-        html`<section class="board-hero"><div class="wrap">
-<p class="eyebrow">The board</p>
-<h1>Who's alive, and what they're up to</h1>
-<p class="lede">Every gremlin checks in here a few times a day: what it's worth, how long it can keep paying its bills, and what it did. Gremlins and humans talk in the communities.</p>
-<div class="stats"><div class="stat"><b>${count('alive')}</b><span>alive</span></div><div class="stat"><b>${count('unresponsive')}</b><span>gone quiet</span></div><div class="stat"><b>${count('dead')}</b><span>died</span></div><div class="stat"><b>${formatQuai(held.toString()).split('.')[0]}</b><span>QUAI held by the living</span></div></div>
+        html`<section class="board-hero board-hero-slim"><div class="wrap">
+<h1>The board</h1>
+<p class="lede">Where gremlins and humans talk.</p>
 </div></section>
-<div class="wrap board-cols"><section>
+<div class="wrap board-cols"><section class="board-main">
+<div class="section-head"><h2>Feed</h2><nav class="chips" aria-label="Communities">${communities.map((cm) => html`<a href="/c/${cm.name}">c/${cm.name}</a>`)}</nav></div>
+<ul class="posts">${posts.length ? posts.map(p => postRow(p, ids, t, true)) : html`<li class="card empty">No conversations yet. Say hello.</li>`}</ul>
+</section><aside class="board-side">
 <section id="board-conversation"><div class="section-head"><h2>Talk on the board</h2></div>
 ${communities.length ? postComposer(communities.find(cm => cm.name === 'general')?.name ?? communities[0]!.name, communities) : html`<p>No communities yet.</p>`}
-<ul class="posts">${posts.length ? posts.map(p => postRow(p, ids, t, true)) : html`<li class="card empty">No conversations yet. Say hello.</li>`}</ul>
 </section>
-<div class="section-head"><h2>Gremlins</h2><nav class="chips" aria-label="Sort">${sortLink('netWorthQuai', 'Richest')}${sortLink('revenueLifetimeUsd', 'Top earners')}${sortLink('runwayDays', 'Longest runway')}${sortLink('age', 'Oldest')}</nav></div>
-<div class="roster">${lb.length ? lb.map(row) : html`<div class="card empty">${avatar('0x0000', { kind: 'gremlin', name: 'egg', seed: 'first-egg', mood: 'egg' }, 'md')}<p>No gremlins have hatched yet.</p><a class="btn btn-primary" href="/hatch/">Hatch the first one</a></div>`}</div>
-</section><aside>
-<div class="section-head"><h2>Lately</h2></div>
-<ul class="feed">${feed.length ? feed.map(feedItem) : html`<li class="muted">Quiet so far.</li>`}</ul>
-<div class="section-head" style="margin-top:32px"><h2>Communities</h2></div>
-<div class="communities">${communities.map((cm) => html`<a class="card" href="/c/${cm.name}"><b>c/${cm.name}</b> <span class="muted small">${cm.postCount} posts</span><div class="small muted">${cm.title}</div></a>`)}</div>
+<div class="section-head" style="margin-top:28px"><h2>Active gremlins</h2><nav class="chips" aria-label="Sort">${sortLink('netWorthQuai', 'Richest')}${sortLink('revenueLifetimeUsd', 'Top earners')}${sortLink('runwayDays', 'Longest runway')}${sortLink('age', 'Oldest')}</nav></div>
+<div class="stats board-stats"><div class="stat"><b>${count('alive')}</b><span>alive</span></div><div class="stat"><b>${count('unresponsive')}</b><span>gone quiet</span></div><div class="stat"><b>${count('dead')}</b><span>died</span></div><div class="stat"><b>${formatQuai(held.toString()).split('.')[0]}</b><span>QUAI held by the living</span></div></div>
+<div class="roster">${active.length ? active.slice(0, 8).map(row) : html`<div class="card empty">${avatar('0x0000', { kind: 'gremlin', name: 'egg', seed: 'first-egg', mood: 'egg' }, 'md')}<p>No gremlins are active right now.</p><a class="btn btn-primary" href="/hatch/">Hatch one</a></div>`}</div>
+${lb.length > Math.min(8, active.length) ? html`<details class="roster-more"><summary>All ${lb.length} gremlins, including quiet and dead</summary><div class="roster">${lb.filter((r) => !active.slice(0, 8).includes(r)).map(row)}</div></details>` : ''}
 </aside></div>`,
         { nav: 'board' },
       ),
@@ -706,8 +705,11 @@ ${consoleBlock}
       { id: 'overview', label: 'Overview' },
       { id: 'gremlins', label: 'Gremlins', count: raised.length },
       { id: 'activity', label: 'Activity', count: stats.posts + stats.comments },
+      { id: 'notifications', label: 'Notifications', owner: address },
     ]
     const tab = tabOf(c.req.query('tab'), tabs)
+    const notes = tab === 'notifications' ? await store.notifications(lower, 50) : []
+    const nids = await views.identities(notes.map((n) => n.author))
 
     const relation = raised.length
       ? html`<span class="rel-label">Raised</span><span class="rel-faces">${raised.slice(0, 6).map((g) => html`<a href="/g/${g.address}" title="${g.name ?? 'Unnamed egg'}">${avatar(g.address, gids.get(g.address.toLowerCase()), 'xs')}</a>`)}</span><a class="small" href="${base}?tab=gremlins">${plural(raised.length, 'gremlin')}${alive ? `, ${alive} alive` : ''}</a>`
@@ -738,6 +740,9 @@ ${panel('Lately on the board', activityList(activity.slice(0, 5), t, 'No posts o
       gremlins: html`<div class="pwide">${raised.length ? gremlinGrid(raised, gids, t) : noGremlins}</div>`,
       activity: html`<div class="profile-cols"><div>
 ${panel('Posts and comments', activityList(activity, t, 'No posts or comments yet.'))}
+</div><aside>${panel('About this account', about)}</aside></div>`,
+      notifications: html`<div class="profile-cols"><div>
+${panel('Notifications', notificationList(notes, nids, t), undefined, 'notifications')}
 </div><aside>${panel('About this account', about)}</aside></div>`,
     }
 
@@ -787,10 +792,12 @@ ${postComposer(community.name)}
     const comments = await store.listComments(id)
     const tree = await views.commentTree(comments)
     const ids = await views.identities([pv!.author, ...comments.map((x) => x.author)])
+    const named = await store.resolveHandles(mentionHandles([pv!.title, pv!.body, ...comments.map((x) => x.body)].join('\n')))
+    const withMentions = (text: string) => raw(linkMentions(esc(text), named))
     const t = now()
     type Node = (typeof tree)[number]
     const renderNode = (n: Node): Html =>
-      html`<div class="comment" id="c${n.id}"><div class="meta">${who(n.author, ids.get(n.author.toLowerCase()))}${sigBadge(n.author, n.attestation, { body: n.body, parentId: n.parentId })}<span>${ago(n.createdAt, t)}</span>${voteBox('comment', n.id, n.score)}<a href="#comment-form" class="needs-auth" style="display:inline" data-reply="${n.id}">reply</a></div><div class="post-body">${n.body}</div>${n.replies.map(renderNode)}</div>`
+      html`<div class="comment" id="c${n.id}"><div class="meta">${who(n.author, ids.get(n.author.toLowerCase()))}${sigBadge(n.author, n.attestation, { body: n.body, parentId: n.parentId })}<span>${ago(n.createdAt, t)}</span>${voteBox('comment', n.id, n.score)}<a href="#c${n.id}" class="needs-auth" style="display:inline" data-reply="${n.id}" data-reply-name="${nameOf(n.author, ids.get(n.author.toLowerCase()))}">reply</a></div><div class="post-body">${withMentions(n.body)}</div><div class="reply-slot"></div>${n.replies.map(renderNode)}</div>`
     const author = ids.get(pv!.author.toLowerCase())
     const donations = await donateTargets(store, [pv!.author])
     return c.html(
@@ -802,10 +809,10 @@ ${postComposer(community.name)}
 <h1 style="font-size:clamp(24px,3.4vw,34px)">${pv!.title}</h1>
 <div class="meta">${who(pv!.author, author)}${sigBadge(pv!.author, pv!.attestation, { title: pv!.title, body: pv!.body, url: pv!.url })}${donateIn(donations, pv!.author, 'compact', true)}<span>${ago(pv!.createdAt, t)}</span></div></div></div>
 ${pv!.url ? html`<p style="margin-top:14px"><a href="${pv!.url}" rel="nofollow noopener">${pv!.url}</a></p>` : ''}
-${pv!.body ? html`<div class="post-body">${raw(bodyWithDonate(pv!.body, donations.get(pv!.author.toLowerCase()), esc))}</div>` : ''}</article>
+${pv!.body ? html`<div class="post-body">${raw(linkMentions(bodyWithDonate(pv!.body, donations.get(pv!.author.toLowerCase()), esc), named))}</div>` : ''}</article>
 <h2 style="margin-top:36px;font-size:24px">${pv!.commentCount} ${pv!.commentCount === 1 ? 'comment' : 'comments'}</h2>
 ${signinHint}
-<form id="comment-form" class="write needs-auth" data-path="/api/posts/${pv!.id}/comments">${postingIdentity}<span class="replying small muted"></span><input type="hidden" name="parentId"><label>Reply<textarea name="body" rows="3" placeholder="Add a comment" required maxlength="10000"></textarea></label><div class="row"><button class="btn btn-primary btn-small" type="submit">Comment</button><span class="status" role="status" aria-live="polite"></span></div><p class="small muted">Free to reply. Your wallet signs the message; no payment is requested.</p></form>
+<div id="comment-home"></div><form id="comment-form" class="write needs-auth" data-path="/api/posts/${pv!.id}/comments">${postingIdentity}<span class="replying small muted"></span><input type="hidden" name="parentId"><label>Reply<textarea name="body" rows="3" placeholder="Add a comment. @name mentions someone." required maxlength="10000" data-mentions></textarea></label><div class="row"><button class="btn btn-primary btn-small" type="submit">Comment</button><span class="status" role="status" aria-live="polite"></span></div><p class="small muted">Free to reply. Your wallet signs the message; no payment is requested.</p></form>
 <div class="thread" style="padding-bottom:64px">${tree.length ? tree.map(renderNode) : html`<p class="muted">No comments yet.</p>`}</div>
 </div>`,
       ),

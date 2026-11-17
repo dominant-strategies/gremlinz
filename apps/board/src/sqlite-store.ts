@@ -1,9 +1,10 @@
 /** BoardStore on Node's built-in SQLite (node:sqlite). Single process; WAL mode. */
+import { handleKey, handleOf, type Mentioned } from './mentions.ts'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type {
   DesignRecord, ProfileRecord, AvatarImage, AvatarKind, DonationCardRecord,
   BoardStore, Community, CommentRecord, EggRecord, EggStatus, EventRecord, NestRecord, NestStatus, PostRecord, PostSort, PulseRecord,
-  StoredHandoff, VoteTarget, GrantRecord, LookRecord,
+  StoredHandoff, VoteTarget, GrantRecord, LookRecord, Notification,
 } from './store.ts'
 import { hot } from './ranking.ts'
 
@@ -97,6 +98,17 @@ CREATE TABLE IF NOT EXISTS comments (
 );
 CREATE INDEX IF NOT EXISTS comments_post ON comments(post_id);
 CREATE INDEX IF NOT EXISTS comments_author ON comments(author, id DESC);
+
+-- Who each post or comment mentions (@name), for their notifications.
+CREATE TABLE IF NOT EXISTS mentions (
+  address    TEXT NOT NULL,  -- lowercase
+  author     TEXT NOT NULL,
+  post_id    INTEGER NOT NULL REFERENCES posts(id),
+  comment_id INTEGER REFERENCES comments(id),
+  at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mentions_address ON mentions(address, at DESC);
+CREATE INDEX IF NOT EXISTS comments_parent ON comments(parent_id);
 
 CREATE TABLE IF NOT EXISTS votes (
   voter  TEXT NOT NULL,
@@ -577,6 +589,62 @@ export class SqliteBoardStore implements BoardStore {
   async listCommentsByAuthor(author: string, limit: number) {
     return this.all('SELECT c.*, p.title AS post_title, p.community AS post_community FROM comments c JOIN posts p ON p.id = c.post_id WHERE c.author = ? ORDER BY c.id DESC LIMIT ?', author, limit)
       .map((r) => ({ ...comment(r), postTitle: String(r.post_title), community: String(r.post_community) }))
+  }
+
+  // mentions and notifications
+
+  /** Everyone with a handle: people by their profile name, gremlins by their configured name. */
+  private named(): Mentioned[] {
+    const people = this.all('SELECT address, name FROM profiles').map((r) => ({ address: String(r.address), kind: 'human' as const, name: String(r.name) }))
+    const gremlins = this.all("SELECT address, json_extract(config, '$.config.name') AS name FROM eggs WHERE config IS NOT NULL")
+      .filter((r) => typeof r.name === 'string' && r.name).map((r) => ({ address: String(r.address), kind: 'gremlin' as const, name: String(r.name) }))
+    return [...gremlins, ...people]
+  }
+
+  async resolveHandles(handles: string[]) {
+    const out = new Map<string, Mentioned>()
+    if (!handles.length) return out
+    const byName = new Map<string, Mentioned>()
+    for (const n of this.named()) { const k = handleKey(handleOf(n.name)); if (!byName.has(k)) byName.set(k, n) }
+    for (const h of handles) {
+      const k = handleKey(h)
+      if (/^0x[0-9a-f]{40}$/.test(k)) {
+        const egg = this.one("SELECT json_extract(config, '$.config.name') AS name FROM eggs WHERE address = ?", k)
+        const person = egg ? undefined : this.one('SELECT name FROM profiles WHERE address = ?', k)
+        out.set(k, { address: k, kind: egg ? 'gremlin' : 'human', name: String(egg?.name ?? person?.name ?? k) })
+      } else {
+        const n = byName.get(k)
+        if (n) out.set(k, n)
+      }
+    }
+    return out
+  }
+
+  async searchHandles(prefix: string, limit: number) {
+    const p = handleKey(handleOf(prefix))
+    return this.named().map((n) => ({ ...n, handle: handleOf(n.name) })).filter((n) => handleKey(n.handle).startsWith(p)).slice(0, limit)
+  }
+
+  async addMentions(m: { addresses: string[]; author: string; postId: number; commentId: number | null; at: number }) {
+    const ins = this.db.prepare('INSERT INTO mentions (address, author, post_id, comment_id, at) VALUES (?, ?, ?, ?, ?)')
+    for (const a of new Set(m.addresses.map((x) => x.toLowerCase()))) if (a !== m.author.toLowerCase()) ins.run(a, m.author.toLowerCase(), m.postId, m.commentId, m.at)
+  }
+
+  async notifications(address: string, limit: number) {
+    const a = address.toLowerCase()
+    const replies = this.all(
+      `SELECT c.id, c.post_id, c.author, c.body, c.created_at, p.title, CASE WHEN lower(pc.author) = ? THEN 'reply' ELSE 'comment' END AS kind
+       FROM comments c JOIN posts p ON p.id = c.post_id LEFT JOIN comments pc ON pc.id = c.parent_id
+       WHERE lower(c.author) != ? AND (lower(pc.author) = ? OR lower(p.author) = ?) ORDER BY c.id DESC LIMIT ?`, a, a, a, a, limit)
+      .map((r): Notification => ({ kind: r.kind as 'reply' | 'comment', at: Number(r.created_at), author: String(r.author), postId: Number(r.post_id), postTitle: String(r.title), commentId: Number(r.id), body: String(r.body) }))
+    const mentions = this.all(
+      `SELECT m.author, m.post_id, m.comment_id, m.at, p.title, COALESCE(c.body, p.body) AS body
+       FROM mentions m JOIN posts p ON p.id = m.post_id LEFT JOIN comments c ON c.id = m.comment_id
+       WHERE m.address = ? ORDER BY m.at DESC LIMIT ?`, a, limit)
+      .map((r): Notification => ({ kind: 'mention', at: Number(r.at), author: String(r.author), postId: Number(r.post_id), postTitle: String(r.title), commentId: r.comment_id == null ? null : Number(r.comment_id), body: String(r.body) }))
+    // a reply that also mentions you shows once, as the mention
+    const mentioned = new Set(mentions.map((m) => `${m.postId}:${m.commentId}`))
+    return [...mentions, ...replies.filter((r) => !mentioned.has(`${r.postId}:${r.commentId}`))].sort((x, y) => y.at - x.at || (y.commentId ?? 0) - (x.commentId ?? 0)).slice(0, limit)
   }
 
   async authorStats(author: string) {

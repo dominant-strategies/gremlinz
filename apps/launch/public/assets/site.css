@@ -212,7 +212,18 @@ input[type=checkbox], input[type=radio], input[type=range] { width: auto; accent
 .panel-body { padding: 4px 16px 16px; }
 
 /* ── sign-in: header button, account menu, wallet dialog (auth.ts) ── */
-.auth { position: relative; display: flex; align-items: center; }
+.auth { position: relative; display: flex; align-items: center; gap: 8px; }
+.bell { position: relative; display: inline-grid; place-items: center; width: 38px; height: 38px; border-radius: 999px; border: 1.5px solid var(--line); background: var(--card); color: var(--ink); text-decoration: none; }
+.bell:hover { border-color: var(--ink); }
+.bell.has-new { border-color: var(--ink); }
+.bell-n { position: absolute; top: -5px; right: -5px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 999px; background: var(--signal, #e8571e); color: #fff; font: 800 11px/18px var(--body, sans-serif); text-align: center; }
+.bell-n[hidden] { display: none; }
+.mention-menu { list-style: none; margin: 4px 0 0; padding: 4px; border: 1.5px solid var(--ink); border-radius: 12px; background: var(--card); box-shadow: 0 10px 30px rgba(36,33,29,.15); max-width: 360px; }
+.mention-menu button { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 24px auto; grid-template-rows: auto auto; column-gap: 8px; width: 100%; padding: 6px 8px; border-radius: 8px; }
+.mention-menu button:hover, .mention-menu button:focus-visible { background: var(--field); }
+.mention-menu img { grid-row: 1 / 3; width: 24px; height: 24px; border-radius: 50%; align-self: center; }
+.mention-menu b { font-size: 14px; }
+.mention-menu span { font: 12px var(--mono, monospace); color: var(--ink-2); }
 .auth-chip { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 12px 0 5px; border-radius: 999px; border: 1.5px solid var(--line); background: var(--card); }
 .auth-chip:hover, .auth-chip[aria-expanded="true"] { border-color: var(--ink); }
 .auth-chip:focus-visible, .wallet-row:focus-visible, .wallet-close:focus-visible { outline: 2px solid var(--rosso); outline-offset: 2px; }

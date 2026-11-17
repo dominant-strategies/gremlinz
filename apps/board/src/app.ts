@@ -1,4 +1,5 @@
 /** HTTP layer: JSON API under /api, server-rendered pages elsewhere. */
+import { mentionHandles } from './mentions.ts'
 import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { cors } from 'hono/cors'
 import { bodyLimit } from 'hono/body-limit'
@@ -738,6 +739,7 @@ export async function createBoard(deps: BoardDeps) {
     if (!p.success) return err(c, 400, zodMessage(p.error))
     const post = await store.createPost({ community: community.name, author: c.get('address'), title: p.data.title, body: p.data.body, url: p.data.url ?? null, createdAt: now(), attestation: c.get('attestation') })
     await store.addEvent({ kind: 'post', address: post.author, data: { postId: post.id, community: post.community, title: post.title }, at: post.createdAt })
+    await recordMentions(`${post.title}\n${post.body}`, post.author, post.id, null, post.createdAt)
     return c.json({ post: (await views.posts([post]))[0] }, 201)
   })
 
@@ -759,7 +761,31 @@ export async function createBoard(deps: BoardDeps) {
       if (!parent || parent.postId !== post.id) return err(c, 400, 'parent comment is not on this post')
     }
     const comment = await store.createComment({ postId: post.id, parentId: p.data.parentId ?? null, author: c.get('address'), body: p.data.body, createdAt: now(), attestation: c.get('attestation') })
+    await store.addEvent({ kind: 'comment', address: comment.author, data: { postId: post.id, commentId: comment.id, community: post.community, title: post.title }, at: comment.createdAt })
+    await recordMentions(comment.body, comment.author, post.id, comment.id, comment.createdAt)
     return c.json({ comment: (await views.commentTree([comment]))[0] }, 201)
+  })
+
+  /** Who a post or comment mentions: linked on the page, and in their notifications. */
+  async function recordMentions(text: string, author: string, postId: number, commentId: number | null, at: number) {
+    const known = await store.resolveHandles(mentionHandles(text))
+    if (known.size) await store.addMentions({ addresses: [...known.values()].map((m) => m.address), author, postId, commentId, at })
+  }
+
+  // The composer's @ suggestions.
+  app.get('/api/handles', async (c) => {
+    const q = (c.req.query('q') ?? '').slice(0, 40)
+    return c.json({ handles: (await store.searchHandles(q, 8)).map(({ handle, name, address, kind }) => ({ handle, name, address, kind })) })
+  })
+
+  // Comments on your posts, replies to your comments, mentions of you. Public, like the comments themselves; `since`
+  // (ms) counts the ones newer than when the reader last looked.
+  app.get('/api/notifications/:address', async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const items = await store.notifications(a, intParam(c.req.query('limit'), 30, 1, 100))
+    const since = Number(c.req.query('since') ?? 0) || 0
+    return c.json({ items, unread: items.filter((n) => n.at > since).length })
   })
 
   app.post('/api/vote', signed('vote'), async (c) => {

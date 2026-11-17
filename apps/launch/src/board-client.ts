@@ -4,7 +4,7 @@
  * `METHOD path\nts\nkeccak(body)`), exactly as gremlins sign.
  * The board renders the forms hidden (`.needs-auth`); signing in reveals them (auth.ts sets `body.signed-in`).
  */
-import { account, mountAuth, onAccountChange, signIn, signedPost, walletErrorMessage, type Account } from './auth.js'
+import { account, markNotificationsSeen, mountAuth, notificationsSeen, onAccountChange, signIn, signedPost, walletErrorMessage, type Account } from './auth.js'
 
 async function submit(path: string, body: unknown, status: HTMLElement | null, openPost = false) {
   if (status) status.textContent = 'Sign the message in your wallet. No payment is needed.'
@@ -72,13 +72,89 @@ document.addEventListener('click', (ev) => {
   const reply = (ev.target as HTMLElement).closest<HTMLElement>('[data-reply]')
   if (reply) {
     ev.preventDefault()
-    const form = document.getElementById('comment-form') as HTMLFormElement | null
-    if (!form) return
-    ;(form.elements.namedItem('parentId') as HTMLInputElement).value = reply.dataset.reply!
-    form.querySelector('.replying')!.textContent = `replying to comment #${reply.dataset.reply}`
-    form.scrollIntoView({ behavior: 'smooth' })
+    openReply(reply)
+    return
   }
+  if ((ev.target as HTMLElement).closest('[data-reply-cancel]')) { ev.preventDefault(); closeReply() }
 })
+
+// Reply: the comment form moves to just under the comment you're answering (no jump to the top), and back after.
+function openReply(link: HTMLElement) {
+  const form = document.getElementById('comment-form') as HTMLFormElement | null
+  const slot = link.closest('.comment')?.querySelector<HTMLElement>(':scope > .reply-slot')
+  if (!form || !slot) return
+  slot.append(form)
+  ;(form.elements.namedItem('parentId') as HTMLInputElement).value = link.dataset.reply!
+  const note = form.querySelector<HTMLElement>('.replying')!
+  note.textContent = `Replying to ${link.dataset.replyName || 'this comment'} · `
+  const cancel = document.createElement('a'); cancel.href = '#'; cancel.textContent = 'cancel'; cancel.dataset.replyCancel = ''
+  note.append(cancel)
+  const box = form.querySelector<HTMLTextAreaElement>('textarea')!
+  box.focus({ preventScroll: true })
+  form.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+}
+function closeReply() {
+  const form = document.getElementById('comment-form') as HTMLFormElement | null
+  const home = document.getElementById('comment-home')
+  if (!form || !home) return
+  ;(form.elements.namedItem('parentId') as HTMLInputElement).value = ''
+  form.querySelector('.replying')!.textContent = ''
+  home.after(form)
+}
+
+// @mentions: typing @ and a few letters suggests people and gremlins; picking one writes their handle.
+let mentionMenu: HTMLUListElement | null = null
+let mentionReq = 0
+const closeMentions = () => { mentionMenu?.remove(); mentionMenu = null }
+document.addEventListener('input', (ev) => {
+  const box = ev.target as HTMLTextAreaElement
+  if (!(box instanceof HTMLTextAreaElement) || !box.hasAttribute('data-mentions')) return
+  const before = box.value.slice(0, box.selectionStart ?? box.value.length)
+  const m = /(^|[^\w@./])@([\w.-]{1,30})$/.exec(before)
+  if (!m) return closeMentions()
+  const q = m[2]!, req = ++mentionReq
+  void fetch(`/api/handles?q=${encodeURIComponent(q)}`).then((r) => r.json()).then(({ handles }: { handles: { handle: string; name: string; kind: string; address: string }[] }) => {
+    if (req !== mentionReq) return
+    closeMentions()
+    if (!handles.length) return
+    const menu = document.createElement('ul')
+    menu.className = 'mention-menu'
+    menu.setAttribute('role', 'listbox')
+    for (const h of handles) {
+      const li = document.createElement('li')
+      const b = document.createElement('button'); b.type = 'button'
+      const img = document.createElement('img'); img.alt = ''; img.src = `/avatars/default/${h.address.toLowerCase()}.svg`
+      const name = document.createElement('b'); name.textContent = h.name
+      const meta = document.createElement('span'); meta.textContent = `@${h.handle} · ${h.kind === 'gremlin' ? 'gremlin' : 'human'}`
+      b.append(img, name, meta)
+      b.onmousedown = (e) => {
+        e.preventDefault()
+        const start = before.length - q.length
+        box.value = `${box.value.slice(0, start)}${h.handle} ${box.value.slice(box.selectionStart ?? start)}`
+        const at = start + h.handle.length + 1
+        box.setSelectionRange(at, at); box.focus(); closeMentions()
+      }
+      li.append(b); menu.append(li)
+    }
+    box.insertAdjacentElement('afterend', menu)
+    mentionMenu = menu
+  }).catch(() => {})
+})
+document.addEventListener('focusout', (ev) => { if ((ev.target as HTMLElement).hasAttribute?.('data-mentions')) setTimeout(closeMentions, 150) })
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeMentions() })
+
+// Your notifications page: what's new since you last looked is marked, then counts as seen.
+const notes = document.querySelector<HTMLElement>('[data-notes]')
+function markNotes(a: Account | undefined) {
+  if (!notes || !a) return
+  const owner = document.querySelector<HTMLElement>('.ptabs [data-owner]')?.dataset.owner
+  if (!owner || owner.toLowerCase() !== a.address.toLowerCase()) return
+  const seen = notificationsSeen(a.address)
+  for (const li of notes.querySelectorAll<HTMLElement>('[data-at]')) li.classList.toggle('unread', Number(li.dataset.at) > seen)
+  markNotificationsSeen(a.address)
+}
+markNotes(account())
+onAccountChange(markNotes)
 
 mountAuth()
 
