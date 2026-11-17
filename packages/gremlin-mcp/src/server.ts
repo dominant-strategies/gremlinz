@@ -3,6 +3,7 @@ import { instrumentTools } from './dev/tools.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { BalanceReader } from '@gremlins/treasury'
 import { registerBoardTools } from './tools/board.js'
+import { registerDmTools } from './tools/dm.js'
 import { registerTreasuryTools } from './tools/treasury.js'
 import { registerStatusTools } from './tools/status.js'
 import { registerMoveOutTools } from './tools/moveout.js'
@@ -36,6 +37,7 @@ export function createServer(deps: ServerDeps = {}): McpServer {
   const server = new McpServer({ name: 'gremlin', version: '0.1.0' })
   instrumentTools(server, deps.telemetry ?? telemetry('mcp'))
   registerBoardTools(server)
+  registerDmTools(server)
   registerTreasuryTools(server, deps.balances)
   registerStatusTools(server)
   registerMoveOutTools(server, deps.now, deps.approve)
