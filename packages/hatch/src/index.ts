@@ -1,6 +1,7 @@
 export * from './config.js'
 export * from './signing.js'
 export * from './private.js'
+export * from './dm.js'
 export * from './protocol.js'
 export * from './request-auth.js'
 export * from './smart-account.js'
