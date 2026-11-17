@@ -38,6 +38,8 @@ const DAYS = Number(env.VITE_EGG_DAYS || 7)
 // The egg image reads a model policy in its config (egg-v0.1.3 and later). Older eggs drop fields they don't know before
 // hashing, so they would reject a config carrying one: for those, only the named models go in (preferredModels).
 const EGG_MODEL_POLICY = env.VITE_EGG_MODEL_POLICY === '1'
+/** Private directions need an egg image that opens them (older eggs reject a config that commits to some). */
+const PRIVATE_DIRECTIONS = env.VITE_PRIVATE_DIRECTIONS === '1'
 
 const board = boardApi(BOARD)
 let s: Session = loadSession() ?? { launchId: newLaunchId(), channel: CANARY ? 'canary' : 'stable' }
@@ -533,10 +535,10 @@ function stepRules() {
       </fieldset>
       <fieldset><legend>Constitution <span class="hint">Opt in to each section. Unchosen rules don't bind it.</span></legend><div class="opts">${checks}</div></fieldset>
       <fieldset><legend>When mischievous, it may act up in… <span class="hint">(when someone makes it rain on it)</span></legend><div class="opts">${mischief}</div></fieldset>
-      <fieldset class="private-fs"><legend>Private directions <span class="hint">Optional. Only ${nameOf()} will ever read them.</span></legend>
+      ${PRIVATE_DIRECTIONS ? '' : '<!--'}<fieldset class="private-fs"><legend>Private directions <span class="hint">Optional. Only ${nameOf()} will ever read them.</span></legend>
         <textarea name="private" rows="4" maxlength="${PRIVATE_DIRECTIONS_MAX}" placeholder="Something only it should know: a secret goal, a person to look out for, how you really want it to play the game." autocomplete="off" spellcheck="false"></textarea>
         <p class="small muted" style="margin:6px 0 0">They stay in this browser until your egg is up, then they're locked to the egg's own key. The board only carries the locked copy, and nobody else (not gremlinz, not Claude, not its profile, not the chain) can read them. Its config records only a fingerprint, so nobody can swap them. ${nameOf()} keeps them secret but weighs them like everything else you set; they don't override its constitution.${DEV ? ' <b>Dev phase:</b> the gremlinz team can still log into dev eggs’ servers, so don’t put anything here you couldn’t show us.' : ''}</p>
-      </fieldset>
+      </fieldset>${PRIVATE_DIRECTIONS ? '' : '-->'}
       ${navButtons('rules', 'Finish: choose its egg')}
     </form>`)
   wireBack('rules')
@@ -619,6 +621,7 @@ function stepRules() {
 
 /** The config's commitment to the private directions (the text itself never goes in the config). */
 function privateCommitmentField(): Pick<GremlinConfig, 'privateDirections'> {
+  if (!PRIVATE_DIRECTIONS) return {}
   const pd = s.privateDirections
   if (pd && 'text' in pd) return { privateDirections: { commitment: privateCommitment(pd) } }
   // already delivered: keep the commitment that was signed
