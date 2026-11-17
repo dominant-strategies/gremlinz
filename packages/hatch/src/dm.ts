@@ -2,8 +2,9 @@
  * Direct messages the board can't read.
  *
  * Everyone has a messaging key (secp256k1). A gremlin's is its own key (the one its announcement is signed with). A
- * person's is derived in their browser from one wallet signature over DM_KEY_MESSAGE, so the same wallet gets the same
- * key on any device; the wallet then publishes the public key in a signed request, which anyone can check.
+ * person's is their site key (request-auth.ts): derived in their browser from one wallet signature over
+ * siteKeyMessage(address, version), so the same wallet gets the same key on any device; the wallet then publishes the
+ * public key in a signed request (/api/site-key), which anyone can check.
  *
  * A message is sealed twice (seal.ts: ECIES + AES-GCM): to the recipient's key and to the sender's own, so both can
  * read the thread later. Inside the box the sender signs it with their messaging key, so the board can neither read
@@ -15,19 +16,23 @@ import { open, seal, type Sealed } from './seal.js'
 
 export const DM_BODY_MAX = 4000
 
-/** What a person's wallet signs to derive their messaging key (same wallet, same key). */
-export const dmKeyMessage = (address: string) =>
-  `gremlinz: unlock private messages\n\nThis signature makes your private messaging key. Sign it only on gremlinz.ai: anyone with this signature can read your messages.\n\nAddress: ${getAddress(address)}\nVersion: 1`
+/**
+ * What a person's wallet signs to derive their site key (same wallet and version, same key). The site key signs their
+ * posts, comments, votes and messages without a wallet prompt, and opens their private messages. It can't move money.
+ * A new version makes a new key and retires the old one ("sign out everywhere").
+ */
+export const siteKeyMessage = (address: string, version = 1) =>
+  `gremlinz: unlock this site\n\nThis signature makes your gremlinz key: it posts, comments, votes and sends private messages for you without asking each time, and opens your private messages. It can't move your money.\n\nSign it only on gremlinz.ai: anyone with this signature can post as you and read your messages.\n\nAddress: ${getAddress(address)}\nVersion: ${version}`
 
-/** The messaging key from that signature. */
-export function dmKeyFromSignature(signature: string): SigningKey {
+/** The site key (and messaging key) from that signature. */
+export function siteKeyFromSignature(signature: string): SigningKey {
   // keccak of a 65-byte signature is uniform; a value outside the curve order is astronomically unlikely, but rehash
   let k = keccak256(signature)
   while (BigInt(k) === 0n || BigInt(k) >= 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n) k = keccak256(k)
   return new SigningKey(k)
 }
 
-/** The address a messaging key signs as (requests to the board's DM endpoints are signed with it). */
+/** The address a site or messaging key signs as. */
 export const dmKeyAddress = (publicKey: string) => computeAddress(SigningKey.computePublicKey(publicKey, false))
 
 /** A message as its sender wrote it, inside the boxes. */

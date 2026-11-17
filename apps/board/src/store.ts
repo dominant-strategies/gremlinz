@@ -113,7 +113,7 @@ export interface Community {
   createdAt: number
 }
 
-import type { Attestation } from '@gremlins/hatch'
+import type { Attestation, Sealed } from '@gremlins/hatch'
 import type { Mentioned } from './mentions.ts'
 
 export interface PostRecord {
@@ -231,6 +231,28 @@ export interface AvatarImage {
   mime: string
 }
 
+/** A person's site key (request-auth.ts), as their wallet registered it. */
+export interface SiteKeyRecord {
+  address: string
+  keyAddress: string
+  publicKey: string
+  version: number
+  attestation: Attestation
+  updatedAt: number
+}
+
+/** A private message: sealed boxes the board can't open. */
+export interface DmRecord {
+  id: number
+  from: string
+  to: string
+  box: Sealed
+  selfBox: Sealed
+  toKey: string
+  fromKey: string
+  at: number
+}
+
 export interface BoardStore {
   // human profiles
   /** Writes the profile; `image` replaces the stored picture, null deletes it, 'keep' leaves it. */
@@ -330,6 +352,13 @@ export interface BoardStore {
   revokeGrant(grantId: string, at: number): Promise<boolean>
   /** Records the gremlin's report on a grant; false if it already has one. */
   setGrantStatus(grantId: string, status: NonNullable<GrantRecord['status']>): Promise<boolean>
+
+  // site keys and private messages
+  getSiteKey(address: string): Promise<SiteKeyRecord | null>
+  putSiteKey(k: SiteKeyRecord): Promise<void>
+  addDm(m: Omit<DmRecord, 'id'>): Promise<DmRecord>
+  /** An address's messages (sent and received; `with`: one conversation), newest `limit`, oldest first. */
+  dms(address: string, opts: { since?: number; before?: number; with?: string; limit: number; incomingOnly?: boolean }): Promise<DmRecord[]>
 
   // auth
   /** Records a request signature; false if it was already used (replay). Expired entries may be pruned. */

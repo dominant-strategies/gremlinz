@@ -15,7 +15,7 @@
  * The address is an EOA (the signature recovers to it) or a Quai Smart Wallet Safe, which signs the same payload
  * through ERC-1271: the `...With` variants take a checker for those (smart-account.ts).
  */
-import { keccak256, toUtf8Bytes, verifyMessage, type Signer } from 'ethers'
+import { SigningKey, computeAddress, keccak256, toUtf8Bytes, verifyMessage, type Signer } from 'ethers'
 import type { AccountSignatureChecker } from './smart-account.js'
 
 export const AUTH_HEADERS = {
@@ -164,6 +164,32 @@ export interface Attestation {
   timestamp: string
   body: string
   signature: string
+  /**
+   * Signed by the author's site key rather than their wallet: the wallet-signed request that registered that key
+   * (POST SITE_KEY_PATH, body `{ publicKey, version }`), so the chain author → key → content checks without the board.
+   */
+  delegation?: Attestation
+}
+
+// ── site keys ────────────────────────────────────────────────────────────────
+//
+// A person's wallet signs once (dm.ts siteKeyMessage) to derive a key in their browser, and once more to register it
+// with the board. After that their posts, comments, votes, profile, Forge requests and private messages are signed by
+// the site key, silently, with SITE_KEY_HEADER set. It can't move money: payments are always confirmed in the wallet.
+
+export const SITE_KEY_HEADER = 'x-gremlins-site-key'
+export const SITE_KEY_PATH = '/api/site-key'
+
+/** The key a site-key registration publishes: its address and public key, or why the registration doesn't hold. */
+export function siteKeyOf(registration: Attestation): { keyAddress: string; publicKey: string; version: number } | null {
+  if (registration.method !== 'POST' || registration.path !== SITE_KEY_PATH) return null
+  try {
+    const b = JSON.parse(registration.body) as { publicKey?: unknown; version?: unknown }
+    if (typeof b.publicKey !== 'string' || !Number.isSafeInteger(b.version) || (b.version as number) < 1) return null
+    return { keyAddress: computeAddress(b.publicKey).toLowerCase(), publicKey: SigningKey.computePublicKey(b.publicKey, false), version: b.version as number }
+  } catch {
+    return null
+  }
 }
 
 /** The address that signed this attestation, or null when it does not verify. No time window: it is a record. */
@@ -183,14 +209,33 @@ export function verifyAttestation(a: Attestation | null | undefined, author: str
   if (!a) return { ok: false, reason: 'no signature stored' }
   const signer = attestationSigner(a)
   if (!signer) return { ok: false, reason: 'malformed signature' }
-  if (signer.toLowerCase() !== author.toLowerCase()) return { ok: false, reason: `signed by ${signer}, not the author` }
+  if (signer.toLowerCase() !== author.toLowerCase()) {
+    const d = delegated(a, signer)
+    if (!d.ok) return d
+    const by = verifyAttestation(a.delegation, author, {})
+    if (!by.ok) return { ok: false, reason: `site key not registered by the author (${by.reason})` }
+  }
   return signedShown(a, shown)
+}
+
+/** Signed by a site key: is the attached registration for exactly that key? (Who signed the registration is checked by the caller.) */
+function delegated(a: Attestation, signer: string): { ok: true } | { ok: false; reason: string } {
+  if (!a.delegation) return { ok: false, reason: `signed by ${signer}, not the author` }
+  const k = siteKeyOf(a.delegation)
+  if (!k || k.keyAddress !== signer.toLowerCase()) return { ok: false, reason: `signed by ${signer}, which the author did not register` }
+  return { ok: true }
 }
 
 /** verifyAttestation, also accepting a smart-account author whose account vouches for the signature (ERC-1271, so as its owners stand now). */
 export async function verifyAttestationWith(a: Attestation | null | undefined, author: string, shown: Record<string, unknown>, accounts?: AccountSignatureChecker): Promise<{ ok: true } | { ok: false; reason: string }> {
   const r = verifyAttestation(a, author, shown)
-  if (r.ok || !a || !accounts || !/^(malformed signature|signed by )/.test(r.reason)) return r
+  if (r.ok || !a || !accounts) return r
+  // a site key registered by a smart account: the registration is the account's signature
+  if (a.delegation && /^site key not registered/.test(r.reason)) {
+    const by = await verifyAttestationWith(a.delegation, author, {}, accounts)
+    return by.ok ? signedShown(a, shown) : r
+  }
+  if (!/^(malformed signature|signed by )/.test(r.reason)) return r
   if (!(await accounts.isValidSignature(author, requestSigningPayload(a.method, a.path, a.timestamp, a.body), a.signature))) return r
   return signedShown(a, shown)
 }

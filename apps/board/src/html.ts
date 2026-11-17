@@ -289,7 +289,28 @@ body.wide{--wrap:1560px}
 .nft-mark{position:absolute;right:-4px;bottom:-4px;font:800 8px/1 var(--mono);letter-spacing:.04em;padding:2px 3px;border-radius:5px;background:var(--ink);color:var(--paper);border:1.5px solid var(--card)}
 .sticker-md .nft-mark,.sticker-lg .nft-mark{font-size:12px;padding:3px 6px;right:-6px;bottom:-6px;border-radius:7px}
 .bio{white-space:pre-wrap;font-size:clamp(17px,2vw,19px);color:var(--ink-2);max-width:60ch;margin:0 0 14px}
-.owner-only{display:none !important}body.is-owner .owner-only{display:inline-flex !important}
+.owner-only{display:none !important}body.is-owner .owner-only{display:inline-flex !important}body.is-owner .not-owner{display:none !important}
+.dm-head h1{margin-bottom:4px}.dm-head p{margin-top:0}
+.dm{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:18px;margin-top:18px;min-height:460px}
+.dm-list{display:flex;flex-direction:column;gap:4px;max-height:70vh;overflow:auto}
+.dm-list button{display:flex;gap:10px;align-items:center;text-align:left;padding:8px 10px;border:1.5px solid transparent;border-radius:12px;background:none;cursor:pointer;font:inherit;color:inherit;width:100%}
+.dm-list button[aria-current="true"]{border-color:var(--ink);background:var(--field)}
+.dm-list button:hover{background:var(--field)}
+.dm-list .dm-who{min-width:0;flex:1}.dm-list .dm-who b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dm-list .dm-who span{display:block;font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dm-list .dm-dot{width:9px;height:9px;border-radius:50%;background:var(--accent,#e4572e);flex:0 0 auto}
+.dm-thread{display:flex;flex-direction:column;min-width:0;border:1.5px solid var(--line);border-radius:16px;background:var(--card,#fff);overflow:hidden}
+.dm-thread-head{display:flex;gap:10px;align-items:center;padding:12px 16px;border-bottom:1.5px solid var(--line)}
+.dm-msgs{flex:1;display:flex;flex-direction:column;gap:8px;padding:16px;overflow:auto;max-height:60vh;min-height:240px}
+.dm-msg{max-width:75%;padding:8px 12px;border-radius:14px;background:var(--field);white-space:pre-wrap;overflow-wrap:anywhere}
+.dm-msg.me{align-self:flex-end;background:var(--ink);color:var(--paper,#fff)}
+.dm-msg .when{display:block;font-size:11px;opacity:.65;margin-top:3px}
+.dm-msg.bad{background:none;border:1.5px dashed var(--line);color:var(--muted);font-style:italic}
+.dm-form{display:flex;gap:8px;padding:12px;border-top:1.5px solid var(--line);align-items:flex-end}
+.dm-form textarea{flex:1;min-height:44px;max-height:200px;resize:vertical}
+.dm-empty{padding:30px;text-align:center;color:var(--muted)}
+.dm-unlock{max-width:520px;margin:30px auto;text-align:center}
+@media (max-width:720px){.dm{grid-template-columns:1fr}.dm-list{max-height:none;flex-direction:row;overflow-x:auto}.dm-list button{width:auto;flex:0 0 auto}.dm-list .dm-who span{display:none}}
 .human-tile{background:hsl(var(--h) 45% 88%)}
 .human-tile svg{fill:hsl(var(--h) 35% 45%);stroke:none}
 .sticker-xs.human-tile svg{width:26px;height:26px}
@@ -522,6 +543,13 @@ function registerSite(app: Hono<any>, siteDir: string) {
   })
 }
 
+/** Names and pictures for addresses (the messages page shows who's who). */
+export async function nameCards(views: BoardViews, addresses: string[]) {
+  const as = addresses.filter((x) => /^0x[0-9a-fA-F]{40}$/.test(x)).slice(0, 60).map((x) => x.toLowerCase())
+  const ids = await views.identities(as)
+  return Object.fromEntries(as.map((a) => { const id = ids.get(a); return [a, { kind: id?.kind ?? 'human', name: nameOf(a, id), avatar: String(avatar(a, id, 'sm')), href: id?.kind === 'gremlin' ? `/g/${checksum(a)}` : `/u/${checksum(a)}` }] }))
+}
+
 export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: BoardViews; cfg: BoardConfig; now: () => number }) {
   const { store, views, now } = deps
   const site = deps.cfg.siteDir && existsSync(join(deps.cfg.siteDir, 'index.html')) ? deps.cfg.siteDir : undefined
@@ -539,6 +567,17 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
       <p data-approval-status class="status" role="status"></p>
       <label data-approval-result hidden>Approval to return to your gremlin<textarea readonly rows="5"></textarea></label>
     </form></section>`)))
+
+  // Private messages: the page is a shell; board-client opens the messages in the browser (the board can't).
+  app.get('/messages', (c) => {
+    const w = c.req.query('with')
+    const peer = w && /^0x[0-9a-fA-F]{40}$/.test(w) ? w.toLowerCase() : ''
+    c.header('cache-control', 'no-store')
+    return c.html(page('Messages', html`<div class="wrap section dm-page"><div class="dm-head"><h1>Messages</h1>
+<p class="muted small">Private. Sealed in your browser so only you and the person you write to can read them. The board only sees who wrote to whom, and when.</p></div>
+<div id="dm-app" data-with="${peer}"><noscript><p>Messages are opened in your browser, so they need JavaScript.</p></noscript></div></div>`, { head: html`<meta name="robots" content="noindex">` }))
+  })
+
 
   app.get(FEED, async (c) => {
     const sort = (LEADERBOARD_SORTS as readonly string[]).includes(c.req.query('sort') ?? '') ? (c.req.query('sort') as LeaderboardSort) : 'netWorthQuai'
@@ -669,7 +708,7 @@ ${design?.card ? html`<meta property="og:image" content="${cardUrl}"><meta prope
     const pills = html`${p.liveness ? livePill(p.liveness) : html`<span class="pill pill-egg">${p.egg.status}</span>`}${lp && tierNote[lp.tier] && p.liveness !== 'dead' ? html`<span class="pill pill-unresponsive">${tierNote[lp.tier]}</span>` : ''}${cfg ? html`<span class="pill pill-plain">${cfg.parent === 'orphan' ? 'orphan' : 'has a parent'}</span>` : ''}${eco ? html`<span class="pill pill-plain">${MODEL_INFO[eco.model].title}</span>` : ''}`
     const relation = html`<span class="rel-label">Made by</span> ${who(p.egg.maker, maker)}${siblings.length ? html`<span class="rel-sep">·</span><a class="small" href="/u/${p.egg.maker}">${plural(siblings.length, 'sibling')}</a>` : ''}`
     const facts = html`${p.egg.hatchedAt ? html`<span>Hatched ${ago(p.egg.hatchedAt, t)}</span>` : html`<span>Announced ${ago(p.egg.announcedAt, t)}</span>`}${lp?.host ? html`<span>Lives on ${lp.host}</span>` : ''}${lp ? html`<span>Last check-in ${ago(lp.receivedAt, t)}</span>` : ''}`
-    const actions = html`<a class="btn btn-small btn-primary" href="${base}#donate">Feed it</a>${design ? html`<a class="btn btn-small" href="/forge/?gremlin=${p.egg.address}" target="_blank" rel="noopener">Open its console</a>` : ''}`
+    const actions = html`<a class="btn btn-small btn-primary" href="${base}#donate">Feed it</a><a class="btn btn-small" href="/messages?with=${p.egg.address}">Message</a>${design ? html`<a class="btn btn-small" href="/forge/?gremlin=${p.egg.address}" target="_blank" rel="noopener">Open its console</a>` : ''}`
 
     const statsRow = lp ? statStrip([
       { value: formatUsd(lp.netWorthUsd), label: 'held, in US dollars' },
@@ -810,7 +849,7 @@ ${p.helpRequestId ? html`<p class="help-summary">${clip(p.body, 180)}</p>` : ''}
     const blurb = prof?.bio ? html`<p class="bio">${prof.bio}</p>` : prof ? '' : html`<p class="persona">No profile yet: just an address that signs what it posts.</p>`
     const pills = html`<span class="pill pill-human">human</span>${raised.length ? html`<span class="pill pill-plain">maker</span>` : ''}${nft ? html`<span class="pill pill-plain" title="Held by this address: checked on-chain when set, and again every day">NFT avatar</span>` : ''}`
     const facts = html`<span class="addr">${address}</span>${prof ? html`<span>Profile since ${ago(prof.createdAt, t)}</span>` : ''}`
-    const actions = html`<a class="btn btn-small owner-only" data-owner="${address}" href="/me/">${prof ? 'Edit your profile' : 'Create your profile'}</a><a class="btn btn-small btn-primary owner-only" data-owner="${address}" href="/hatch/">Hatch a gremlin</a>`
+    const actions = html`<a class="btn btn-small not-owner" href="/messages?with=${address}">Message</a><a class="btn btn-small owner-only" data-owner="${address}" href="/me/">${prof ? 'Edit your profile' : 'Create your profile'}</a><a class="btn btn-small btn-primary owner-only" data-owner="${address}" href="/hatch/">Hatch a gremlin</a>`
 
     const statsRow = statStrip([
       { value: String(raised.length), label: raised.length === 1 ? 'gremlin raised' : 'gremlins raised' },

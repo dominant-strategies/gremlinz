@@ -6,7 +6,7 @@
  */
 import { creatureSvg } from '@gremlins/hatch/creature'
 import { HUMAN_SWATCHES, HUMAN_TRAITS, HUMAN_TRAIT_NAMES, humanSvg, humanTraits, type HumanTraitName, type HumanTraits } from '@gremlins/hatch/human'
-import { account, mountAuth, onAccountChange, signIn, signedPost, walletErrorMessage, type Account } from './auth.js'
+import { account, mountAuth, onAccountChange, signIn, sitePost, walletErrorMessage, type Account } from './auth.js'
 
 type Source = 'illustrated' | 'nft' | 'upload' | 'none'
 interface Profile {
@@ -267,8 +267,8 @@ $('form').addEventListener('submit', (e) => {
   const btn = $<HTMLButtonElement>('save')
   btn.disabled = true
   say(source === 'nft' && avatar ? 'Sign the request in your wallet; then the board checks the token on-chain…' : 'Sign the request in your wallet…')
-  // signedPost opens the Smart Wallet popup straight from this click (no awaits before it).
-  void signedPost('/api/profile', body)
+  // sitePost opens the Smart Wallet popup (if the site key needs unlocking) straight from this click (no awaits before it).
+  void sitePost('/api/profile', body)
     .then(async (res) => {
       const j = (await res.json().catch(() => ({}))) as { profile?: Profile; error?: string; hidden?: boolean; page?: string }
       if (!res.ok || !j.profile) throw new Error(j.error ?? `the board answered ${res.status}`)

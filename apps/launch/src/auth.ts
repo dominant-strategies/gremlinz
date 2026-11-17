@@ -131,6 +131,7 @@ export async function signIn(): Promise<Account> {
 }
 
 export function signOut(): void {
+  forgetSiteKey()
   if (current?.kind === 'walletconnect') void import('./wallets.js').then((w) => w.disconnectWalletConnect())
   if (current?.kind === 'smartwallet') disconnectSmartWallet()
   setAccount(undefined)
@@ -187,6 +188,94 @@ export async function signedPost(path: string, body: unknown, signal?: AbortSign
   })
 }
 
+// ── the site key ─────────────────────────────────────────────────────────────
+//
+// One wallet signature makes your site key here (the same wallet makes the same key on any device), and one more
+// registers it with the board. After that posts, comments, votes, your profile, the Forge and private messages are
+// signed by it without asking. It can't move money: payments are always confirmed in your wallet.
+
+interface StoredSiteKey { address: string; pk: string; version: number; keyAddress: string }
+const SITE_KEY_STORE = 'gremlins.sitekey'
+/** Where the site key may sign (the board allows the same set; anything else is signed by the wallet). */
+const SITE_KEY_PATHS = /^\/api\/(c\/[^/]+\/posts|posts\/\d+\/comments|vote|communities|profile|forge\/|gremlins\/0x[0-9a-fA-F]{40}\/(design|look)$|dm\/(send|inbox))/
+
+export function storedSiteKey(): StoredSiteKey | undefined {
+  try {
+    const k = JSON.parse(localStorage.getItem(SITE_KEY_STORE) || 'null') as StoredSiteKey | null
+    if (k && current && k.address.toLowerCase() === current.address.toLowerCase()) return k
+  } catch { /* none, or private mode */ }
+  return undefined
+}
+/** Forgets the site key in this browser (signing out). Unlocking again needs one wallet signature. */
+export function forgetSiteKey(): void {
+  try { localStorage.removeItem(SITE_KEY_STORE) } catch { /* ignore */ }
+}
+export const hasSiteKey = () => !!storedSiteKey()
+
+let unlocking: Promise<StoredSiteKey> | undefined
+/**
+ * Unlocks the site key: the wallet signs once to derive it, and once more to register it the first time (or after
+ * `rotate`: a new key replaces the old one everywhere, "sign out everywhere").
+ */
+export function unlockSiteKey(opts: { rotate?: boolean } = {}): Promise<StoredSiteKey> {
+  if (unlocking && !opts.rotate) return unlocking
+  const run = (async () => {
+    if (current?.kind === 'smartwallet') prepareSmartWallet()
+    const [{ Wallet }, { siteKeyFromSignature, siteKeyMessage, SITE_KEY_PATH }] = await Promise.all([import('ethers'), import('@gremlins/hatch')])
+    const a = current ?? (await signIn())
+    const reg = await fetch(`${SITE_KEY_PATH}/${a.address}`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null) as { key?: { version: number; keyAddress: string } } | null
+    const onFile = reg?.key
+    let version = opts.rotate ? (onFile?.version ?? 0) + 1 : onFile?.version ?? 1
+    let address = a.address
+    const derive = async () => {
+      const { address: signer, signature } = await walletSign((who) => siteKeyMessage((address = who), version))
+      address = signer
+      return new Wallet(siteKeyFromSignature(signature).privateKey)
+    }
+    let key = await derive()
+    if (onFile?.keyAddress.toLowerCase() !== key.address.toLowerCase()) {
+      // not on file (or this wallet signs differently than before): register it, above any version on file
+      if (onFile && !opts.rotate) { version = onFile.version + 1; key = await derive() }
+      const r = await signedPost(SITE_KEY_PATH, { publicKey: key.signingKey.publicKey, version })
+      if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? `The board answered ${r.status}.`)
+    }
+    const stored = { address: address.toLowerCase(), pk: key.privateKey, version, keyAddress: key.address.toLowerCase() }
+    try { localStorage.setItem(SITE_KEY_STORE, JSON.stringify(stored)) } catch { /* private mode: lives for this page */ }
+    window.dispatchEvent(new CustomEvent('gremlins:sitekey'))
+    return stored
+  })()
+  unlocking = run
+  run.catch(() => {}).finally(() => { if (unlocking === run) unlocking = undefined })
+  return run
+}
+
+/** POSTs JSON signed by the site key (unlocking it first if needed: the only wallet prompt). Retries once if the board turned the key down. */
+export async function sitePost(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+  if (!SITE_KEY_PATHS.test(path)) return signedPost(path, body, signal)
+  // unlocking starts before any await, so the Smart Wallet's popup still counts as opened by the click
+  const first = storedSiteKey() ? undefined : unlockSiteKey()
+  const [{ Wallet }, { AUTH_HEADERS, SITE_KEY_HEADER, requestSigningPayload }] = await Promise.all([import('ethers'), import('@gremlins/hatch')])
+  let k = storedSiteKey() ?? (first && (await first))
+  for (let attempt = 0; attempt < 2; attempt++) {
+    k ??= await unlockSiteKey()
+    const raw = JSON.stringify(body), ts = Math.floor(Date.now() / 1000)
+    const signature = await new Wallet(k.pk).signMessage(requestSigningPayload('POST', path, ts, raw))
+    const res = await fetch(path, {
+      method: 'POST', signal,
+      headers: { 'content-type': 'application/json', [AUTH_HEADERS.address]: k.address, [AUTH_HEADERS.timestamp]: String(ts), [AUTH_HEADERS.signature]: signature, [SITE_KEY_HEADER]: '1' },
+      body: raw,
+    })
+    if (res.status !== 401 || attempt) return res
+    const why = ((await res.clone().json().catch(() => ({}))) as { error?: string }).error ?? ''
+    if (!/site key/.test(why)) return res
+    forgetSiteKey(); k = undefined // retired elsewhere, or never registered: unlock again
+  }
+  throw new Error('unreachable')
+}
+export async function sitePostJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  return readReply<T>(await sitePost(path, body, signal))
+}
+
 // ── session keys ─────────────────────────────────────────────────────────────
 
 /** A throwaway key the wallet has granted one scope to, kept in this browser until it expires or you sign out. */
@@ -205,7 +294,7 @@ export function clearSessionKey(): void {
   try { localStorage.removeItem(SESSION_KEY) } catch { /* ignore */ }
 }
 /** Has this browser a live session for `scope`, so the next request won't open the wallet? */
-export const hasSessionKey = (scope: 'forge' = 'forge') => !!loadStoredSession(scope)
+export const hasSessionKey = (scope: 'forge' = 'forge') => hasSiteKey() || !!loadStoredSession(scope)
 
 /**
  * POSTs JSON signed by a browser session key: the wallet signs once to grant the key `scope` for a day, and every
@@ -247,7 +336,8 @@ export async function sessionPost(path: string, body: unknown, opts: { scope: 'f
 
 /** sessionPost, returning the parsed reply; throws with the board's error message. */
 export async function sessionPostJson<T>(path: string, body: unknown, opts: { scope: 'forge'; signal?: AbortSignal }): Promise<T> {
-  return readReply<T>(await sessionPost(path, body, opts))
+  // The site key covers the Forge now; the day-long Forge session stays for boards that don't know site keys.
+  return readReply<T>(await sitePost(path, body, opts.signal))
 }
 async function readReply<T>(res: Response): Promise<T> {
   const j = (await res.json().catch(() => ({}))) as T & { error?: string; retryAfterSec?: number }
@@ -470,6 +560,28 @@ function bell(address: string): HTMLElement {
   return a
 }
 
+// ── messages: an envelope beside the bell, with how many conversations have something new ──
+const MAIL_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="3" y="5.5" width="18" height="13" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m4 7.5 8 6 8-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+function mail(): HTMLElement {
+  const a = h('a', { class: 'bell mail', href: '/messages', title: 'Messages', 'aria-label': 'Messages' })
+  a.innerHTML = MAIL_SVG
+  const n = h('span', { class: 'bell-n', hidden: '' })
+  a.append(n)
+  const count = () => {
+    // only with the key already unlocked here: counting never asks the wallet
+    if (!hasSiteKey()) return
+    void import('./dm-ui.js').then((m) => m.unreadCount()).then((k) => {
+      n.hidden = !k; n.textContent = k > 9 ? '9+' : String(k)
+      a.classList.toggle('has-new', !!k)
+      a.setAttribute('aria-label', k ? `Messages: ${k} new` : 'Messages')
+    }).catch(() => {})
+  }
+  count()
+  window.addEventListener('gremlins:dm-seen', count)
+  const t = setInterval(() => { if (!a.isConnected) clearInterval(t); else if (!document.hidden) count() }, 60_000)
+  return a
+}
+
 export function mountAuth(slot: HTMLElement | null = document.getElementById('gremlins-auth')) {
   if (!slot) return
   const extras = [...slot.childNodes] // anything the page put there (a call to action) stays after the button
@@ -489,15 +601,23 @@ export function mountAuth(slot: HTMLElement | null = document.getElementById('gr
       const out = h('button', { type: 'button' }, 'Sign out')
       const profile = h('button', { type: 'button' }, 'Your profile')
       profile.onclick = () => { location.href = '/me/' }
+      const messages = h('button', { type: 'button' }, 'Messages')
+      messages.onclick = () => { location.href = '/messages' }
+      // a new site key replaces the old one on every device (a lost or shared device stops posting as you)
+      const everywhere = h('button', { type: 'button', title: 'Makes a new gremlinz key and retires the old one on every device. Messages sealed to the old key stay unreadable here.' }, 'Sign out everywhere')
+      everywhere.onclick = async () => {
+        if (!confirm('Sign out on every device? Your wallet signs twice to make a new key here. Messages sent to your old key can no longer be opened.')) return
+        try { await unlockSiteKey({ rotate: true }); everywhere.textContent = 'Done: other devices are signed out' } catch (e) { everywhere.textContent = walletErrorMessage(e) }
+      }
       const menu = h('div', { class: 'auth-menu', hidden: '' },
-        h('p', { class: 'small muted' }, `Signed in with ${walletName(a.kind)}`), h('p', { class: 'addr' }, a.address), profile, copy, out)
+        h('p', { class: 'small muted' }, `Signed in with ${walletName(a.kind)}`), h('p', { class: 'addr' }, a.address), profile, messages, copy, out, everywhere)
       const toggle = (show = menu.hidden) => { menu.hidden = !show; chip.setAttribute('aria-expanded', String(show)) }
       chip.onclick = (e) => { e.stopPropagation(); toggle() }
       copy.onclick = () => { void navigator.clipboard?.writeText(a.address); copy.textContent = 'Copied'; setTimeout(() => { copy.textContent = 'Copy address' }, 1200) }
       out.onclick = () => signOut()
       closeMenu = () => toggle(false)
       box.addEventListener('keydown', (e) => { if (e.key === 'Escape') { toggle(false); chip.focus() } })
-      box.append(bell(a.address), chip, menu)
+      box.append(mail(), bell(a.address), chip, menu)
     }
     slot.replaceChildren(box, ...extras)
   }

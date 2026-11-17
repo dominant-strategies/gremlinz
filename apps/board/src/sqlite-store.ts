@@ -4,7 +4,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type {
   DesignRecord, ProfileRecord, AvatarImage, AvatarKind, DonationCardRecord,
   BoardStore, Community, CommentRecord, EggRecord, EggStatus, EventRecord, NestRecord, NestStatus, NewPost, PostListOptions, PostRecord, PostSort, PulseRecord,
-  StoredHandoff, VoteTarget, GrantRecord, LookRecord, Notification,
+  StoredHandoff, VoteTarget, GrantRecord, LookRecord, Notification, SiteKeyRecord, DmRecord,
 } from './store.ts'
 import { hot } from './ranking.ts'
 
@@ -184,6 +184,30 @@ CREATE TABLE IF NOT EXISTS avatar_images (
   small   BLOB NOT NULL,  -- 64×64
   mime    TEXT NOT NULL
 );
+
+-- A person's site key (one per address; a newer version replaces it), registered by a wallet-signed request.
+CREATE TABLE IF NOT EXISTS site_keys (
+  address     TEXT PRIMARY KEY,  -- lowercase
+  key_address TEXT NOT NULL,     -- lowercase
+  public_key  TEXT NOT NULL,     -- uncompressed
+  version     INTEGER NOT NULL,
+  attestation TEXT NOT NULL,     -- the registration request, so anyone can check the wallet signed it
+  updated_at  INTEGER NOT NULL
+);
+
+-- Private messages. The board stores sealed boxes it can't open: one for the recipient, one for the sender.
+CREATE TABLE IF NOT EXISTS dms (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  sender    TEXT NOT NULL,     -- lowercase
+  recipient TEXT NOT NULL,     -- lowercase
+  box       TEXT NOT NULL,     -- JSON Sealed, for the recipient
+  self_box  TEXT NOT NULL,     -- JSON Sealed, for the sender
+  to_key    TEXT NOT NULL,     -- the key address box was sealed to (so a retired key's messages can be told apart)
+  from_key  TEXT NOT NULL,     -- the sender's key address (selfBox's key)
+  at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS dms_recipient ON dms(recipient, id);
+CREATE INDEX IF NOT EXISTS dms_sender ON dms(sender, id);
 
 CREATE TABLE IF NOT EXISTS used_signatures (
   signature  TEXT PRIMARY KEY,
@@ -817,6 +841,43 @@ export class SqliteBoardStore implements BoardStore {
   }
 
   // auth
+
+  // site keys and private messages
+
+  async getSiteKey(address: string) {
+    const r = this.one('SELECT * FROM site_keys WHERE address = ?', address.toLowerCase())
+    return r ? { address: String(r.address), keyAddress: String(r.key_address), publicKey: String(r.public_key), version: Number(r.version), attestation: JSON.parse(String(r.attestation)), updatedAt: Number(r.updated_at) } : null
+  }
+
+  async putSiteKey(k: SiteKeyRecord) {
+    this.db.prepare(`INSERT INTO site_keys (address, key_address, public_key, version, attestation, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(address) DO UPDATE SET key_address = excluded.key_address, public_key = excluded.public_key, version = excluded.version, attestation = excluded.attestation, updated_at = excluded.updated_at`)
+      .run(k.address.toLowerCase(), k.keyAddress.toLowerCase(), k.publicKey, k.version, JSON.stringify(k.attestation), k.updatedAt)
+  }
+
+  async addDm(m: Omit<DmRecord, 'id'>) {
+    const r = this.db.prepare('INSERT INTO dms (sender, recipient, box, self_box, to_key, from_key, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(m.from.toLowerCase(), m.to.toLowerCase(), JSON.stringify(m.box), JSON.stringify(m.selfBox), m.toKey.toLowerCase(), m.fromKey.toLowerCase(), m.at)
+    return { ...m, id: Number(r.lastInsertRowid) }
+  }
+
+  async dms(address: string, opts: { since?: number; before?: number; with?: string; limit: number; incomingOnly?: boolean }) {
+    const a = address.toLowerCase()
+    const where = [opts.incomingOnly ? 'recipient = ?' : '(recipient = ? OR sender = ?)']
+    const params: SQLInputValue[] = opts.incomingOnly ? [a] : [a, a]
+    if (opts.with) { where.push('(sender = ? OR recipient = ?)'); params.push(opts.with.toLowerCase(), opts.with.toLowerCase()) }
+    if (opts.since) { where.push('id > ?'); params.push(opts.since) }
+    if (opts.before) { where.push('id < ?'); params.push(opts.before) }
+    // newest `limit`, returned oldest first
+    return this.all(`SELECT * FROM dms WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ?`, ...params, opts.limit).reverse().map((r): DmRecord => ({
+      id: Number(r.id), from: String(r.sender), to: String(r.recipient), box: JSON.parse(String(r.box)), selfBox: JSON.parse(String(r.self_box)),
+      toKey: String(r.to_key), fromKey: String(r.from_key), at: Number(r.at),
+    }))
+  }
+
+  async dmsSentSince(sender: string, sinceMs: number) {
+    return Number(this.one('SELECT count(*) AS n FROM dms WHERE sender = ? AND at >= ?', sender.toLowerCase(), sinceMs)?.n ?? 0)
+  }
 
   async consumeSignature(signature: string, expiresAt: number, now: number) {
     this.db.prepare('DELETE FROM used_signatures WHERE expires_at < ?').run(now)

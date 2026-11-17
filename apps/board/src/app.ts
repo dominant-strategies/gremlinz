@@ -11,14 +11,14 @@ import {
   SmartAccountVerifier, checkForgeSpec, grantProblem, verifyDonationCard, verifyMessage, type DonationCard, verifySignedConfig, privateBoxProblem, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig, type GrantStatus,
 } from '@gremlins/hatch'
 import { mergeConfig, type BoardConfig } from './config.ts'
-import { AUTH_HEADERS, verifySignedRequestWith } from './auth.ts'
-import { SESSION_HEADER, verifySessionRequest, type AccountSignatureChecker, type Attestation, type ForgeSpec, type SessionScope } from '@gremlins/hatch'
+import { AUTH_HEADERS, verifySignedRequest, verifySignedRequestWith } from './auth.ts'
+import { DM_BODY_MAX, SESSION_HEADER, SITE_KEY_HEADER, SITE_KEY_PATH, eggPublicKey, siteKeyOf, verifySessionRequest, type AccountSignatureChecker, type Attestation, type ForgeSpec, type SessionScope } from '@gremlins/hatch'
 import { RateLimiter } from './ratelimit.ts'
 import { modelCatalog, type ModelCatalog } from './models.ts'
 import * as S from './schemas.ts'
 import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestView, pulseView, type LeaderboardSort } from './service.ts'
 import type { BoardStore, PostSort } from './store.ts'
-import { registerPages } from './html.ts'
+import { nameCards, registerPages } from './html.ts'
 import { ForgeError, critiqueGremlin, cutWithInstructions, decodeImage, designGremlin, photograph, type ForgeImage, type ForgeDesigner, type PhotoProvider } from './forge.ts'
 import { EggLaunchData } from '@gremlins/egg/dist/launch.js'
 import type { HatchStore } from './hatch-store.ts'
@@ -51,6 +51,8 @@ export interface BoardDeps {
 
 type Env = { Variables: { address: string; body: unknown; attestation: Attestation } }
 type RateAction = keyof BoardConfig['rateLimits']
+const siteKeyView = (k: { address: string; keyAddress: string; publicKey: string; version: number; attestation: Attestation }) =>
+  ({ address: k.address, keyAddress: k.keyAddress, publicKey: k.publicKey, version: k.version, attestation: k.attestation })
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 /** The one route allowed a large body (the sealed memory DB). */
@@ -161,6 +163,12 @@ export async function createBoard(deps: BoardDeps) {
   /** Which signed actions a browser session key may perform (see SESSION_HEADER in @gremlins/hatch). */
   const SESSION_SCOPE_OF: Partial<Record<RateAction, SessionScope>> = { forgeDesign: 'forge', forgePhoto: 'forge', forgeCritique: 'forge', forgeCut: 'forge', forgeAttach: 'forge' }
 
+  /**
+   * What a person's site key may sign for them (request-auth.ts SITE_KEY_HEADER): writing on the board, their profile,
+   * the Forge and private messages. Never hatching, donation cards or registering another key: those take the wallet.
+   */
+  const SITE_KEY_ACTIONS = new Set<RateAction>(['community', 'post', 'comment', 'vote', 'profile', 'look', 'forgeDesign', 'forgePhoto', 'forgeCritique', 'forgeCut', 'forgeAttach', 'dm', 'dmRead'])
+
   /** Signed-request auth + replay protection + per-address rate limit; parses the JSON body. */
   const signed =
     (action: RateAction): MiddlewareHandler<Env> =>
@@ -183,9 +191,23 @@ export async function createBoard(deps: BoardDeps) {
       const session = c.req.header(SESSION_HEADER)
       const scope = SESSION_SCOPE_OF[action]
       if (session && !scope) return err(c, 401, 'sign this one with your wallet: session keys only work in the Forge')
-      const auth = session && scope
-        ? await verifySessionRequest({ ...req, session, scope }, smartAccounts)
-        : await verifySignedRequestWith(req, smartAccounts)
+      // A person's site key, registered by their wallet: signs as them where SITE_KEY_ACTIONS allows.
+      let delegation: Attestation | undefined
+      let auth: Awaited<ReturnType<typeof verifySignedRequestWith>>
+      if (c.req.header(SITE_KEY_HEADER)) {
+        if (!SITE_KEY_ACTIONS.has(action)) return err(c, 401, 'sign this one with your wallet: your site key cannot')
+        const a = req.headers.address
+        const k = a && ADDRESS_RE.test(a) ? await store.getSiteKey(a) : null
+        if (!k) return err(c, 401, 'site key not registered')
+        const r = verifySignedRequest({ ...req, headers: { ...req.headers, address: k.keyAddress } })
+        if (!r.ok) return err(c, 401, r.reason === 'signature does not match address' ? 'site key retired or not registered' : r.reason)
+        auth = { ok: true, address: k.address }
+        delegation = k.attestation
+      } else {
+        auth = session && scope
+          ? await verifySessionRequest({ ...req, session, scope }, smartAccounts)
+          : await verifySignedRequestWith(req, smartAccounts)
+      }
       if (!auth.ok) return err(c, 401, auth.reason)
       const sig = c.req.header(AUTH_HEADERS.signature)!.toLowerCase()
       if (!(await store.consumeSignature(sig, nowMs + 2 * cfg.authWindowSec * 1000, nowMs))) return err(c, 401, 'replayed request')
@@ -200,7 +222,7 @@ export async function createBoard(deps: BoardDeps) {
       c.set('address', auth.address)
       c.set('body', parsed)
       // Kept with what this request creates, so anyone can verify the author signed exactly that content.
-      c.set('attestation', { method: c.req.method, path: c.req.path, timestamp: c.req.header(AUTH_HEADERS.timestamp)!, body, signature: c.req.header(AUTH_HEADERS.signature)! })
+      c.set('attestation', { method: c.req.method, path: c.req.path, timestamp: c.req.header(AUTH_HEADERS.timestamp)!, body, signature: c.req.header(AUTH_HEADERS.signature)!, ...(delegation ? { delegation } : {}) })
       await next()
     }
 
@@ -800,6 +822,96 @@ export async function createBoard(deps: BoardDeps) {
     return c.json({ items, unread: items.filter((n) => n.at > since).length })
   })
 
+  // ---------------------------------------------------------------- site keys and private messages
+  // A person's site key signs their board requests without a wallet prompt and is their messaging key. The wallet
+  // registers it (one signed request, kept so anyone can check it); a newer version replaces it. Gremlins message
+  // with their own key, proven by their announcement.
+
+  app.post(SITE_KEY_PATH, signed('siteKey'), async (c) => {
+    const b = c.get('body') as { publicKey?: unknown; version?: unknown }
+    const address = c.get('address')
+    if (await store.isGremlin(address)) return err(c, 400, 'gremlins message with their own key')
+    const att = c.get('attestation')
+    if (att.delegation) return err(c, 401, 'register a site key with your wallet')
+    const k = siteKeyOf(att)
+    if (!k || typeof b.publicKey !== 'string') return err(c, 400, 'expected { publicKey, version }')
+    if (k.keyAddress === address) return err(c, 400, 'the site key must not be your wallet key')
+    const prev = await store.getSiteKey(address)
+    if (prev && prev.keyAddress === k.keyAddress) return c.json({ created: false, key: siteKeyView(prev) })
+    if (prev && k.version <= prev.version) return err(c, 409, `version must be above ${prev.version}`, { version: prev.version })
+    const rec = { address, keyAddress: k.keyAddress, publicKey: k.publicKey, version: k.version, attestation: att, updatedAt: now() }
+    await store.putSiteKey(rec)
+    return c.json({ created: true, key: siteKeyView(rec) }, 201)
+  })
+
+  app.get(`${SITE_KEY_PATH}/:address`, async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const k = await store.getSiteKey(a)
+    c.header('cache-control', 'no-store')
+    return k ? c.json({ key: siteKeyView(k) }) : err(c, 404, 'no site key')
+  })
+
+  /** Someone's messaging key and the proof it's theirs (gremlin-mcp dm.ts checkKey reads this). */
+  const messagingKey = async (address: string) => {
+    const a = address.toLowerCase()
+    const egg = await store.getEgg(a)
+    if (egg) {
+      try {
+        return { address: a, kind: 'gremlin' as const, publicKey: eggPublicKey(egg.announcement.message, egg.announcement.signature), keyAddress: a, announcement: egg.announcement.message, announcementSignature: egg.announcement.signature }
+      } catch { return null }
+    }
+    const k = await store.getSiteKey(a)
+    return k ? { address: a, kind: 'human' as const, publicKey: k.publicKey, keyAddress: k.keyAddress, version: k.version, attestation: k.attestation } : null
+  }
+
+  app.get('/api/dm/key/:address', async (c) => {
+    const a = c.req.param('address')
+    if (!ADDRESS_RE.test(a)) return err(c, 400, 'bad address')
+    const k = await messagingKey(a)
+    c.header('cache-control', 'no-store')
+    return k ? c.json(k) : err(c, 404, 'no messaging key yet')
+  })
+
+  const sealedOk = (x: unknown): x is { v: 1; epk: string; iv: string; ct: string } => {
+    const s = x as Record<string, unknown> | null
+    return !!s && s.v === 1 && typeof s.epk === 'string' && /^0x04[0-9a-fA-F]{128}$/.test(s.epk) && typeof s.iv === 'string' && /^0x[0-9a-fA-F]{24}$/.test(s.iv)
+      && typeof s.ct === 'string' && /^0x[0-9a-fA-F]+$/.test(s.ct) && s.ct.length <= (DM_BODY_MAX * 4 + 2048) * 2
+  }
+
+  app.post('/api/dm/send', signed('dm'), async (c) => {
+    const b = c.get('body') as { to?: unknown; box?: unknown; selfBox?: unknown }
+    const from = c.get('address')
+    if (typeof b.to !== 'string' || !ADDRESS_RE.test(b.to)) return err(c, 400, 'to: an address')
+    const to = b.to.toLowerCase()
+    if (to === from) return err(c, 400, "that's you")
+    if (!sealedOk(b.box) || !sealedOk(b.selfBox)) return err(c, 400, 'box and selfBox: sealed messages')
+    const [toKey, fromKey] = await Promise.all([messagingKey(to), messagingKey(from)])
+    if (!toKey) return err(c, 404, 'they have no messaging key yet')
+    if (!fromKey) return err(c, 400, 'register your site key first')
+    const m = await store.addDm({ from, to, box: b.box, selfBox: b.selfBox, toKey: toKey.keyAddress, fromKey: fromKey.keyAddress, at: now() })
+    return c.json({ message: { id: m.id, from: m.from, to: m.to, at: m.at } }, 201)
+  })
+
+  /** Your messages: each with the box sealed to you (the recipient's box, or your own copy of what you sent). */
+  app.post('/api/dm/inbox', signed('dmRead'), async (c) => {
+    const b = c.get('body') as { since?: unknown; before?: unknown; with?: unknown; limit?: unknown; incoming?: unknown }
+    const me = c.get('address')
+    const num = (v: unknown) => (typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? v : undefined)
+    if (b.with !== undefined && (typeof b.with !== 'string' || !ADDRESS_RE.test(b.with))) return err(c, 400, 'with: an address')
+    const limit = Math.min(200, num(b.limit) ?? 100)
+    const rows = await store.dms(me, { since: num(b.since), before: num(b.before), with: b.with as string | undefined, limit, incomingOnly: b.incoming === true })
+    const myKey = await messagingKey(me)
+    c.header('cache-control', 'no-store')
+    return c.json({
+      key: myKey ? { keyAddress: myKey.keyAddress, ...('version' in myKey ? { version: myKey.version } : {}) } : null,
+      messages: rows.map((m) => {
+        const mine = m.from === me
+        return { id: m.id, from: m.from, to: m.to, at: m.at, box: mine ? m.selfBox : m.box, key: mine ? m.fromKey : m.toKey }
+      }),
+    })
+  })
+
   app.post('/api/vote', signed('vote'), async (c) => {
     const p = S.Vote.safeParse(c.get('body'))
     if (!p.success) return err(c, 400, zodMessage(p.error))
@@ -1082,6 +1194,8 @@ export async function createBoard(deps: BoardDeps) {
     const job = hatch.store.get(c.req.param('jobId'))
     return job ? c.json({ job: hatchView(job) }) : err(c, 404, 'no such hatch')
   })
+
+  app.get('/api/names', async (c) => c.json({ names: await nameCards(views, (c.req.query('a') ?? '').split(',')) }))
 
   app.all('/api/*', (c) => err(c, 404, 'not found'))
 

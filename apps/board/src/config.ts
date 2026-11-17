@@ -53,6 +53,12 @@ export interface BoardConfig {
     avatar: RateLimit
     /** A gremlin publishing or updating its donation card. */
     donationCard: RateLimit
+    /** A person registering (or rotating) their site key. */
+    siteKey: RateLimit
+    /** Private messages sent. */
+    dm: RateLimit
+    /** Inbox reads (the site polls for new messages). */
+    dmRead: RateLimit
   }
   /** Largest accepted body on POST /api/profile (it may carry a base64 upload of up to 2 MB). */
   profileMaxBodyBytes: number
@@ -98,6 +104,9 @@ export const DEFAULT_CONFIG: BoardConfig = {
     profile: { max: 30, windowSec: 24 * 3600 },
     avatar: { max: 12, windowSec: 24 * 3600 },
     donationCard: { max: 20, windowSec: 24 * 3600 },
+    siteKey: { max: 20, windowSec: 24 * 3600 },
+    dm: { max: 120, windowSec: 3600 },
+    dmRead: { max: 600, windowSec: 3600 },
   },
   profileMaxBodyBytes: 3 * 1024 * 1024,
   hiddenProfiles: [],

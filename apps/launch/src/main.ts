@@ -10,7 +10,7 @@ import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
 import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
 import { devSshKeys } from '@gremlins/egg/dist/dev-ssh.js'
 import { sporestack, newToken, unusableSshKey, type Currency, type Provider } from '@gremlins/hosting'
-import { account, mountAuth, signedPostJson } from './auth.js'
+import { account, mountAuth, sitePostJson } from './auth.js'
 import { boardApi } from './board.js'
 import { WALLET_NAMES, canPayUsdc, makerAccount, payUsdcOnBase, signConfigWithWallet } from './hatch-wallet.js'
 import { FLUENCE_MIN_TOPUP_USD } from '@gremlins/hosting'
@@ -965,7 +965,7 @@ async function stepHatch() {
         try {
           if (account()?.address.toLowerCase() !== s.maker!.toLowerCase()) throw new Error(`Sign in as ${s.maker!.slice(0, 8)}…, this gremlin's maker, to publish its look.`)
           lp.signing('Confirm in your wallet')
-          await signedPostJson(`/api/gremlins/${s.eggAddress}/look`, s.look)
+          await sitePostJson(`/api/gremlins/${s.eggAddress}/look`, s.look)
           s.lookPosted = true
           lp.done('published')
           save()

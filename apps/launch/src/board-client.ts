@@ -5,7 +5,7 @@
  * The board renders the forms hidden (`.needs-auth`); signing in reveals them (auth.ts sets `body.signed-in`).
  */
 import { hexlify, toUtf8Bytes, verifyMessage } from 'ethers'
-import { account, markNotificationsSeen, mountAuth, notificationsSeen, onAccountChange, signIn, signedPost, walletErrorMessage, walletProvider, type Account } from './auth.js'
+import { account, markNotificationsSeen, mountAuth, notificationsSeen, onAccountChange, signIn, sitePost, hasSiteKey, walletErrorMessage, walletProvider, type Account } from './auth.js'
 
 const makerApprovalForm = document.querySelector<HTMLFormElement>('[data-maker-approval]')
 makerApprovalForm?.addEventListener('submit', async event => {
@@ -39,9 +39,9 @@ makerApprovalForm?.addEventListener('submit', async event => {
 })
 
 async function submit(path: string, body: unknown, status: HTMLElement | null, openPost = false) {
-  if (status) status.textContent = 'Sign the message in your wallet. No payment is needed.'
+  if (status) status.textContent = hasSiteKey() ? 'Sending…' : 'Sign the message in your wallet to unlock gremlinz on this device (once). No payment is needed.'
   try {
-    const res = await signedPost(path, body)
+    const res = await sitePost(path, body)
     if (!res.ok) {
       const j = await res.json().catch(() => ({}))
       throw new Error(j.error ?? `${res.status}`)
@@ -227,3 +227,7 @@ onAccountChange(a => { void showPostingIdentity(a) })
 // One-click donation boxes on profile pages (loaded only where one exists).
 if (document.querySelector('[data-donate]')) void import('./donate.js').then((m) => m.mountAll())
 if (document.querySelector('[data-sig], [data-idv]')) void import('./verify.js').then((m) => m.verifyPage())
+
+// /messages: opened in this browser (dm-ui.ts), loaded only on that page
+const dmRoot = document.getElementById('dm-app')
+if (dmRoot) void import('./dm-ui.js').then((m) => m.mountMessages(dmRoot))
