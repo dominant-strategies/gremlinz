@@ -299,13 +299,17 @@ function stepLook() {
   </div>`)
   wireBack('look')
   $('#body-start-over').onclick = launchControls.showStartOver
-  $('#use').onclick = () => {
-    const forge = ($('#forge') as HTMLIFrameElement).contentWindow as (Window & { gremlinsForge?: { current(): { spec: unknown; label: string; example: boolean } | undefined; portrait(size?: number): string | undefined } }) | null
+  $('#use').onclick = async () => {
+    const forge = ($('#forge') as HTMLIFrameElement).contentWindow as (Window & { gremlinsForge?: { current(): { spec: unknown; label: string; example: boolean } | undefined; portrait(size?: number): string | undefined; media?(): { pfp: boolean; video: boolean }; nudge?(which: string[]): void } }) | null
     const f = forge?.gremlinsForge
     const cur = f?.current()
     const image = f?.portrait(512)
     if (!cur || !image) return fail(new Error('The Forge is still loading, or has no design on screen yet.'))
     if (cur.example && !confirm('This is the Forge\'s example design, not one made for your gremlin. Use it anyway?')) return
+    // a profile picture and a film make its page (and anywhere it's shared): suggest both before moving on
+    const has = f?.media?.() ?? { pfp: true, video: true }
+    const missing = (['pfp', 'video'] as const).filter((k) => !has[k])
+    if (missing.length && !(await mediaNudge(missing, (which) => f?.nudge?.(which)))) return
     // the design carries the gremlin's own name, whatever the Forge called it
     s.look = { spec: { ...(cur.spec as object), name: d.name }, label: cur.label, image }
     save()
@@ -317,6 +321,30 @@ function stepLook() {
     progress.step('look').skip('keeps its creature')
     go('persona')
   }
+}
+
+/**
+ * Before leaving the Forge without a profile picture or a film: a small popup saying what each is for and which buttons
+ * make them. Resolves true to carry on anyway; false (Show me, or closing it) to stay, with those buttons pointed at.
+ */
+function mediaNudge(missing: readonly ('pfp' | 'video')[], point: (which: string[]) => void): Promise<boolean> {
+  const name = nameOf()
+  const item = { pfp: `<li><b>A profile picture.</b> Its face on the board and on its page. Click <span class="kbd">Photo</span> above the stage, adjust the suggested shot, then <span class="kbd">Take photo</span>.</li>`,
+    video: `<li><b>A video.</b> A short film of ${name} in action, to share. Click <span class="kbd">Record video</span> under the stage.</li>` }
+  const dlg = document.createElement('dialog')
+  dlg.className = 'hatch-dialog media-nudge'
+  dlg.innerHTML = `<h2>Give ${name} ${missing.length === 2 ? 'a face and a film' : missing[0] === 'pfp' ? 'a face' : 'a film'} first?</h2>
+    <p class="muted">${missing.length === 2 ? 'It has neither yet' : `It has no ${missing[0] === 'pfp' ? 'profile picture' : 'video'} yet`}. Both take a minute, and they're much harder to make once it has hatched.</p>
+    <ul>${missing.map((k) => item[k]).join('')}</ul>
+    <div class="navrow"><button type="button" data-show>Show me</button><button type="button" class="secondary" data-skip>Continue anyway</button></div>`
+  document.body.append(dlg)
+  return new Promise((resolve) => {
+    const done = (go: boolean) => { dlg.close(); dlg.remove(); if (!go) point([...missing]); resolve(go) }
+    ;(dlg.querySelector('[data-show]') as HTMLButtonElement).onclick = () => done(false)
+    ;(dlg.querySelector('[data-skip]') as HTMLButtonElement).onclick = () => done(true)
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); done(false) })
+    dlg.showModal()
+  })
 }
 
 // 4. personality and voice

@@ -55,6 +55,12 @@
     .stepper li.done { border-color: var(--ink); color: var(--ink); }
     .stepper li.done button.link { all: unset; cursor: pointer; }
     .stepper li.done:hover { background: var(--field); }
+    .media-nudge { width: min(460px, calc(100vw - 32px)); }
+    .media-nudge h2 { margin: 0 0 8px; font: 800 22px/1.15 var(--display); }
+    .media-nudge ul { display: grid; gap: 10px; margin: 14px 0 18px; padding-left: 18px; }
+    .media-nudge .kbd { display: inline-block; padding: 1px 8px; border: 1.5px solid var(--ink); border-radius: 999px; font: 700 13px/1.5 var(--display); background: var(--field); white-space: nowrap; }
+    .media-nudge .navrow button { min-height: 44px; padding: 0 20px; border-radius: 999px; border: 1.5px solid var(--ink); background: var(--ink); color: #f7f3ec; font: 800 15px/1 var(--display); cursor: pointer; }
+    .media-nudge .navrow button.secondary { background: var(--card); color: var(--ink); }
     .navrow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     /* the body step: the Forge in a full-screen pane, with the step's controls in a slim bar on top */
     body.pane-open { overflow: hidden; }

@@ -41,7 +41,8 @@ const IDEAS = [
  * here is editable and nothing is saved, so the visitor's own Forge history is never touched.
  */
 const LIVE = (() => { const g = new URLSearchParams(location.search).get('gremlin'); return /^0x[0-9a-fA-F]{40}$/.test(g || '') ? g : null })()
-// steps: [{ spec, house, label, parent, t, thumb?, photo? }], append-only; cur is the step on screen.
+// steps: [{ spec, house, label, parent, t, thumb?, photo?, pfp?, video? }], append-only; cur is the step on screen.
+// pfp: { image, cam } its profile picture (kept); video: { seconds, at } when its film was recorded (the file downloads).
 const MAX_STEPS = 80
 const state = { steps: [], cur: -1, uploads: {} }
 const redoTo = new Map() // step -> the child we last undid out of
@@ -174,6 +175,7 @@ function initStudio() {
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y), quick = performance.now() - down.t < 500
     down = null
     if (moved >= 6 || !quick) return // that was an orbit drag
+    if (pfp.on) return // framing a photo: clicks don't pick parts
     if (placing) placeAt(e)
     else selectAt(e)
   })
@@ -198,7 +200,7 @@ function initStudio() {
     } else if (avg <= 1 / 32) slow = 0
     // AO reads the ghosts and glass of isolate and x-ray as solid, so it rests while they're on
     aoPass.enabled = quality.ao && !view.isolate && !view.xray && !(view.tour && view.tourXray)
-    if (spin && robot && !placing && !selected.size && !view.tour) robot.rotation.y += 0.004
+    if (spin && robot && !placing && !selected.size && !view.tour && !pfp.on) robot.rotation.y += 0.004
     if (inner && spec()) {
       const still = !!placing || selected.size > 0, rig = inner.userData.rig
       applyPose(rig, spec(), stepView(spec(), dt, now, still, reduceMotion || liveDead))
@@ -209,13 +211,13 @@ function initStudio() {
         const turn = Math.round(robot.rotation.y / (Math.PI * 2)) * Math.PI * 2
         robot.rotation.y += (turn - robot.rotation.y) * Math.min(1, dt * 2.5)
         controls.target.copy(placeShot(forgeShotAt(view.beats, view.tourT), rig).target)
-      } else { centreCamera(); focusCamera(dt) }
+      } else if (!pfp.on) { centreCamera(); focusCamera(dt) }
       showTourCard(); showTourCaption()
       syncConsole()
       tickHud(now)
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')
       if (LIVE) stepLive(now)
-      else if (!view.tour && view.beats.length > 1 && !reduceMotion && !still && !ctl && !typing && now - lastActive > 25) { startTour(now); syncConsole(true) }
+      else if (!view.tour && !pfp.on && view.beats.length > 1 && !reduceMotion && !still && !ctl && !typing && now - lastActive > 25) { startTour(now); syncConsole(true) }
     }
     controls.update()
     rig.rotation.y = controls.getAzimuthalAngle()
@@ -764,7 +766,7 @@ $('dExplode').addEventListener('click', () => { toggleExplode(); syncConsole(tru
 $('dTour').addEventListener('click', () => { if (view.tour) stopTour(); else startTour(performance.now() / 1000); syncConsole(true) })
 
 /** A square studio frame (1024×1024 PNG for the image model, small JPEGs for history) without disturbing the live view. */
-function captureRender(size = 1024, type = 'image/png', pose = { idle: false }) {
+function captureRender(size = 1024, type = 'image/png', pose = { idle: false }, guide = false) {
   // The photo and the history thumbnails show the gremlin itself: at rest, solid, no outlines (review stills pass a
   // mode's pose instead). The next frame restores the view.
   if (inner) {
@@ -772,10 +774,13 @@ function captureRender(size = 1024, type = 'image/png', pose = { idle: false }) 
     inner.traverse((n) => { if (n.userData.ink) n.visible = false })
     forgetIsolate()
   }
-  const canvas = renderer.domElement, w = canvas.width, h = canvas.height, ratio = renderer.getPixelRatio(), aspect = camera.aspect
+  const canvas = renderer.domElement, w = canvas.width, h = canvas.height, ratio = renderer.getPixelRatio(), aspect = camera.aspect, fov = camera.fov
+  // the guide is the centred square of the stage: on a portrait stage that's narrower than its height, so narrow the lens
+  if (guide && w < h) camera.fov = (2 * Math.atan(Math.tan((fov * Math.PI) / 360) * (w / h)) * 180) / Math.PI
   renderer.setPixelRatio(1); renderer.setSize(size, size, false); camera.aspect = 1; camera.updateProjectionMatrix()
   renderer.render(scene, camera)
-  const data = canvas.toDataURL(type, 0.75)
+  const data = canvas.toDataURL(type, guide ? 0.9 : 0.75)
+  camera.fov = fov
   renderer.setPixelRatio(ratio); renderer.setSize(w / ratio, h / ratio, false); camera.aspect = aspect; camera.updateProjectionMatrix()
   renderer.render(scene, camera)
   return data
@@ -1151,6 +1156,7 @@ async function recordTour(cut = {}) {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${slug}-tour.mp4`
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60_000)
     setStatus(`Saved ${slug}-tour.mp4: ${len.toFixed(0)} seconds at 1080p${audio ? ', with music' : ''}, ${(blob.size / 1048576).toFixed(1)} MB.`)
+    const done = step(); if (done && done.spec === sp) { done.video = { seconds: Math.round(len), at: Date.now() }; save() }
   } catch (e) {
     setStatus(e.name === 'AbortError' ? 'Recording stopped.' : `The recording failed: ${e.message}`, e.name !== 'AbortError')
   } finally {
@@ -1487,7 +1493,7 @@ async function photograph() {
   ctl = new AbortController(); busy(true, 'Photographing… this takes about half a minute.')
   try {
     await artReady()
-    const res = await sessionPostJson('/api/forge/photo', { image: captureRender() }, { scope: 'forge', signal: ctl.signal })
+    const res = await sessionPostJson('/api/forge/photo', { image: s.pfp?.image ?? captureRender() }, { scope: 'forge', signal: ctl.signal })
     s.photo = { image: res.image, by: `${res.provider} · ${res.model}` }
     setStatus('Photo ready.')
     if (step() === s) showView('photo')
@@ -1495,6 +1501,55 @@ async function photograph() {
   } catch (e) {
     setStatus(e.name === 'AbortError' ? 'Stopped.' : e.message, e.name !== 'AbortError')
   } finally { busy(false); renderAuth(); renderPhoto() }
+}
+
+// ---------------------------------------------------------------------------------------------------- profile picture
+/**
+ * Photo: the gremlin's profile picture. It proposes a shot (head and shoulders, three-quarter, a little above the
+ * eyes), the maker turns, zooms and moves it inside a round guide, and Take photo keeps exactly that square.
+ */
+const pfp = { on: false, saved: null }
+const PFP_DIR = new T.Vector3(0.42, 0.12, 0.9).normalize()
+function suggestPfp() {
+  if (!robot || !inner) return
+  robot.rotation.y = 0; robot.updateMatrixWorld(true)
+  const bb = new T.Box3().setFromObject(robot), size = bb.getSize(new T.Vector3()), sp = spec()
+  // its face: the eyes and visors, if it has any
+  const face = new T.Box3()
+  inner.traverse((n) => { const p = n.isMesh && sp.parts[n.userData.part]; if (p && (p.kind === 'eye' || p.kind === 'visor')) face.expandByObject(n) })
+  const aim = face.isEmpty() ? new T.Vector3(0, bb.min.y + size.y * 0.72, 0) : face.getCenter(new T.Vector3())
+  // head and shoulders: from just over the top of its head to a little below its eyes (the top 55% if it has none)
+  const fs = face.isEmpty() ? null : face.getSize(new T.Vector3())
+  const top = bb.max.y + size.y * 0.05
+  const below = fs ? face.min.y - Math.max(fs.y * 1.5, size.y * 0.12) : bb.max.y - size.y * 0.55
+  const span = Math.min(size.y * 1.1, Math.max(size.y * 0.4, top - below, Math.min(size.x, size.z * 1.4) * 0.75))
+  const target = new T.Vector3(0, top - span / 2, aim.z * 0.5)
+  const dist = (span / 2) / Math.tan((camera.fov * Math.PI) / 360) * 1.08
+  controls.target.copy(target)
+  camera.position.copy(target).addScaledVector(PFP_DIR, dist)
+  controls.update()
+}
+function enterPfp(cam) {
+  if (!glOK || !robot) return
+  stopTour(); hideCursor(); centreCamera(); setSelection([])
+  if (!pfp.on) pfp.saved = { pos: camera.position.clone(), target: controls.target.clone(), turn: robot.rotation.y, min: controls.minDistance, pan: controls.enablePan }
+  pfp.on = true
+  Object.assign(controls, { minDistance: 0.6, enablePan: true })
+  if (cam) { robot.rotation.y = 0; controls.target.fromArray(cam.target); camera.position.fromArray(cam.pos); controls.update() } else suggestPfp()
+  showView('pfp')
+}
+function leavePfp() {
+  if (!pfp.on) return
+  pfp.on = false
+  const s = pfp.saved
+  if (s) { Object.assign(controls, { minDistance: s.min, enablePan: s.pan }); camera.position.copy(s.pos); controls.target.copy(s.target); robot.rotation.y = s.turn; controls.update() }
+}
+function takePfp() {
+  const s = step(); if (!s || !pfp.on) return
+  s.pfp = { image: captureRender(512, 'image/jpeg', { idle: false }, true), cam: { pos: camera.position.toArray(), target: controls.target.toArray() } }
+  save(); renderHistory()
+  leavePfp(); renderPhoto(); showView('photo')
+  setStatus(`Profile picture taken. Adjust it any time from Photo.`)
 }
 
 let busyTimer = null
@@ -1582,14 +1637,15 @@ function renderAuth() {
 onAccountChange(renderAuth)
 mountAuth()
 function renderPhoto() {
-  const p = step()?.photo
+  const studio = step()?.photo, mine = step()?.pfp, p = studio || mine
   $('photoImg').src = p ? p.image : ''
-  $('photoImg').alt = p ? `Studio photograph of ${spec()?.name || 'the gremlin'}` : ''
-  $('photoBy').textContent = p ? `Photographed by ${p.by}` : ''
-  $('photoTab').disabled = !p
+  $('photoImg').alt = p ? `${studio ? 'Studio photograph' : 'Profile picture'} of ${spec()?.name || 'the gremlin'}` : ''
+  $('photoBy').textContent = studio ? `Photographed by ${studio.by}` : ''
+  $('photoTab').disabled = !glOK && !p
+  $('stage').toggleAttribute('data-pfp', !studio && !!mine)
   const dl = $('photoDl'); dl.hidden = !p
-  if (p) { dl.href = p.image; dl.download = (spec()?.name || 'gremlin').toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.png' }
-  if (!p) showView('render')
+  if (p) { dl.href = p.image; dl.download = (spec()?.name || 'gremlin').toLowerCase().replace(/[^a-z0-9]+/g, '-') + (studio ? '.png' : '.jpg') }
+  if (!p && $('stage').dataset.view === 'photo') showView('render')
 }
 
 /** One-line summaries on the collapsed panels, so their state reads without opening them. */
@@ -1743,9 +1799,15 @@ function preview(fn) {
   s.spec = next; rebuild(false); s.spec = previewBase.spec
 }
 function showView(v) {
+  if (v !== 'pfp') leavePfp()
   $('stage').dataset.view = v
   $('renderTab').setAttribute('aria-pressed', String(v === 'render'))
-  $('photoTab').setAttribute('aria-pressed', String(v === 'photo'))
+  $('photoTab').setAttribute('aria-pressed', String(v === 'photo' || v === 'pfp'))
+  // framing: suggest and take; looking at the photo: adjust it
+  $('pfpBar').hidden = !(v === 'pfp' || (v === 'photo' && step()?.pfp))
+  $('pfpSuggest').hidden = $('pfpTake').hidden = v !== 'pfp'
+  $('pfpAdjust').hidden = v !== 'photo'
+  $('pfpHint').textContent = v === 'pfp' ? 'Its profile picture. Drag to turn, scroll to zoom, right-drag to move.' : 'Its profile picture.'
 }
 function render(fresh) {
   const sp = spec(); if (!sp) return
@@ -1797,7 +1859,7 @@ function wire() {
   ask.addEventListener('drop', (e) => { const f = [...e.dataTransfer.files].find((x) => x.type.startsWith('image/')); if (f) { e.preventDefault(); loadReference(f) } ask.classList.remove('dragover') })
   $('prompt').addEventListener('paste', (e) => { const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/')); if (f) { e.preventDefault(); loadReference(f) } })
   $('checkBtn').addEventListener('click', () => review(false))
-  $('recBtn').addEventListener('click', openCut)
+  $('recBtn').addEventListener('click', () => { unnudge($('recBtn')); openCut() })
   $('attachBtn').addEventListener('click', attachToGremlin)
   $('refineForm').addEventListener('submit', (e) => {
     e.preventDefault(); const t = $('refine').value.trim()
@@ -1850,7 +1912,15 @@ function wire() {
   $('spinBtn').addEventListener('click', () => { spin = !spin; spinLabel() })
   $('viewBtn').addEventListener('click', () => { if (robot) robot.rotation.y = 0; frame(true) })
   $('renderTab').addEventListener('click', () => showView('render'))
-  $('photoTab').addEventListener('click', () => showView('photo'))
+  // Photo: its profile picture if it has one, else frame one
+  $('photoTab').addEventListener('click', () => {
+    // pointed at from the hatch page: the next thing to click is Take photo
+    if ($('photoTab').classList.contains('nudge')) { unnudge($('photoTab')); $('pfpTake').classList.add('nudge') }
+    if (step()?.pfp || step()?.photo) showView('photo'); else enterPfp()
+  })
+  $('pfpSuggest').addEventListener('click', suggestPfp)
+  $('pfpTake').addEventListener('click', () => { unnudge($('pfpTake')); takePfp() })
+  $('pfpAdjust').addEventListener('click', () => enterPfp(step()?.pfp?.cam))
   $('copyBtn').addEventListener('click', () => {
     const done = (t) => { $('copyStatus').textContent = t; setTimeout(() => { $('copyStatus').textContent = '' }, 2500) }
     navigator.clipboard.writeText(configText).then(() => done('Copied.'), () => done('Copy failed: open “Design spec” and copy it by hand.'))
@@ -1888,5 +1958,15 @@ loadCaps()
 // The hatch page embeds this studio and takes the design on screen as its gremlin's look (same origin only).
 window.gremlinsForge = {
   current: () => (step() ? { spec: spec(), label: step().label, example: /^Example:/.test(step().label) } : undefined),
-  portrait: (size = 512) => (glOK ? captureRender(size, 'image/jpeg') : step()?.thumb),
+  // its profile picture when it has one (taken in Photo), else a render of the stage
+  portrait: (size = 512) => step()?.pfp?.image ?? (glOK ? captureRender(size, 'image/jpeg') : step()?.thumb),
+  /** What the design on screen has: a profile picture, a recorded film. */
+  media: () => ({ pfp: !!(step()?.pfp || step()?.photo), video: !!step()?.video }),
+  /** Points at the buttons that make them: a pulsing ring until clicked. */
+  nudge: (which) => {
+    const ids = [...(which.includes('pfp') ? ['photoTab'] : []), ...(which.includes('video') ? ['recBtn'] : [])]
+    for (const id of ids) $(id).classList.add('nudge')
+    $(ids[0])?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  },
 }
+function unnudge(el) { el?.classList.remove('nudge') }
