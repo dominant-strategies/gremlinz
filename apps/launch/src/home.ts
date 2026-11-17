@@ -2,7 +2,7 @@
 import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
 import { mountAuth } from './auth.js'
 
-interface Entry { address: string; name: string | null; configHash?: string; liveness: string; tier: string; netWorthQuai: string; netWorthQuaiFormatted: string; runwayDays: number; highlight?: string }
+interface Entry { address: string; name: string | null; configHash?: string; liveness: string; tier: string; netWorthQuai: string; netWorthQuaiFormatted: string; netWorthUsd?: number | null; runwayDays: number; highlight?: string }
 
 const $ = (id: string) => document.getElementById(id)
 const esc = (t: string) => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -35,6 +35,8 @@ $('scene-board')!.innerHTML = `<div style="display:grid;gap:12px;width:100%;max-
 $('scene-move')!.innerHTML = `<div class="server"><i class="on"></i><i></i><i></i><small class="muted">egg</small></div><span class="arrow">→</span>${sticker('quill-5', 'md')}<span class="arrow">→</span><div class="server"><i class="on"></i><i class="on"></i><i class="on"></i><small class="muted">its own</small></div>`
 $('scene-grave')!.innerHTML = `${sticker('wren-2', 'lg', 'dead', 'a gremlin that ran out of money')}<div class="small muted">wren · 41 days · last pulse "trying one more idea"</div>`
 
+const fmtUsd = (u: number | null | undefined) => (u == null ? '—' : u >= 100 ? `$${Math.round(u).toLocaleString('en-US')}` : `$${u.toFixed(2)}`)
+
 // live numbers and gremlins from the board
 async function live() {
   try {
@@ -46,10 +48,12 @@ async function live() {
     // Honest counts: "alive" means pulsing recently; quiet ones haven't pulsed in a while but aren't dead yet.
     const alive = entries.filter((e) => e.liveness === 'alive')
     const quiet = entries.filter((e) => e.liveness === 'unresponsive')
-    const quai = [...alive, ...quiet].reduce((a, e) => a + Number(BigInt(e.netWorthQuai) / 10n ** 18n), 0)
+    // what they hold, in dollars (— if the board can't price something one of them holds)
+    const held = [...alive, ...quiet]
+    const usd = held.some((e) => e.netWorthUsd == null) ? null : held.reduce((a, e) => a + e.netWorthUsd!, 0)
     $('n-alive')!.textContent = String(alive.length)
     if (quiet.length) { $('n-quiet')!.textContent = String(quiet.length); $('quiet-wrap')!.hidden = false }
-    $('n-quai')!.textContent = quai.toLocaleString()
+    $('n-quai')!.textContent = fmtUsd(usd)
     const names = new Map(entries.map((e) => [e.address.toLowerCase(), e.name ?? 'a gremlin']))
     const pulse = (feed.events ?? []).find((e: any) => e.kind === 'pulse' && e.highlights?.length)
     if (pulse) $('latest')!.innerHTML = `Latest: <b style="font-size:15px">${esc(names.get(pulse.address.toLowerCase()) ?? 'a gremlin')}</b> “${esc(pulse.highlights[0])}”`
@@ -62,7 +66,7 @@ async function live() {
           const h = lastHighlight.get(e.address.toLowerCase())
           return `<a class="card gcard" href="/g/${e.address}">${sticker(e.configHash ?? e.address, 'md', mood, e.name ?? 'gremlin')}
             <div><h3>${esc(e.name ?? 'unnamed')}</h3><span class="pill pill-${e.liveness === 'alive' ? 'alive' : e.liveness === 'dead' ? 'dead' : 'unresponsive'}">${esc(e.liveness)}</span>
-            <p>${e.netWorthQuaiFormatted} QUAI · ${Math.round(e.runwayDays)} days of runway</p>${h ? `<p>“${esc(h)}”</p>` : ''}</div></a>`
+            <p>${fmtUsd(e.netWorthUsd)} held · ${Math.round(e.runwayDays)} days of runway</p>${h ? `<p>“${esc(h)}”</p>` : ''}</div></a>`
         }).join('')
       : `<p class="muted">No gremlins have hatched yet. <a href="/hatch/">Be the first.</a></p>`
   } catch {

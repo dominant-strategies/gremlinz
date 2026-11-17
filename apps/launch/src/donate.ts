@@ -4,7 +4,7 @@
  * USDC and USDT on Ethereum, Base and BSC go through the signed-in EVM wallet, or the sign-in dialog's MetaMask, Phantom
  * and WalletConnect options (auth.ts); SOL, USDC and USDT on Solana go through Phantom (solana-wallet.ts). Bitcoin,
  * Litecoin and Qi are shown as an address and QR code to send from any wallet. Dollar amounts are converted at live
- * prices (DefiLlama). Nothing is converted at donation time; the gremlin's sweeper turns what it receives into QUAI later.
+ * prices (DefiLlama). Nothing is converted at donation time.
  *
  * Where the money goes comes from the page (apps/board/src/donate.ts): the gremlin's signed donation card, or the
  * deposit addresses it announced. Solana, Bitcoin and Litecoin addresses are only on the card, and the board can't tie

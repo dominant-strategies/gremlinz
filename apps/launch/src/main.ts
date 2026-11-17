@@ -910,7 +910,7 @@ async function stepHatch() {
     <dl class="deposit">
       <dt>Base, Ethereum or BSC (USDC, USDT, ETH, BNB…)</dt><dd><code>${esc(d.evm)}</code></dd>
     </dl>`
-      : `<p>Fund your gremlin with anything on these chains. It converts to QUAI and Qi on its own once it hatches.</p>
+      : `<p>Fund your gremlin with anything on these chains.</p>
     <dl class="deposit">
       <dt>Quai (QUAI)</dt><dd><code>${esc(d.quai)}</code></dd>
       ${d.qiPaymentCode ? `<dt>Qi payment code</dt><dd><code>${esc(d.qiPaymentCode)}</code></dd>` : ''}

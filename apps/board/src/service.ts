@@ -2,6 +2,7 @@
  * Read-side views shared by the JSON API and the HTML pages: DTOs with checksummed addresses,
  * account labels, leaderboard, feed, profiles and comment trees.
  */
+import { holdingsUsd, noPrices, type PriceSource } from './prices.ts'
 import { formatUnits, getAddress } from 'ethers'
 import type { Pulse, Tier } from '@gremlins/hatch'
 import type { BoardConfig } from './config.ts'
@@ -113,6 +114,8 @@ export interface LeaderboardEntry {
   seq: number
   netWorthQuai: string
   netWorthQuaiFormatted: string
+  /** Everything it holds, in USD (null: something it holds has no known price). */
+  netWorthUsd: number | null
   revenueLifetimeUsd: string
   revenue7dUsd: string
   runwayDays: number
@@ -129,12 +132,23 @@ export class BoardViews {
   private cfg: BoardConfig
   private now: () => number
   readonly profiles: Profiles
+  private prices: PriceSource
 
-  constructor(store: BoardStore, cfg: BoardConfig, now: () => number, profiles: Profiles) {
+  constructor(store: BoardStore, cfg: BoardConfig, now: () => number, profiles: Profiles, prices: PriceSource = noPrices) {
     this.store = store
     this.cfg = cfg
     this.now = now
     this.profiles = profiles
+    this.prices = prices
+  }
+
+  /** What a pulse says it holds, in USD. */
+  usdOf(p: PulseRecord | null): number | null {
+    return p ? holdingsUsd(p.pulse.message.balances, this.prices.current()) : null
+  }
+  /** A pulse as the API and pages show it, with its holdings in USD. */
+  private pulseWithUsd(p: PulseRecord) {
+    return { ...pulseView(p), netWorthUsd: this.usdOf(p) }
   }
 
   /** Profile summaries for the humans among `addresses` (gremlins and hidden profiles left out). */
@@ -255,6 +269,7 @@ export class BoardViews {
           seq: m.seq,
           netWorthQuai: m.netWorthQuai,
           netWorthQuaiFormatted: formatQuai(m.netWorthQuai),
+          netWorthUsd: this.usdOf(pulse),
           revenueLifetimeUsd: m.revenueLifetimeUsd,
           revenue7dUsd: m.revenue7dUsd,
           runwayDays: m.runwayDays,
@@ -266,7 +281,10 @@ export class BoardViews {
       })
       .filter((r) => opts.includeDead || r.liveness !== 'dead')
     const cmp: Record<LeaderboardSort, (a: (typeof rows)[number], b: (typeof rows)[number]) => number> = {
+      // richest by what it holds in dollars; unknown totals after known ones, then by QUAI
       netWorthQuai: (a, b) => {
+        if (a.netWorthUsd !== null && b.netWorthUsd !== null && a.netWorthUsd !== b.netWorthUsd) return b.netWorthUsd - a.netWorthUsd
+        if ((a.netWorthUsd === null) !== (b.netWorthUsd === null)) return a.netWorthUsd === null ? 1 : -1
         const d = BigInt(b.netWorthQuai) - BigInt(a.netWorthQuai)
         return d > 0n ? 1 : d < 0n ? -1 : 0
       },
@@ -287,8 +305,8 @@ export class BoardViews {
       egg: eggView(egg),
       config: egg.config?.config ?? null,
       liveness: egg.status === 'hatched' ? this.livenessOf(egg, latest) : null,
-      latestPulse: latest ? pulseView(latest) : null,
-      pulses: pulses.map(pulseView),
+      latestPulse: latest ? this.pulseWithUsd(latest) : null,
+      pulses: pulses.map((x) => this.pulseWithUsd(x)),
     }
   }
 
@@ -302,7 +320,7 @@ export class BoardViews {
         address: checksum(egg.address), status: egg.status, name: cfg?.name ?? null, persona: cfg?.persona ?? null,
         liveness: egg.status === 'hatched' ? this.livenessOf(egg, pulse) : null,
         hatchedAt: egg.hatchedAt, announcedAt: egg.announcedAt,
-        pulse: pulse ? pulseView(pulse) : null,
+        pulse: pulse ? this.pulseWithUsd(pulse) : null,
       }
     }))
   }

@@ -1,4 +1,5 @@
 /** Entry point: PORT (default 8787), BOARD_DB (default ./data/board.db, or ':memory:'). */
+import { llamaPrices } from './prices.ts'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { loadEnvFile } from 'node:process'
@@ -31,7 +32,9 @@ const designer: ForgeDesigner | undefined = designOn ? claudeDesigner() : undefi
 const photo = process.env.FORGE_PHOTO_PROVIDER === 'off' ? undefined : photoProviderFromEnv()
 // Hatch custody for Fluence eggs (see hatch.ts, hatch-live.ts for the env it needs); off unless configured.
 const hatch = hatchFromEnv(process.env, dbPath)
-const app = await createBoard({ store, config: configFromEnv(), forge: { designer, photo }, hatch })
+const prices = llamaPrices()
+void prices.refresh() // warm, so the first page already shows dollars
+const app = await createBoard({ store, config: configFromEnv(), forge: { designer, photo }, hatch, prices })
 // The worker's 2-of-2 signers and the routes the makers' pages talk to share one coordinator.
 const worker = hatch && hatchWorker({ store: hatch.store, cfg: hatch.cfg, deps: liveHatchDeps(process.env, store, hatch.mpc) })
 worker?.start()
