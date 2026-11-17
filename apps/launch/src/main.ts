@@ -15,6 +15,7 @@ import { boardApi } from './board.js'
 import { WALLET_NAMES, canPayUsdc, makerAccount, payUsdcOnBase, signConfigWithWallet } from './hatch-wallet.js'
 import { FLUENCE_MIN_TOPUP_USD } from '@gremlins/hosting'
 import { formatUnits as fmtUnits } from 'ethers'
+import { HATCHBAR_CSS, STAGE_TITLE, currentStage, hatchbarHtml, isBuild, stageStates, type Stage } from './hatchbar.js'
 import { FLUENCE_STEPS, FLUENCE_USDC_STEPS, PROGRESS_CSS, Progress, SPORESTACK_STEPS, COMMON_STEPS } from './progress.js'
 import { BUILD_STEPS, hatchUrl, loadMakerToken, loadSession, newLaunchId, saveMakerToken, saveSession, type BuildStep, type Session } from './session.js'
 import { mountLaunchControls } from './launch-controls.js'
@@ -43,7 +44,7 @@ let s: Session = loadSession() ?? { launchId: newLaunchId(), channel: CANARY ? '
 const save = () => saveSession(s)
 
 // Progress window: every step and transaction, persisted with the session.
-document.head.insertAdjacentHTML('beforeend', `<style>${PROGRESS_CSS}</style>`)
+document.head.insertAdjacentHTML('beforeend', `<style>${PROGRESS_CSS}${HATCHBAR_CSS}</style>`)
 const progress = new Progress({ load: () => s.progress, save: (p) => { s.progress = p; save() } }, () => (s.config?.name ? `Hatching ${s.config.name}` : 'Hatching a gremlin'))
 /** USDC on Base when the maker signed in with an EVM wallet (and never started a QUAI bridge); otherwise QUAI. */
 const payWith = (): 'usdc' | 'quai' => (s.bridgeTx ? 'quai' : s.payWith ?? (account() && canPayUsdc(account()!.kind) ? 'usdc' : 'quai'))
@@ -72,6 +73,73 @@ const launchControls = mountLaunchControls({
 
 function show(html: string) {
   app.innerHTML = html
+  renderBar()
+}
+
+// ── the step bar: the same row of stages on every screen; reached stages are buttons ──
+const bar = $('#hatchbar')
+const review = $('#review')
+let reviewing: Stage | undefined
+function renderBar() {
+  bar.innerHTML = hatchbarHtml(stageStates(s, (id) => progress.isDone(id), reviewing))
+  for (const b of bar.querySelectorAll<HTMLButtonElement>('[data-stage]')) b.onclick = () => toStage(b.dataset.stage as Stage)
+  bar.querySelector('[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+}
+/** Keeps the bar under the (sticky) site header, and the Forge pane under the bar. */
+function placePane() {
+  const header = document.querySelector<HTMLElement>('.site-header')
+  document.documentElement.style.setProperty('--hb-top', `${header?.offsetHeight ?? 0}px`)
+  if (document.body.classList.contains('pane-open')) {
+    window.scrollTo(0, 0)
+    document.documentElement.style.setProperty('--pane-top', `${bar.getBoundingClientRect().bottom}px`)
+  }
+}
+window.addEventListener('resize', placePane)
+function closeReview() {
+  if (!reviewing) return
+  reviewing = undefined
+  review.hidden = true
+  app.hidden = false
+  document.body.classList.toggle('pane-open', !!s.maker && currentStage(s) === 'look')
+  placePane()
+  renderBar()
+}
+function toStage(to: Stage) {
+  const now = currentStage(s)
+  const st = stageStates(s, (id) => progress.isDone(id), reviewing).find((x) => x.stage === to)!
+  if (!st.open) return
+  if (to === now) { closeReview(); return window.scrollTo({ top: 0, behavior: 'smooth' }) }
+  if (st.readOnly) return openReview(to)
+  closeReview()
+  // before the egg is rented, going back to a builder step reopens the config for changes (the draft keeps everything)
+  if (isBuild(to)) {
+    if (s.config) { s.config = undefined; s.signed = undefined }
+    go(to)
+  }
+}
+const row = (k: string, v: string) => `<dt>${esc(k)}</dt><dd>${v}</dd>`
+function openReview(at: Stage) {
+  const c = s.config
+  const body: Partial<Record<Stage, () => string>> = {
+    connect: () => `<dl>${row('Maker', `<code>${esc(s.maker ?? '')}</code>`)}${row('Wallet', esc(account() ? WALLET_NAMES[account()!.kind] : 'not connected in this tab'))}</dl>`,
+    name: () => `<dl>${row('Name', esc(c!.name))}${row('Life goals', `<ol>${c!.goals.map((g) => `<li>${esc(g)}</li>`).join('')}</ol>`)}</dl>`,
+    look: () => (s.look ? `<img src="${esc(s.look.image)}" alt="${esc(c!.name)}"><p class="muted">${esc(s.look.label ?? 'From the Gremlin Forge')}</p>` : `<p class="muted">No Forge body: it keeps the creature drawn from its description.</p>`),
+    persona: () => `<dl>${row('Personality', esc(c!.persona))}${row('Voice', esc(c!.voice || '—'))}</dl>`,
+    models: () => `<dl>${row('Thinks with', c!.preferredModels.length ? c!.preferredModels.map(esc).join(', ') : 'whatever is cheapest that works')}</dl>`,
+    rules: () => `<dl>${row('Economics', esc(economicsOf(c!).model))}${row('Constitution', c!.constitution.map(esc).join(', ') || '—')}${row('Mischief in', Object.entries(c!.mischiefScope).filter(([, on]) => on).map(([k]) => esc(k)).join(', ') || 'nowhere')}${row('Private directions', c!.privateDirections ? 'yes, sealed to the egg (not shown here)' : 'none')}</dl>`,
+    host: () => `<dl>${row('Host', s.host === 'fluence' ? 'Fluence' : 'SporeStack')}${row('Paid with', s.payWith === 'usdc' ? 'USDC on Base' : s.host === 'fluence' ? 'QUAI (bridged)' : 'SporeStack balance')}</dl>`,
+    fund: () => `<dl>${row('Egg server', `<code>${esc(s.machineId ?? '')}</code>`)}</dl>`,
+  }
+  reviewing = at
+  const why = at === 'connect' ? 'This is the wallet recorded as its maker.' : 'The egg is rented with this config, so it can no longer change. To make a different gremlin, start over.'
+  review.innerHTML = `<h2>${STAGE_TITLE[at]}</h2><p class="ro"><span>View only. ${why}</span></p>${(body[at] ?? (() => ''))()}
+    <div class="navrow"><button type="button" id="review-back">Back to ${STAGE_TITLE[currentStage(s)]}</button></div>`
+  ;(review.querySelector('#review-back') as HTMLButtonElement).onclick = closeReview
+  document.body.classList.remove('pane-open')
+  app.hidden = true
+  review.hidden = false
+  renderBar()
+  window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 /** Show an error with a retry; the failing step is marked in the progress window by route(). */
 function fail(e: unknown) {
@@ -121,7 +189,7 @@ function renderPreview(draft?: GremlinConfig) {
 
 // ── 1. connect ────────────────────────────────────────────────────────────────
 function stepConnect() {
-  show(`<p class="eyebrow">Step 1 of 7</p><h2>Let's make something that lives on its own</h2>
+  show(`<h2>Let's make something that lives on its own</h2>
     <p class="muted">About fifteen minutes and $10, in QUAI or USDC. Here is what happens:</p>
     <ol class="intro">
       <li><div><b>You shape it</b><span class="muted">A name and life goals, a body you build in the Forge, a personality and voice, the models it thinks with, and the rules it chooses to live by.</span></div></li>
@@ -165,19 +233,14 @@ function draftConfig(): GremlinConfig {
   }
 }
 
-/** Shows a builder step: where you are in the hatch, the steps as chips (finished ones clickable), then the step. */
-const stepperHtml = (at: BuildStep) => {
-  const i = BUILD_STEPS.indexOf(at)
-  return `<ol class="stepper">${BUILD_STEPS.map((b, j) => `<li class="${j < i ? 'done' : j === i ? 'now' : ''}">${j < i ? `<button type="button" class="link" data-go="${b}">${BUILD_TITLE[b]}</button>` : BUILD_TITLE[b]}</li>`).join('')}<li>Egg</li></ol>`
-}
-const stepLabel = (at: BuildStep) => `Step ${BUILD_STEPS.indexOf(at) + 2} of ${BUILD_STEPS.length + 2}`
+/** Shows a builder step (the step bar above the page shows where you are). */
 function frame(at: BuildStep, html: string) {
   s.at = at
   save()
   // the body step is a full-screen pane over the page; every other step sits in the page beside the preview
   document.body.classList.toggle('pane-open', at === 'look')
-  show(at === 'look' ? html : `<p class="eyebrow">${stepLabel(at)}</p>${stepperHtml(at)}${html}`)
-  for (const b of app.querySelectorAll<HTMLButtonElement>('[data-go]')) b.onclick = () => go(b.dataset.go as BuildStep)
+  show(html)
+  placePane()
   progress.step(at).start()
   renderPreview(draftConfig())
 }
@@ -229,8 +292,7 @@ function stepLook() {
   const brief = `${d.name}, a gremlin whose life goals are: ${(d.goals ?? []).join('; ')}. Design a body that fits them.`
   frame('look', `<div class="forge-pane" role="dialog" aria-modal="true" aria-label="Build ${nameOf()}'s body">
     <div class="fp-bar">
-      <div class="fp-title"><span class="eyebrow">${stepLabel('look')} · Body</span><b>Build ${nameOf()}'s body</b></div>
-      ${stepperHtml('look')}
+      <div class="fp-title"><span class="eyebrow">Body</span><b>Build ${nameOf()}'s body</b></div>
       <div class="navrow"><button type="button" class="secondary" id="body-start-over">Start over</button><button type="button" class="secondary" id="back">Back</button><button type="button" class="secondary" id="skip" title="It keeps the creature drawn from its description">Skip</button><button type="button" id="use">Use this body</button></div>
     </div>
     <iframe id="forge" src="/forge/?hatch=1&brief=${encodeURIComponent(brief)}&goals=${encodeURIComponent((d.goals ?? []).slice(0, 3).join('\n'))}" title="Gremlin Forge"></iframe>
@@ -601,7 +663,7 @@ const eggCloudInit = () =>
 
 // ── 7. choose where the egg runs ──────────────────────────────────────────────
 function stepHost() {
-  show(`<p class="eyebrow">Step 7 of 7</p><h2>Where should the egg hatch?</h2>
+  show(`<h2>Where should the egg hatch?</h2>
     <p class="muted">The egg is a small rented server. It only lives until your gremlin moves to a home it pays for itself.</p>
     <div class="choice" style="margin:18px 0 22px">
       <label><input type="radio" name="host" value="fluence" checked><span><b>Fluence <span class="pill pill-alive" style="margin-left:6px">recommended</span></b><span class="muted small">From $${FLUENCE_MIN_TOPUP_USD}. ${payWith() === 'usdc' ? `Pay USDC on Base${account() ? ` with ${WALLET_NAMES[account()!.kind]}` : ''}: one transfer, no bridge.` : 'Pay QUAI with Pelagus (bridged for you), or USDC on Base from MetaMask, Phantom or any WalletConnect wallet.'}</span></span></label>
@@ -846,6 +908,7 @@ async function stepHatch() {
 const currentStepId = () => planFor().find((d) => !progress.isDone(d.id))?.id
 
 async function route() {
+  closeReview()
   renderPreview()
   try {
     if (!IMAGE) return show('<p class="error">Hatching is not configured yet (VITE_EGG_IMAGE).</p>')

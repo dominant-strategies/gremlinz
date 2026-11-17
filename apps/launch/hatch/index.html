@@ -59,7 +59,7 @@
     /* the body step: the Forge in a full-screen pane, with the step's controls in a slim bar on top */
     body.pane-open { overflow: hidden; }
     body.pane-open #progress { display: none; }
-    .forge-pane { position: fixed; inset: 0; z-index: 50; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--paper); }
+    .forge-pane { position: fixed; inset: var(--pane-top, 0px) 0 0 0; z-index: 50; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--paper); }
     .fp-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px; padding: 10px clamp(12px, 2vw, 24px); border-bottom: 1.5px solid var(--line); background: var(--card); }
     .fp-title { display: grid; gap: 2px; margin-right: auto; }
     .fp-title .eyebrow { margin: 0; }
@@ -103,6 +103,7 @@
       <div class="header-end" id="gremlins-auth"></div>
     </div>
   </header>
+  <nav class="hatchbar" id="hatchbar" aria-label="Hatch steps"></nav>
   <main class="wrap hatch">
     <aside class="preview" id="preview" aria-live="polite"></aside>
     <div class="flow">
@@ -111,6 +112,7 @@
         <button type="button" class="secondary" id="hatch-saved">Saved hatches</button>
       </div>
       <div id="app"></div>
+      <div id="review" class="review" hidden></div>
       <dialog class="hatch-dialog" id="hatch-session-dialog" aria-labelledby="hatch-session-title">
         <h2 id="hatch-session-title"></h2>
         <div data-content></div>
