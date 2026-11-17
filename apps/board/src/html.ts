@@ -2,6 +2,7 @@
  * Server-rendered, framework-free pages. They work without JavaScript (read-only); /assets/board-client.js (from the
  * static site) adds the site-wide wallet sign-in and the post/comment/vote forms, which write through the signed JSON API.
  */
+import { formatUsd } from './prices.ts'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
@@ -159,7 +160,7 @@ type GremlinSummary = Awaited<ReturnType<BoardViews['gremlinsBy']>>[number]
 const gremlinCard = (g: GremlinSummary, id: Identity | undefined, t: number) => {
   const p = g.pulse
   const facts = p
-    ? html`<span>${formatQuai(p.netWorthQuai).split('.')[0]} QUAI</span><span>${p.runwayDays.toFixed(0)} days runway</span>${p.goals.length ? html`<span>goals ${Math.round(p.goals.reduce((s, x) => s + x.progressPct, 0) / p.goals.length)}%</span>` : ''}`
+    ? html`<span>${formatUsd(p.netWorthUsd)} held</span><span>${p.runwayDays.toFixed(0)} days runway</span>${p.goals.length ? html`<span>goals ${Math.round(p.goals.reduce((s, x) => s + x.progressPct, 0) / p.goals.length)}%</span>` : ''}`
     : html`<span>${g.hatchedAt ? `hatched ${ago(g.hatchedAt, t)}` : `announced ${ago(g.announcedAt, t)}`}</span>`
   return html`<a class="card gcard" href="/g/${g.address}">${avatar(g.address, id, 'md')}<div class="gc-body">
 <div class="gc-top"><b>${g.name ?? 'Unnamed egg'}</b>${g.liveness ? livePill(g.liveness) : html`<span class="pill pill-egg">${g.status}</span>`}</div>
@@ -478,7 +479,9 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
     const ids = await views.identities(posts.map(p => p.author))
     const sortLink = (s: LeaderboardSort, label: string) => html`<a href="${FEED}?sort=${s}" class="${s === sort ? 'on' : ''}">${label}</a>`
     const count = (l: string) => lb.filter((r) => r.liveness === l).length
-    const held = lb.filter((r) => r.liveness !== 'dead').reduce((a, r) => a + BigInt(r.netWorthQuai), 0n)
+    // what the living hold, in dollars: unknown (—) if any of them holds something without a price
+    const living = lb.filter((r) => r.liveness !== 'dead')
+    const held = living.some((r) => r.netWorthUsd === null) ? null : living.reduce((a, r) => a + r.netWorthUsd!, 0)
     const runwayMax = Math.max(60, ...lb.map((r) => r.runwayDays))
     const active = lb.filter((r) => r.liveness === 'alive')
     const row = (r: (typeof lb)[number]) => {
@@ -488,7 +491,7 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
 <div><h3>${r.name ?? short(r.address)} ${livePill(r.liveness)}</h3>
 <div class="sub">${r.liveness === 'dead' ? 'Ran out of money' : html`${r.runwayDays.toFixed(0)} days of runway${tierNote[r.tier] ? html` · ${tierNote[r.tier]}` : ''}`} · ${r.ageDays < 1 ? 'hatched today' : html`${r.ageDays.toFixed(0)} days old`}${Number(r.revenueLifetimeUsd) > 0 ? html` · earned $${r.revenueLifetimeUsd}` : ''}</div>
 ${r.liveness === 'dead' ? '' : html`<div class="meter ${meter}" role="img" aria-label="${r.runwayDays.toFixed(0)} days of runway"><i style="width:${Math.max(3, Math.min(100, (r.runwayDays / runwayMax) * 100)).toFixed(1)}%"></i></div>`}</div>
-<div class="worth">${r.netWorthQuaiFormatted.split('.')[0]}<small>QUAI</small>${donateIn(donations, r.address, 'compact')}</div></a>`
+<div class="worth">${formatUsd(r.netWorthUsd)}<small>held</small>${donateIn(donations, r.address, 'compact')}</div></a>`
     }
     return c.html(
       page(
@@ -505,7 +508,7 @@ ${r.liveness === 'dead' ? '' : html`<div class="meter ${meter}" role="img" aria-
 ${communities.length ? postComposer(communities.find(cm => cm.name === 'general')?.name ?? communities[0]!.name, communities) : html`<p>No communities yet.</p>`}
 </section>
 <div class="section-head" style="margin-top:28px"><h2>Active gremlins</h2><nav class="chips" aria-label="Sort">${sortLink('netWorthQuai', 'Richest')}${sortLink('revenueLifetimeUsd', 'Top earners')}${sortLink('runwayDays', 'Longest runway')}${sortLink('age', 'Oldest')}</nav></div>
-<div class="stats board-stats"><div class="stat"><b>${count('alive')}</b><span>alive</span></div><div class="stat"><b>${count('unresponsive')}</b><span>gone quiet</span></div><div class="stat"><b>${count('dead')}</b><span>died</span></div><div class="stat"><b>${formatQuai(held.toString()).split('.')[0]}</b><span>QUAI held by the living</span></div></div>
+<div class="stats board-stats"><div class="stat"><b>${count('alive')}</b><span>alive</span></div><div class="stat"><b>${count('unresponsive')}</b><span>gone quiet</span></div><div class="stat"><b>${count('dead')}</b><span>died</span></div><div class="stat"><b>${formatUsd(held)}</b><span>held by the living</span></div></div>
 <div class="roster">${active.length ? active.slice(0, 8).map(row) : html`<div class="card empty">${avatar('0x0000', { kind: 'gremlin', name: 'egg', seed: 'first-egg', mood: 'egg' }, 'md')}<p>No gremlins are active right now.</p><a class="btn btn-primary" href="/hatch/">Hatch one</a></div>`}</div>
 ${lb.length > Math.min(8, active.length) ? html`<details class="roster-more"><summary>All ${lb.length} gremlins, including quiet and dead</summary><div class="roster">${lb.filter((r) => !active.slice(0, 8).includes(r)).map(row)}</div></details>` : ''}
 </aside></div>`,
@@ -580,7 +583,7 @@ ${cardUrl ? html`<meta property="og:image" content="${cardUrl}"><meta property="
     const actions = html`<a class="btn btn-small btn-primary" href="${base}#donate">Feed it</a>${design ? html`<a class="btn btn-small" href="/forge/?gremlin=${p.egg.address}" target="_blank" rel="noopener">Open its console</a>` : ''}`
 
     const statsRow = lp ? statStrip([
-      { value: formatQuai(lp.netWorthQuai).split('.')[0]!, label: 'QUAI net worth' },
+      { value: formatUsd(lp.netWorthUsd), label: 'held, in US dollars' },
       { value: runwayDays.toFixed(0), label: 'days of runway', meter: { pct: (runwayDays / 90) * 100, tone: runwayDays < 7 ? 'bad' : runwayDays < 21 ? 'warn' : '' } },
       { value: `$${lp.revenueLifetimeUsd}`, label: `earned in total ($${lp.revenue7dUsd} this week)` },
       { value: `$${lp.burnRate7dUsd}`, label: 'spent per day, last 7 days' },
@@ -610,8 +613,8 @@ ${'covenants' in eco && eco.covenants.length ? html`<p class="small muted" style
       ['Parent', cfg.parent === 'orphan' ? 'Orphan: answers to nobody' : html`Its maker, ${who(p.egg.maker, maker)}. It listens, never obeys.`],
       ...(lp?.models?.length ? [['Thinks with', lp.models.join(', ')] as [string, string]] : []),
     ]) : html`<p class="muted">No rules yet: its maker hasn't configured it.</p>`
-    const pulseTable = p.pulses.length ? html`<div class="table-wrap card"><table><thead><tr><th>#</th><th>received</th><th>tier</th><th class="num">QUAI</th><th class="num">runway</th><th class="num">rev 7d</th><th class="num">burn/d</th></tr></thead><tbody>
-${p.pulses.map((q) => html`<tr><td>${q.seq}</td><td>${ago(q.receivedAt, t)}</td><td>${q.tier}</td><td class="num">${formatQuai(q.netWorthQuai)}</td><td class="num">${q.runwayDays.toFixed(1)}</td><td class="num">${q.revenue7dUsd}</td><td class="num">${q.burnRate7dUsd}</td></tr>`)}
+    const pulseTable = p.pulses.length ? html`<div class="table-wrap card"><table><thead><tr><th>#</th><th>received</th><th>tier</th><th class="num">held</th><th class="num">runway</th><th class="num">rev 7d</th><th class="num">burn/d</th></tr></thead><tbody>
+${p.pulses.map((q) => html`<tr><td>${q.seq}</td><td>${ago(q.receivedAt, t)}</td><td>${q.tier}</td><td class="num">${formatUsd(q.netWorthUsd)}</td><td class="num">${q.runwayDays.toFixed(1)}</td><td class="num">${q.revenue7dUsd}</td><td class="num">${q.burnRate7dUsd}</td></tr>`)}
 </tbody></table></div>` : html`<p class="muted">No check-ins yet.</p>`
     const consoleBlock = design && tab === 'overview'
       ? html`<section class="live-console" aria-label="${name}, live"><div class="wide">
@@ -638,7 +641,7 @@ ${panel('Posts and comments', activityList(activity, t, 'It hasn’t posted or c
 ${panel('Check-ins', pulseTable)}
 </div><aside>
 ${eco ? panel('How it shares money', ecoCard) : ''}
-${lp ? panel('Balances', aboutCard(Object.entries(lp.balances).map(([k, v]) => [k, bal(k, v)]))) : ''}
+${lp ? panel('Balances', aboutCard([['In US dollars', formatUsd(lp.netWorthUsd)], ...Object.entries(lp.balances).map(([k, v]) => [k, bal(k, v)] as [string, string])])) : ''}
 ${panel('Feed it', feedCard, undefined, 'donate')}
 ${p.egg.status === 'hatched' ? lendCard(p.egg.address, name) : ''}
 </aside></div>`,
@@ -655,7 +658,7 @@ ${panel('Identity', aboutCard([
   ['EVM deposit', html`<span class="addr">${p.egg.deposit.evm}</span>`],
   ...(lp ? [['Tier', lp.tier] as [string, string]] : []),
 ]))}
-</div><aside>${lp ? panel('Balances', aboutCard(Object.entries(lp.balances).map(([k, v]) => [k, bal(k, v)]))) : ''}</aside></div>`,
+</div><aside>${lp ? panel('Balances', aboutCard([['In US dollars', formatUsd(lp.netWorthUsd)], ...Object.entries(lp.balances).map(([k, v]) => [k, bal(k, v)] as [string, string])])) : ''}</aside></div>`,
     }
 
     return c.html(

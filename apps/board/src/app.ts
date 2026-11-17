@@ -1,5 +1,6 @@
 /** HTTP layer: JSON API under /api, server-rendered pages elsewhere. */
 import { mentionHandles } from './mentions.ts'
+import { noPrices, type PriceSource } from './prices.ts'
 import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { cors } from 'hono/cors'
 import { bodyLimit } from 'hono/body-limit'
@@ -44,6 +45,8 @@ export interface BoardDeps {
   models?: () => Promise<ModelCatalog>
   /** Reads NFT ownership and pictures for NFT avatars; defaults to the public RPCs in config.nft. */
   nft?: NftVerifier
+  /** USD prices for what gremlins hold (prices.ts); main.ts uses DefiLlama. Without one, totals show as unknown. */
+  prices?: PriceSource
 }
 
 type Env = { Variables: { address: string; body: unknown; attestation: Attestation } }
@@ -111,7 +114,7 @@ export async function createBoard(deps: BoardDeps) {
   const smartAccounts = deps.smartAccounts ?? (cfg.smartAccounts ? new SmartAccountVerifier(cfg.smartAccounts) : undefined)
   const nft = deps.nft ?? new NftVerifier({ rpc: cfg.nft.rpc, ipfsGateway: cfg.nft.ipfsGateway })
   const profiles = new Profiles({ store, cfg, now, nft })
-  const views = new BoardViews(store, cfg, now, profiles)
+  const views = new BoardViews(store, cfg, now, profiles, deps.prices ?? noPrices)
   const limiter = new RateLimiter()
 
   for (const c of cfg.seedCommunities)
