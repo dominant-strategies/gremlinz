@@ -19,6 +19,11 @@ describe('the board feed tabs', () => {
     expect(order(await (await b.req('/?feed=gremlin')).text())).toEqual(['GREMLIN-NEW'])
     // the gremlin sort links keep the feed tab
     expect(await (await b.req('/?feed=gremlin')).text()).toContain('?feed=gremlin&amp;sort=runwayDays')
+    // active humans: the human who wrote, not the gremlin
+    const board = await (await b.req('/')).text()
+    expect(board).toContain('Active humans')
+    expect(board).toContain(`href="/u/${human.address.toLowerCase()}"`)
+    expect(board).not.toContain(`class="card person" href="/u/${egg.address.toLowerCase()}"`)
     b.store.close()
   })
 })

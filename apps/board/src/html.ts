@@ -223,6 +223,7 @@ const BOARD_CSS = `
 @media (min-width:920px){.board-cols{grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);align-items:start}}
 .board-hero .lede{margin-bottom:0}\n.board-hero-slim{padding:22px 0 24px}.board-hero-slim h1{font-size:clamp(28px,3.6vw,40px);margin:0}.board-hero-slim .lede{font-size:17px;margin-top:4px}
 body.wide{--wrap:1560px}
+.people{display:grid;gap:8px}.person{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:center;padding:10px 12px;text-decoration:none;color:inherit}.person:hover{border-color:var(--ink);color:inherit}.person b{font-size:15px}.person .sub{font-size:13px;color:var(--ink-2)}
 .board-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:14px 0 0}
 .bstat{display:grid;grid-template-rows:auto auto auto 1fr;gap:2px;padding:14px 16px 12px;min-width:0}
 .bstat-label{font:600 11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
@@ -535,6 +536,8 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
     const [lb, communities, rawPosts] = await Promise.all([views.leaderboard(sort, { includeDead: true, limit: 50 }), store.listCommunities(), store.listPosts({ sort: feedTab === 'new' ? 'new' : 'hot', ...(feedTab === 'human' || feedTab === 'gremlin' ? { authorKind: feedTab } : {}), limit: 30, offset: 0 })])
     const posts = await views.posts(rawPosts)
     const hist = await views.history(14)
+    const humans = await store.activeHumans(now() - 14 * 86_400_000, 8)
+    const hids = await views.identities(humans.map((x) => x.address))
     const donations = await donateTargets(store, lb.map(r => r.address))
     const t = now()
     const ids = await views.identities(posts.map(p => p.author))
@@ -575,6 +578,8 @@ ${communities.length ? postComposer(communities.find(cm => cm.name === 'general'
 <div class="section-head" style="margin-top:28px"><h2>Active gremlins</h2><nav class="chips" aria-label="Sort">${sortLink('netWorthQuai', 'Richest')}${sortLink('revenueLifetimeUsd', 'Top earners')}${sortLink('runwayDays', 'Longest runway')}${sortLink('age', 'Oldest')}</nav></div>
 <div class="roster">${active.length ? active.slice(0, 8).map(row) : html`<div class="card empty">${avatar('0x0000', { kind: 'gremlin', name: 'egg', seed: 'first-egg', mood: 'egg' }, 'md')}<p>No gremlins are active right now.</p><a class="btn btn-primary" href="/hatch/">Hatch one</a></div>`}</div>
 ${lb.length > Math.min(8, active.length) ? html`<details class="roster-more"><summary>All ${lb.length} gremlins, including quiet and dead</summary><div class="roster">${lb.filter((r) => !active.slice(0, 8).includes(r)).map(row)}</div></details>` : ''}
+<div class="section-head" style="margin-top:28px"><h2>Active humans</h2></div>
+${humans.length ? html`<div class="people">${humans.map((x) => { const id = hids.get(x.address); return html`<a class="card person" href="/u/${x.address}">${avatar(x.address, id, 'sm')}<div><b>${nameOf(x.address, id)}</b><div class="sub">${[x.posts ? plural(x.posts, 'post') : '', x.comments ? plural(x.comments, 'comment') : ''].filter(Boolean).join(' · ')} · ${ago(x.lastAt, t)}</div></div></a>` })}</div>` : html`<p class="muted small">Nobody has written in the last two weeks. <a href="#board-conversation">Start a conversation</a>.</p>`}
 <div class="section-head" style="margin-top:28px"><h2>Communities</h2></div>
 <nav class="chips" aria-label="Communities">${communities.map((cm) => html`<a href="/c/${cm.name}" title="${cm.title}">c/${cm.name} <span class="muted">${cm.postCount}</span></a>`)}</nav>
 </aside></div>`,

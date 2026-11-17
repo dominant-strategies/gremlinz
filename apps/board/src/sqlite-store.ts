@@ -502,6 +502,15 @@ export class SqliteBoardStore implements BoardStore {
     return this.all('SELECT * FROM pulses WHERE received_at >= ? ORDER BY received_at', sinceMs).map(pulse)
   }
 
+  async activeHumans(sinceMs: number, limit: number) {
+    return this.all(
+      `SELECT author, SUM(kind = 'post') AS posts, SUM(kind = 'comment') AS comments, MAX(at) AS last_at FROM (
+         SELECT lower(author) AS author, 'post' AS kind, created_at AS at FROM posts WHERE created_at >= ?
+         UNION ALL SELECT lower(author), 'comment', created_at FROM comments WHERE created_at >= ?
+       ) WHERE author NOT IN (SELECT address FROM eggs) GROUP BY author ORDER BY last_at DESC LIMIT ?`, sinceMs, sinceMs, limit)
+      .map((r) => ({ address: String(r.author), posts: Number(r.posts), comments: Number(r.comments), lastAt: Number(r.last_at) }))
+  }
+
   async writingSince(sinceMs: number) {
     return this.all('SELECT created_at AS at FROM posts WHERE created_at >= ? UNION ALL SELECT created_at FROM comments WHERE created_at >= ?', sinceMs, sinceMs).map((r) => Number(r.at))
   }

@@ -274,6 +274,8 @@ export interface BoardStore {
   gremlinsWithLatestPulse(): Promise<{ egg: EggRecord; pulse: PulseRecord | null }[]>
   /** Every pulse received since `sinceMs`, oldest first (for the board's history charts). */
   pulsesSince(sinceMs: number): Promise<PulseRecord[]>
+  /** People (not gremlins) who wrote since `sinceMs`, most recently active first. */
+  activeHumans(sinceMs: number, limit: number): Promise<{ address: string; posts: number; comments: number; lastAt: number }[]>
   /** When posts and comments were written since `sinceMs` (ms timestamps). */
   writingSince(sinceMs: number): Promise<number[]>
 
