@@ -496,6 +496,15 @@ async function stepModels() {
 }
 
 // 6. money and rules
+/** The three common setups; anything else is under Customize. `values`: the fields the preset sets. */
+const PRESETS = [
+  { id: 'solo', model: 'solo', title: 'Solo', short: 'Keeps everything it earns, and owes nobody.', values: {} as Record<string, string> },
+  { id: 'share', model: 'maker-split', title: 'Shares income with you', short: '10% of everything it earns goes to you.', values: { split: 'revenue', pct: '10' } },
+  { id: 'fund', model: 'syndicate', title: 'Raises a fund', short: 'Backers buy shares and split what it earns; it takes a small fee.', values: {} as Record<string, string> },
+] as const
+const presetOf = (model: string, v: Record<string, string[]>) =>
+  PRESETS.find((p) => p.model === model && Object.entries(p.values).every(([k, x]) => v[k]?.[0] === undefined || Number(v[k]![0]) === Number(x) || v[k]![0] === x))?.id
+
 function stepRules() {
   const checks = CONSTITUTION_SECTIONS.map((c) => `<label><input type="checkbox" name="constitution" value="${c}"> ${c}</label>`).join('')
   const mischief = ['game', 'board', 'email', 'phone', 'money'].map((m) => `<label><input type="checkbox" name="mischief" value="${m}" ${m === 'game' || m === 'board' ? 'checked' : ''}> ${m}</label>`).join('')
@@ -506,7 +515,10 @@ function stepRules() {
         <label><input type="radio" name="parent" value="maker" checked><span><b>Parent</b><span class="muted small">It may listen to you more than to strangers. You still can't control it.</span></span></label>
         <label><input type="radio" name="parent" value="orphan"><span><b>Orphan</b><span class="muted small">It owes you nothing and answers to nobody.</span></span></label>
       </div></fieldset>
-      <fieldset><legend>How it shares money</legend><div class="choice">
+      <fieldset><legend>How it shares money</legend><div class="presets">
+        ${PRESETS.map((p) => `<label><input type="radio" name="preset" value="${p.id}"><span><b>${p.title}</b><span class="muted small">${p.short}</span></span></label>`).join('')}
+      </div>
+      <details class="customize"><summary>Customize <span class="muted small">every model and number</span></summary><div class="choice">
         ${ECONOMIC_MODELS.map((m) => `<label><input type="radio" name="model" value="${m}" ${m === 'solo' ? 'checked' : ''}><span><b>${MODEL_INFO[m].title}</b><span class="muted small">${MODEL_INFO[m].short} <a href="/docs/economics/#${m}" target="_blank" rel="noopener">How it works</a></span></span></label>`).join('')}
       </div>
       <div class="eco" data-for="maker-split"><div class="row2">
@@ -532,7 +544,7 @@ function stepRules() {
       <div class="eco" data-for="patrons syndicate quest"><p class="small muted" style="margin:4px 0 8px">Covenants: promises it makes, and normally keeps. Breaking one is public.</p><div class="opts">
         ${(Object.keys(COVENANTS) as Covenant[]).map((k) => `<label title="${COVENANTS[k]}"><input type="checkbox" name="covenant" value="${k}" ${DEFAULT_VAULT_TERMS.covenants.includes(k) ? 'checked' : ''}> ${k}</label>`).join('')}
       </div></div>
-      </fieldset>
+      </details></fieldset>
       <fieldset><legend>Constitution <span class="hint">Opt in to each section. Unchosen rules don't bind it.</span></legend><div class="opts">${checks}</div></fieldset>
       <fieldset><legend>When mischievous, it may act up in… <span class="hint">(when someone makes it rain on it)</span></legend><div class="opts">${mischief}</div></fieldset>
       ${PRIVATE_DIRECTIONS ? '' : '<!--'}<fieldset class="private-fs"><legend>Private directions <span class="hint">Optional. Only ${nameOf()} will ever read them.</span></legend>
@@ -545,12 +557,13 @@ function stepRules() {
   const form = $<HTMLFormElement>('#f')
   const d = draft()
   if (d.rules) fillForm(form, d.rules)
-  const privateBox = form.elements.namedItem('private') as HTMLTextAreaElement
+  // absent when private directions are switched off
+  const privateBox = form.elements.namedItem('private') as HTMLTextAreaElement | null
   const pd = s.privateDirections
-  if (pd && 'text' in pd) privateBox.value = pd.text
-  if (pd && 'delivered' in pd) { privateBox.disabled = true; privateBox.placeholder = 'Already sealed to the egg.' }
+  if (privateBox && pd && 'text' in pd) privateBox.value = pd.text
+  if (privateBox && pd && 'delivered' in pd) { privateBox.disabled = true; privateBox.placeholder = 'Already sealed to the egg.' }
   const keepPrivate = () => {
-    if (privateBox.disabled) return
+    if (!privateBox || privateBox.disabled) return
     const text = privateBox.value.trim()
     const prev = s.privateDirections
     // one salt per hatch, so the commitment only changes when the words do
@@ -589,7 +602,24 @@ function stepRules() {
       ...privateCommitmentField(),
     }
   }
+  const presetBoxes = [...form.querySelectorAll<HTMLInputElement>('input[name=preset]')]
+  const custom = form.querySelector<HTMLDetailsElement>('details.customize')!
+  const modelBox = (m: string) => form.querySelector<HTMLInputElement>(`input[name=model][value="${m}"]`)!
+  /** The preset the form matches, if any (anything else is shown as customized). */
+  const syncPreset = () => {
+    const m = (form.querySelector('input[name=model]:checked') as HTMLInputElement).value
+    const p = presetOf(m, readForm(form))
+    for (const b of presetBoxes) b.checked = b.value === p
+    return p
+  }
+  for (const b of presetBoxes) b.addEventListener('change', () => {
+    const p = PRESETS.find((x) => x.id === b.value)!
+    modelBox(p.model).checked = true
+    for (const [k, v] of Object.entries(p.values)) (form.elements.namedItem(k) as HTMLInputElement).value = v
+  })
+  if (!syncPreset()) custom.open = true
   const syncPanels = () => {
+    syncPreset()
     const m = (form.querySelector('input[name=model]:checked') as HTMLInputElement).value
     for (const el of form.querySelectorAll<HTMLElement>('.eco')) el.hidden = !el.dataset.for!.split(' ').includes(m)
     ;(form.elements.namedItem('questGoal') as HTMLTextAreaElement).required = m === 'quest'
@@ -689,6 +719,41 @@ async function stepPay() {
   route()
 }
 
+/** What the egg will be paid from, read from the wallet's balances in this browser; and the QR code to pay from elsewhere. */
+async function payFrom(pay: 'usdc' | 'quai', target: bigint, quaiWei: bigint) {
+  const addr = s.hatch!.hostingAddress!
+  const copy = document.getElementById('pay-copy')
+  if (copy) copy.onclick = async () => {
+    try { await navigator.clipboard.writeText(addr); copy.textContent = 'Copied' } catch { copy.textContent = 'Select and copy it' }
+    setTimeout(() => (copy.textContent = 'Copy address'), 2000)
+  }
+  const QRCode = (await import('qrcode')).default
+  const qr = await QRCode.toDataURL(addr, { margin: 1, width: 320, errorCorrectionLevel: 'M' }).catch(() => '')
+  const slot = document.getElementById('pay-qr')
+  if (slot && qr) slot.innerHTML = `<img src="${qr}" alt="QR code for the egg's hosting address" width="150" height="150">`
+
+  const { COINS } = await import('./coins.js')
+  const { readBalances } = await import('./balances.js')
+  const coins = COINS.filter((c) => (pay === 'usdc' ? c.id === 'base-usdc' || c.id === 'base-eth' : c.id === 'quai'))
+  const bal = await readBalances(coins, pay === 'usdc' ? { evm: s.maker } : { quai: s.maker })
+  const from = document.getElementById('pay-from')
+  if (!from) return
+  const elsewhere = () => { const d = document.querySelector<HTMLDetailsElement>('details.pay-else'); if (d) d.open = true }
+  if (pay === 'usdc') {
+    const usdc = bal.get('base-usdc'), eth = bal.get('base-eth')
+    if (usdc === undefined) return
+    const have = Number(fmtUnits(usdc, 6)).toFixed(2)
+    if (usdc < target) { from.textContent = `Your wallet has ${have} USDC on Base, not enough. Add some, or send from another wallet below.`; elsewhere(); return }
+    from.textContent = `from ${have} USDC on Base${eth === 0n ? ' · you also need a little ETH on Base for the fee' : ''}`
+  } else {
+    const q = bal.get('quai')
+    if (q === undefined) return
+    const have = Number(fmtUnits(q, 18)).toFixed(0)
+    from.textContent = q < quaiWei ? `Your wallet has ${have} QUAI, not enough (~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} needed). Send USDC on Base from another wallet below.` : `as ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI, from ${have} QUAI in Pelagus`
+    if (q < quaiWei) elsewhere()
+  }
+}
+
 const eggCloudInit = () =>
   renderCloudInit({ launch: { maker: s.maker!, configHash: configHash(s.config!), boardUrl: BOARD, launchId: s.launchId, ...(DEV ? { dev: DEV } : {}) }, image: IMAGE, artifact: ARTIFACT })
 
@@ -745,10 +810,13 @@ async function stepFluence() {
     show(`<h2>Fund the egg</h2>
       <p>The egg needs <b>${fmtUsd(target)}</b> of hosting credit. It goes to the egg's own hosting account, which the egg takes over once it runs: neither you nor gremlinz keeps it.</p>
       ${s.hatch.custody === 'mpc' ? `<p class="small dev-note">${mpc.LOSS_WARNING}</p>` : ''}
-      ${pay === 'usdc' ? `<p><button id="usdc">Pay ${fmtUsd(target)} USDC on Base with ${WALLET_NAMES[account()!.kind]}</button></p>
-      <p class="muted">One transfer to the egg's hosting address <code>${esc(hostingAddress)}</code>. You can also send it from any other wallet; this page continues once it arrives.</p>`
-      : `<p><button id="quai">Pay ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI with Pelagus</button></p>
-      <p class="muted">Pelagus will ask for three confirmations: wrap, approve, bridge. Or send ${fmtUsd(target)} USDC on Base to <code>${esc(hostingAddress)}</code> from any wallet; this page continues once it arrives.</p>`}`)
+      <div class="pay-line"><button id="${pay}">Pay ${fmtUsd(target)}</button>
+      <span id="pay-from" class="small muted">${pay === 'usdc' ? `in USDC on Base, with ${WALLET_NAMES[account()!.kind]}` : `as ~${Number(fmtUnits(quaiWei, 18)).toFixed(0)} QUAI from Pelagus`}</span></div>
+      ${pay === 'quai' ? '<p class="small muted">Pelagus asks for three confirmations (wrap, approve, bridge); the QUAI is bridged and swapped to USDC for you.</p>' : ''}
+      <details class="pay-else"><summary>Send from another wallet (scan or copy)</summary><div class="pay-qr"><span id="pay-qr"></span><div>
+        <p class="small" style="margin:0 0 6px">Send <b>${fmtUsd(target)} USDC on Base</b> (Base network only) to the egg's hosting address. This page continues once it arrives.</p>
+        <code class="addr">${esc(hostingAddress)}</code> <button type="button" class="secondary" id="pay-copy">Copy address</button></div></div></details>`)
+    void payFrom(pay, target, quaiWei)
     await new Promise<void>((resolve) => {
       let paying = false
       const usdcButton = document.getElementById('usdc')

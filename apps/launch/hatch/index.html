@@ -44,6 +44,21 @@
     .choice input { margin-top: 5px; }
     .eco:not([hidden]) { display: grid; gap: 14px; margin-top: 8px; padding-top: 14px; border-top: 1.5px dashed var(--line); }
     .choice label a { white-space: nowrap; }
+    .presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+    .presets label { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 12px; cursor: pointer; font-weight: 500; }
+    .presets label:has(input:checked) { border-color: var(--ink); background: var(--field); }
+    .presets label b { display: block; font-family: var(--display); font-size: 17px; }
+    .presets input { margin-top: 5px; }
+    .pay-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 16px 0 10px; }
+    details.pay-else { margin-top: 14px; }
+    details.pay-else > summary { cursor: pointer; font-weight: 600; }
+    .pay-qr { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; margin-top: 10px; }
+    .pay-qr img { border-radius: 8px; background: #fff; }
+    .pay-qr > div { flex: 1 1 220px; min-width: 0; }
+    .pay-qr code.addr { display: block; word-break: break-all; margin-bottom: 8px; }
+    details.customize { margin-top: 12px; }
+    details.customize > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+    details.customize[open] > summary { margin-bottom: 10px; }
     .row2 { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
     .dev-note { border: 1.5px solid var(--spark); background: color-mix(in srgb, var(--spark) 12%, transparent); border-radius: 12px; padding: 10px 12px; }
     .intro { list-style: none; counter-reset: s; padding: 0; margin: 20px 0 26px; display: grid; gap: 14px; }
