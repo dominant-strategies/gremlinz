@@ -3,7 +3,7 @@ import { Wallet } from 'ethers'
 import { canonicalJson, type GremlinConfig } from '../src/config.js'
 import { eggPublicKey, newPrivateDirections, openPrivateDirections, privateCommitment, sealPrivateDirections } from '../src/private.js'
 import { signMessage, type EggAnnouncement } from '../src/protocol.js'
-import { configHash, signConfig, verifySignedConfig } from '../src/signing.js'
+import { configHash, privateBoxProblem, signConfig, verifySignedConfig } from '../src/signing.js'
 import { seal } from '../src/seal.js'
 
 const maker = Wallet.createRandom()
@@ -55,10 +55,12 @@ describe('private directions', () => {
     const c = config({ privateDirections: { commitment: privateCommitment(p) } })
     const want = { maker: maker.address, configHash: configHash(c), gremlin: quai }
     const signed = await signConfig(maker, c, quai)
-    expect(verifySignedConfig(signed, want)).toEqual({ ok: false, reason: 'private directions are missing' })
+    // the signature stays checkable without the box (the board deletes it once the gremlin hatches)
+    expect(verifySignedConfig(signed, want)).toMatchObject({ ok: true })
+    expect(privateBoxProblem(c, signed)).toBe('private directions are missing')
     const privateSealed = await sealPrivateDirections(egg.signingKey.publicKey, p)
-    expect(verifySignedConfig({ ...signed, privateSealed }, want)).toMatchObject({ ok: true })
-    const plain = await signConfig(maker, config(), quai)
-    expect(verifySignedConfig({ ...plain, privateSealed }, { ...want, configHash: configHash(config()) })).toMatchObject({ ok: false, reason: /without a commitment/ })
+    expect(privateBoxProblem(c, { privateSealed })).toBeNull()
+    expect(privateBoxProblem(config(), { privateSealed })).toMatch(/without a commitment/)
+    expect(privateBoxProblem(config(), {})).toBeNull()
   })
 })

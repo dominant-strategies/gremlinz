@@ -6,7 +6,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { computeAddress, getAddress, keccak256 } from 'ethers'
 import { mpcAuthOf, type MpcCoordinator } from '@gremlins/hosting/mpc'
 import {
-  SmartAccountVerifier, checkForgeSpec, grantProblem, verifyDonationCard, verifyMessage, type DonationCard, verifySignedConfig, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig, type GrantStatus,
+  SmartAccountVerifier, checkForgeSpec, grantProblem, verifyDonationCard, verifyMessage, type DonationCard, verifySignedConfig, privateBoxProblem, type KeyGrant, type KeyRevoke, type EggAnnouncement, type Handoff, type HandoffWire, type NestAnnouncement, type Pulse, type Signed, type SignedConfig, type GrantStatus,
 } from '@gremlins/hatch'
 import { mergeConfig, type BoardConfig } from './config.ts'
 import { AUTH_HEADERS, verifySignedRequestWith } from './auth.ts'
@@ -271,6 +271,8 @@ export async function createBoard(deps: BoardDeps) {
     const inMemory: SignedConfig = { ...posted, message: { ...posted.message, issuedAt: BigInt(posted.message.issuedAt) } }
     const result = verifySignedConfig(inMemory, { maker: egg.maker, configHash: egg.configHash, gremlin: eggQuaiAddress(egg) })
     if (!result.ok) return err(c, 403, result.reason)
+    const boxProblem = privateBoxProblem(result.config, inMemory)
+    if (boxProblem) return err(c, 403, boxProblem)
     if (egg.config) return err(c, 409, 'egg already configured')
     if (!(await store.setEggConfig(egg.address, j.value as SignedConfig, now()))) return err(c, 409, 'egg already configured')
     await store.addEvent({ kind: 'configured', address: egg.address, data: { name: result.config.name }, at: now() })

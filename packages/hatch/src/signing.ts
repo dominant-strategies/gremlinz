@@ -112,9 +112,17 @@ export function verifySignedConfig(signed: SignedConfig, expected: { maker: stri
     return { ok: false, reason: 'malformed signature' }
   }
   if (recovered.toLowerCase() !== expected.maker.toLowerCase()) return { ok: false, reason: 'signature is not from the maker' }
-  if (!!parsed.data.privateDirections !== !!signed.privateSealed)
-    return { ok: false, reason: parsed.data.privateDirections ? 'private directions are missing' : 'sealed private directions without a commitment in the config' }
   return { ok: true, config: parsed.data }
+}
+
+/**
+ * Whether the sealed private directions travel with a config that commits to some (and only then). Checked when the
+ * config is delivered (board on POST, egg before accepting); not by later identity checks, because the board deletes
+ * the sealed box once the gremlin has hatched.
+ */
+export function privateBoxProblem(config: GremlinConfig, signed: Pick<SignedConfig, 'privateSealed'>): string | null {
+  if (!!config.privateDirections === !!signed.privateSealed) return null
+  return config.privateDirections ? 'private directions are missing' : 'sealed private directions without a commitment in the config'
 }
 
 /** GremlinRegistry on Quai mainnet (cyprus1), deployed 2026-09-29. See contracts/deployments/registry-9.json. */

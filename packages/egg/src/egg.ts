@@ -7,7 +7,7 @@
  * Moving out to a server under the gremlin's own keys, and handing over to the agent runtime, happen after
  * `hatched` and live elsewhere.
  */
-import { openPrivateDirections, signMessage, verifySignedConfig, type EggAnnouncement, type GremlinConfig, type Pulse, type SignedConfig } from '@gremlins/hatch'
+import { openPrivateDirections, privateBoxProblem, signMessage, verifySignedConfig, type EggAnnouncement, type GremlinConfig, type Pulse, type SignedConfig } from '@gremlins/hatch'
 import { tokenKey, FUNDING_TOKENS, CHAIN } from '@gremlins/treasury'
 import type { BoardClient } from './board-client.js'
 import { hasFunds, type BalanceReader, type Balances } from '@gremlins/treasury'
@@ -130,8 +130,8 @@ export async function step(deps: EggDeps): Promise<EggState> {
         break
       }
       // Private directions: the box must open with this egg's key and match the commitment the maker signed.
-      if (v.config.privateDirections) {
-        const why = await privateText(deps, v.config, signed).then(() => '', (e: Error) => e.message)
+      if (v.config.privateDirections || signed.privateSealed) {
+        const why = privateBoxProblem(v.config, signed) ?? (await privateText(deps, v.config, signed).then(() => '', (e: Error) => e.message))
         if (why) {
           state = record(state, now, `rejected config: ${why}`)
           break

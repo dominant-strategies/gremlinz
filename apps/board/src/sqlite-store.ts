@@ -396,7 +396,8 @@ export class SqliteBoardStore implements BoardStore {
 
   async markHatched(address: string, at: number) {
     const r = this.db
-      .prepare(`UPDATE eggs SET status = 'hatched', hatched_at = ? WHERE address = ? AND status = 'configured'`)
+      // the gremlin is running, so it has its private directions: the board stops holding even the sealed box
+      .prepare(`UPDATE eggs SET status = 'hatched', hatched_at = ?, config = json_remove(config, '$.privateSealed') WHERE address = ? AND status = 'configured'`)
       .run(at, address)
     return r.changes === 1
   }

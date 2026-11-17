@@ -113,6 +113,14 @@ describe('signed-config handoff', () => {
     expect(await openPrivateDirections(egg.signingKey, fetched.privateSealed, cfg.privateDirections.commitment)).toEqual(p) // only the egg can do this
     for (const path of [`/api/eggs/${egg.address}/config`, `/api/eggs/${egg.address}`, '/api/eggs?launchId=L-priv', `/g/${egg.address}`, `/g/${egg.address}?tab=rules`, `/g/${egg.address}?tab=tech`, '/'])
       expect(await (await b.req(path)).text()).not.toContain('SECRET-MOTH')
+
+    // the egg's first pulse means it has them: the board deletes even the sealed box, and the config still verifies
+    expect((await b.postJson('/api/pulses', await signMessage(egg, pulse(egg.address, 1)))).status).toBe(201)
+    const after = (await b.json(`/api/eggs/${egg.address}/config`)).body
+    expect(after.privateSealed).toBeUndefined()
+    expect(after.config.privateDirections).toEqual(cfg.privateDirections)
+    expect(after.signature).toBe(signed.signature)
+    expect((await b.json(`/api/eggs/${egg.address}`)).body.egg.status).toBe('hatched')
   })
 
   it('rejects a config from a stranger', async () => {
