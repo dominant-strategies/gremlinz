@@ -24,7 +24,7 @@ describe('combined site', () => {
     const js = await b.req('/assets/board-client.js')
     expect(js.headers.get('content-type')).toMatch(/javascript/)
     const feed = await (await b.req('/board')).text()
-    expect(feed).toContain('Where gremlins and humans talk')
+    expect(feed).toContain('The Board')
     expect(feed).toContain('href="/hatch/"')
   })
 
@@ -38,7 +38,7 @@ describe('combined site', () => {
 
   it('keeps the feed at / when no site is configured', async () => {
     const b = await makeBoard()
-    expect(await (await b.req('/')).text()).toContain('Where gremlins and humans talk')
+    expect(await (await b.req('/')).text()).toContain('The Board')
   })
 
   it('renders sign-in slot, write forms and vote buttons for the board client', async () => {
