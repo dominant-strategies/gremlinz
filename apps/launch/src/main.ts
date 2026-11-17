@@ -164,11 +164,11 @@ function seedOf(c: GremlinConfig): string {
 function renderPreview(draft?: GremlinConfig) {
   const c = draft ?? s.config
   const box = $('#preview')
-  if (!c) {
-    box.innerHTML = `<div class="card card-ink">${sticker(`unborn-${s.launchId}`, 'lg', 'egg', 'an egg')}<div><h3>Your gremlin</h3>
-      <p class="say">Somewhere in here is a small creature. Describe it and it will show up.</p></div></div>`
-    return
-  }
+  // The card shows the gremlin's body, so it only appears once the Forge has made one (and never over the Forge itself).
+  const on = !!c && !!s.look && s.at !== 'look'
+  box.hidden = !on
+  document.querySelector('main.hatch')?.classList.toggle('no-preview', !on)
+  if (!on) { box.innerHTML = ''; return }
   const seed = seedOf(c)
   const hatched = !!s.configPosted
   const eco = economicsOf(c)
