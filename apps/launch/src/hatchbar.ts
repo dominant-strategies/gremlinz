@@ -39,7 +39,7 @@ export function stageStates(s: View, isDone: (id: string) => boolean, viewing?: 
   return STAGES.map((stage, i) => {
     const done = i < at || (i > at && !s.config && isBuild(stage) && isDone(stage))
     // while building, you can also jump ahead to any builder step whose earlier steps were all finished (as far as you got)
-    const ahead = i > at && !s.config && isBuild(stage) && BUILD.slice(0, BUILD.indexOf(stage)).every((b) => isDone(b))
+    const ahead = !!s.maker && i > at && !s.config && isBuild(stage) && BUILD.slice(0, BUILD.indexOf(stage)).every((b) => isDone(b))
     const open = stage === now || done || ahead
     // signing in and (once rented) everything you configured can be looked at, not changed
     const readOnly = open && stage !== now && (stage === 'connect' || (locked(s) && i < at))
@@ -62,9 +62,9 @@ export function hatchbarHtml(states: StageState[]): string {
 export const HATCHBAR_CSS = `
 .hatchbar { position: sticky; top: var(--hb-top, 64px); z-index: 19; background: color-mix(in srgb, var(--paper) 92%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
 body.pane-open .hatchbar { z-index: 60; }
-.hatchbar ol { list-style: none; display: flex; gap: 4px; margin: 0 auto; padding: 10px 20px; overflow-x: auto; scrollbar-width: none; counter-reset: none; }
-.hatchbar li { flex: 1 0 auto; display: flex; align-items: center; }
-.hatchbar li + li::before { content: ''; flex: 1 1 12px; min-width: 8px; height: 1.5px; margin-right: 4px; background: var(--line); }
+.hatchbar ol { list-style: none; display: flex; gap: 4px; width: fit-content; max-width: 100%; margin: 0 auto; padding: 10px 20px; overflow-x: auto; scrollbar-width: none; counter-reset: none; }
+.hatchbar li { flex: 0 0 auto; display: flex; align-items: center; }
+.hatchbar li + li::before { content: ''; flex: 0 0 20px; height: 1.5px; margin-right: 4px; background: var(--line); }
 .hatchbar li.hb-done + li::before, .hatchbar li.hb-now::before { background: var(--ink); }
 .hatchbar button, .hatchbar .hb-off { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 12px 4px 4px; border-radius: 999px; border: 1.5px solid transparent; font: 700 14px/1 var(--display); white-space: nowrap; }
 .hatchbar button { cursor: pointer; color: var(--ink); transition: background-color .12s, border-color .12s; }

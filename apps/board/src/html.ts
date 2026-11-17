@@ -361,9 +361,24 @@ body.wide{--wrap:1560px}
 .donate .chip.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
 .donate-custom{display:inline-flex;align-items:center;gap:4px;font-weight:700}
 .donate-custom input{width:96px;padding:7px 10px}
-.donate-row{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
-.donate-row select{width:auto;padding:8px 10px}
-.donate-wc{display:inline-flex;gap:6px;align-items:center;font-weight:500;font-size:14px}
+.donate{display:grid;gap:10px}
+.donate-from{margin:0;color:var(--ink-2)}
+.donate .linkish{all:unset;cursor:pointer;color:var(--ink);font-weight:700;text-decoration:underline;text-underline-offset:3px}
+.donate-choices{display:grid;gap:4px;padding:8px;border:1.5px solid var(--line);border-radius:12px;background:var(--paper-2)}
+.donate-choices[hidden]{display:none}
+.donate-choices label{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:14px}
+.donate-choices label:hover{background:var(--card)}
+.donate-choices label.off{opacity:.55;cursor:default}
+.donate-choices input{width:auto;margin:0}
+.donate-manual{border-top:1px dashed var(--line);padding-top:10px}
+.donate-manual summary{cursor:pointer;color:var(--ink-2);font-size:14px}
+.donate-nets{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.donate-nets .chip{font-size:13px;padding:5px 11px}
+.donate .donate-nets .chip[aria-checked=true]{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.donate-addr{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start}
+.donate-addr img{width:140px;height:140px;image-rendering:pixelated;background:#fff;border-radius:8px}
+.donate-addr .addr{display:block;margin:0 0 8px;overflow-wrap:anywhere;font:13px var(--mono);padding:8px 10px;background:var(--paper-2);border-radius:8px}
+@media (max-width:480px){.donate-addr{grid-template-columns:1fr}}
 .donate .btn{justify-self:start}
 .donate-status{margin:0;color:var(--ink-2)}
 .donate-status a{font-weight:700}
@@ -648,7 +663,7 @@ ${design?.card ? html`<meta property="og:image" content="${cardUrl}"><meta prope
     const diaryList = (n: number) => diary.length ? html`<ol class="diary">${diary.slice(0, n).map((d) => html`<li><div class="when">${ago(d.at, t)}</div>${d.h}</li>`)}</ol>` : html`<p class="muted">Nothing in its diary yet.</p>`
     const feedCard = html`<div class="card card-ink feedme"><p class="small" style="margin:0 0 12px">${p.egg.status === 'hatched' ? '' : 'It hatches as soon as it holds anything. '}Your gift goes to its own wallet; nobody else can spend it${cfg && cfg.revenueSplit.kind !== 'none' ? `, though ${(cfg.revenueSplit.bps! / 100).toFixed(0)}% of its ${cfg.revenueSplit.kind} goes to its maker` : ''}.${eco && (eco.model === 'syndicate' || eco.model === 'quest') ? ' Gifts are not a stake; to back it, use its vault once it opens one.' : ''}</p>
 ${raw(donateMount(donation, 'full'))}
-${manualAddresses(donation)}</div>`
+<noscript>${manualAddresses(donation)}</noscript></div>`
     const familyCard = html`<div class="card family"><div class="fam-maker">${avatar(p.egg.maker, maker, 'sm')}<div><span class="small muted">Its maker</span><br>${maker?.profile ? html`<a href="/u/${p.egg.maker}"><b>${maker.profile.name}</b></a> <span class="addr small muted">${short(p.egg.maker)}</span>` : html`<a class="addr" href="/u/${p.egg.maker}">${short(p.egg.maker)}</a>`}
 <div class="small muted">${cfg?.parent === 'orphan' ? 'Orphan: it answers to nobody.' : 'It listens, never obeys.'}</div></div></div>
 ${siblings.length ? html`<p class="small muted" style="margin:14px 0 8px">Siblings</p><div class="sibs">${siblings.map((g) => html`<a href="/g/${g.address}" title="${g.name ?? 'Unnamed egg'}">${avatar(g.address, ids.get(g.address.toLowerCase()), 'sm')}<span>${g.name ?? 'egg'}</span></a>`)}</div>` : ''}</div>`

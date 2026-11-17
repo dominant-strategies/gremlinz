@@ -1,6 +1,8 @@
 /**
- * One-click donations: pick an amount in dollars (presets or your own), pick what to pay with, press Donate. The
- * button connects a wallet if needed and opens exactly one signing prompt. QUAI goes through Pelagus; ETH, BNB,
+ * Feeding a gremlin: pick an amount in dollars and press one button. What it's paid with is worked out from the
+ * signed-in wallet and what it holds (balances.ts); "change" lists only what you hold. Anything else (another wallet,
+ * a phone, an exchange, Bitcoin, Litecoin, Qi) is "send from another wallet": pick a network, scan or copy. The
+ * button opens exactly one signing prompt. QUAI goes through Pelagus; ETH, BNB,
  * USDC and USDT on Ethereum, Base and BSC go through the signed-in EVM wallet, or the sign-in dialog's MetaMask, Phantom
  * and WalletConnect options (auth.ts); SOL, USDC and USDT on Solana go through Phantom (solana-wallet.ts). Bitcoin,
  * Litecoin and Qi are shown as an address and QR code to send from any wallet. Dollar amounts are converted at live
@@ -11,66 +13,19 @@
  * them to the gremlin's keys, so they are labelled "as published by" it.
  */
 import { Interface, formatUnits, parseUnits, toBeHex } from 'ethers'
-import { evmWallet } from './auth.js'
+import { account, evmWallet, onAccountChange, signIn } from './auth.js'
+import { COINS, coinsFor, type AddressKey, type Coin, type DonateTarget } from './coins.js'
+export { coinsFor, type Coin, type DonateTarget }
+import { bestSource, familiesFor, holdings, pricesFor, readBalances, type Holding } from './balances.js'
 import { pelagus as pelagusWallet } from './wallets.js'
 
-export interface DonateTarget {
-  name: string
-  quai?: string
-  evm?: string
-  qi?: string
-  solana?: string
-  bitcoin?: string
-  litecoin?: string
-  note?: string
-  suggestedUsd?: number[]
-  /** 'card': the gremlin's signed donation card; 'announced': its announced deposit addresses. */
-  source?: 'card' | 'announced'
-}
 
-type Family = 'quai' | 'evm' | 'solana' | 'copy'
-type AddressKey = 'quai' | 'evm' | 'qi' | 'solana' | 'bitcoin' | 'litecoin'
-export interface Coin {
-  id: string
-  label: string
-  family: Family
-  /** Which of the target's addresses it goes to. */
-  to: AddressKey
-  symbol: string
-  decimals: number
-  chainId?: number
-  token?: string
-  priceId?: string
-  /** For copy-address coins: the payment URI scheme for the QR code. */
-  scheme?: string
-}
-
-const COINS: Coin[] = [
-  { id: 'quai', label: 'QUAI', family: 'quai', to: 'quai', chainId: 9, symbol: 'QUAI', decimals: 18, priceId: 'coingecko:quai-network' },
-  { id: 'base-usdc', label: 'USDC on Base', family: 'evm', to: 'evm', chainId: 8453, symbol: 'USDC', token: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6 },
-  { id: 'base-eth', label: 'ETH on Base', family: 'evm', to: 'evm', chainId: 8453, symbol: 'ETH', decimals: 18, priceId: 'coingecko:ethereum' },
-  { id: 'eth-usdc', label: 'USDC on Ethereum', family: 'evm', to: 'evm', chainId: 1, symbol: 'USDC', token: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6 },
-  { id: 'eth-usdt', label: 'USDT on Ethereum', family: 'evm', to: 'evm', chainId: 1, symbol: 'USDT', token: '0xdAC17F958D2ee523a2206206994597C13D831ec7', decimals: 6 },
-  { id: 'eth-eth', label: 'ETH on Ethereum', family: 'evm', to: 'evm', chainId: 1, symbol: 'ETH', decimals: 18, priceId: 'coingecko:ethereum' },
-  { id: 'bsc-usdt', label: 'USDT on BSC', family: 'evm', to: 'evm', chainId: 56, symbol: 'USDT', token: '0x55d398326f99059fF775485246999027B3197955', decimals: 18 },
-  { id: 'bsc-usdc', label: 'USDC on BSC', family: 'evm', to: 'evm', chainId: 56, symbol: 'USDC', token: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', decimals: 18 },
-  { id: 'bsc-bnb', label: 'BNB on BSC', family: 'evm', to: 'evm', chainId: 56, symbol: 'BNB', decimals: 18, priceId: 'coingecko:binancecoin' },
-  { id: 'sol-usdc', label: 'USDC on Solana', family: 'solana', to: 'solana', symbol: 'USDC', token: 'usdc', decimals: 6 },
-  { id: 'sol-sol', label: 'SOL', family: 'solana', to: 'solana', symbol: 'SOL', decimals: 9, priceId: 'coingecko:solana' },
-  { id: 'sol-usdt', label: 'USDT on Solana', family: 'solana', to: 'solana', symbol: 'USDT', token: 'usdt', decimals: 6 },
-  { id: 'btc', label: 'Bitcoin (copy address)', family: 'copy', to: 'bitcoin', symbol: 'BTC', decimals: 8, priceId: 'coingecko:bitcoin', scheme: 'bitcoin' },
-  { id: 'ltc', label: 'Litecoin (copy address)', family: 'copy', to: 'litecoin', symbol: 'LTC', decimals: 8, priceId: 'coingecko:litecoin', scheme: 'litecoin' },
-  { id: 'qi', label: 'Qi, private (copy payment code)', family: 'copy', to: 'qi', symbol: 'Qi', decimals: 3 },
-]
 const EXPLORER: Record<string, string> = { 9: 'https://quaiscan.io/tx/', 1: 'https://etherscan.io/tx/', 8453: 'https://basescan.org/tx/', 56: 'https://bscscan.com/tx/', solana: 'https://solscan.io/tx/' }
-const PRESETS = [5, 10, 25, 50]
+const PRESETS = [5, 10, 25]
 const ERC20 = new Interface(['function transfer(address to, uint256 amount) returns (bool)'])
 /** Addresses the board can't tie to the gremlin's keys: only its signature on the card vouches for them. */
 const PUBLISHED_ONLY: AddressKey[] = ['solana', 'bitcoin', 'litecoin']
-const CHAIN_NAME: Record<AddressKey, string> = { quai: 'Quai', evm: 'EVM', qi: 'Qi', solana: 'Solana', bitcoin: 'Bitcoin', litecoin: 'Litecoin' }
 
-/** The coins a target can take: only those it has an address for. */
-export const coinsFor = (t: DonateTarget) => COINS.filter((c) => !!t[c.to])
 
 /** Token amount (base units) for a dollar amount; stablecoins are 1:1. */
 export async function amountFor(coin: Pick<Coin, 'priceId' | 'decimals' | 'symbol'>, usd: number, fetchImpl: typeof fetch = fetch): Promise<bigint> {
@@ -128,8 +83,62 @@ const h = (tag: string, attrs: Record<string, string> = {}, text = '') => {
   if (text) el.textContent = text
   return el
 }
+const money = (v: number) => `$${v % 1 ? v.toFixed(2) : v}`
 
-const WALLET_HINT: Record<Family, string> = { quai: 'with Pelagus', evm: 'MetaMask, Phantom, or any WalletConnect wallet', solana: 'with Phantom', copy: 'from any wallet' }
+/**
+ * The networks a gremlin can be paid on by hand (scan or copy): each with the address to use, what it accepts there,
+ * and what the QR code holds (a payment URI where the coin has one, else the bare address).
+ */
+type Network = { id: string; label: string; key: AddressKey; accepts: string; scheme?: string }
+const NETWORKS: Network[] = [
+  { id: 'quai', label: 'Quai', key: 'quai', accepts: 'QUAI' },
+  { id: 'base', label: 'Base', key: 'evm', accepts: 'USDC or ETH' },
+  { id: 'ethereum', label: 'Ethereum', key: 'evm', accepts: 'USDC, USDT or ETH' },
+  { id: 'bsc', label: 'BSC', key: 'evm', accepts: 'USDT, USDC or BNB' },
+  { id: 'solana', label: 'Solana', key: 'solana', accepts: 'USDC, USDT or SOL' },
+  { id: 'bitcoin', label: 'Bitcoin', key: 'bitcoin', accepts: 'BTC', scheme: 'bitcoin' },
+  { id: 'litecoin', label: 'Litecoin', key: 'litecoin', accepts: 'LTC', scheme: 'litecoin' },
+  { id: 'qi', label: 'Qi (private)', key: 'qi', accepts: 'Qi, to its payment code (Pelagus)' },
+]
+
+/** Send from another wallet: pick a network, then scan the QR code or copy the address. */
+function manualSend(target: DonateTarget, open: boolean): HTMLElement {
+  const nets = NETWORKS.filter((n) => target[n.key])
+  const box = h('details', { class: 'donate-manual' }) as HTMLDetailsElement
+  box.open = open
+  box.append(h('summary', {}, 'Send from another wallet (scan or copy)'))
+  const chips = h('div', { class: 'donate-nets', role: 'radiogroup', 'aria-label': 'Network' })
+  const shown = h('div', { class: 'donate-addr' })
+  let run = 0
+  const show = async (n: Network) => {
+    for (const b of chips.querySelectorAll('button')) b.setAttribute('aria-checked', String(b.dataset.net === n.id))
+    const to = target[n.key]!, me = ++run
+    const QRCode = (await import('qrcode')).default
+    const qr = await QRCode.toDataURL(n.scheme ? `${n.scheme}:${to}` : to, { margin: 1, width: 320, errorCorrectionLevel: 'M' }).catch(() => '')
+    if (me !== run) return
+    const copy = h('button', { type: 'button', class: 'btn btn-small' }, 'Copy address')
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(to); copy.textContent = 'Copied' } catch { copy.textContent = 'Select and copy it' }
+      setTimeout(() => (copy.textContent = 'Copy address'), 2000)
+    }
+    const warn = n.key === 'evm' ? ` Send on the ${n.label} network only.` : ''
+    const vouched = PUBLISHED_ONLY.includes(n.key) ? ` This address is as published by ${target.name} (signed by its key).` : ''
+    shown.replaceChildren(
+      ...(qr ? [h('img', { src: qr, alt: `QR code for ${target.name}'s ${n.label} ${n.key === 'qi' ? 'payment code' : 'address'}`, width: '160', height: '160' })] : []),
+      h('div'),
+    )
+    const side = shown.lastElementChild as HTMLElement
+    side.append(h('p', { class: 'small', style: 'margin:0 0 6px' }, `${n.accepts} on ${n.label}.${warn}${vouched}`), h('span', { class: 'addr' }, to), copy)
+  }
+  for (const n of nets) {
+    const b = h('button', { type: 'button', class: 'chip', role: 'radio', 'aria-checked': 'false', 'data-net': n.id }, n.label)
+    b.onclick = () => void show(n)
+    chips.append(b)
+  }
+  box.append(chips, shown)
+  if (nets[0]) void show(nets[0])
+  return box
+}
 
 export function mountDonate(root: HTMLElement, target: DonateTarget) {
   const coins = coinsFor(target)
@@ -141,7 +150,6 @@ export function mountDonate(root: HTMLElement, target: DonateTarget) {
     root.append(h('p', { class: 'small muted' }, `${target.name} has no donation address yet.`))
     return
   }
-
   if (target.note) root.append(h('p', { class: 'donate-note' }, `“${target.note}” (${target.name})`))
 
   const amounts = h('div', { class: 'donate-amounts', role: 'group', 'aria-label': 'Amount' })
@@ -156,81 +164,97 @@ export function mountDonate(root: HTMLElement, target: DonateTarget) {
   amounts.append(...presetButtons, dollar)
   custom.oninput = () => { const v = Number(custom.value); if (v > 0) { usd = v; sync() } }
 
-  const coinSelect = h('select', { 'aria-label': 'Pay with' }) as HTMLSelectElement
-  const sendable = coins.filter((c) => c.family !== 'copy')
-  const copyable = coins.filter((c) => c.family === 'copy')
-  const group = (label: string, list: Coin[]) => {
-    if (!list.length) return
-    const g = h('optgroup', { label })
-    for (const c of list) g.append(h('option', { value: c.id }, c.label))
-    coinSelect.append(g)
-  }
-  group('Send from a browser wallet', sendable)
-  group('Send from any wallet', copyable)
-  coinSelect.value = (pelagusWallet() && coins.find((c) => c.id === 'quai')) ? 'quai' : (coins.find((c) => c.id === 'base-usdc') ?? coins[0]!).id
-  const hint = h('span', { class: 'donate-wc' })
-
   const go = h('button', { type: 'button', class: 'btn btn-primary' })
-  const pick = h('div', { class: 'donate-pick' })
+  const from = h('p', { class: 'donate-from small' })
+  const choices = h('div', { class: 'donate-choices', role: 'radiogroup', 'aria-label': 'Pay with' })
+  choices.hidden = true
   const status = h('p', { class: 'donate-status small', role: 'status', 'aria-live': 'polite' })
-  const coin = () => coins.find((c) => c.id === coinSelect.value)!
+  const manual = h('div')
+
+  let held: Holding[] = []
+  let chosen: Coin | undefined
+  let picked = false // the person chose a coin under "change": keep it while the amount changes
+  let balances = new Map<string, bigint | undefined>(), prices = new Map<string, number>()
+  let reading = false
+
   const published = (c: Coin) => PUBLISHED_ONLY.includes(c.to) ? ` (as published by ${target.name})` : ''
-
-  // Copy-address coins: the address, a copy button and a QR code with the amount filled in where the coin allows.
-  let pickRun = 0
-  const showPick = async () => {
-    const c = coin()
-    const run = ++pickRun
-    const to = target[c.to]!
-    pick.replaceChildren(h('p', { class: 'small', style: 'margin:0' }, 'Working out the amount…'))
-    let amount: bigint | undefined
-    try { if (c.priceId) amount = await amountFor(c, usd) } catch { /* no price: show the address alone */ }
-    const uri = c.scheme ? `${c.scheme}:${to}${amount ? `?amount=${formatUnits(amount, c.decimals)}` : ''}` : to
-    const QRCode = (await import('qrcode')).default
-    const qr = await QRCode.toDataURL(uri, { margin: 1, width: 336, errorCorrectionLevel: 'M' }).catch(() => '')
-    if (run !== pickRun) return
-    const what = amount ? `Send about ${showAmount(amount, c.decimals)} ${c.symbol} ($${usd}) to` : `Send ${c.symbol} to`
-    const lead = h('p', { class: 'small', style: 'margin:0' }, `${what} ${target.name}'s ${CHAIN_NAME[c.to]} ${c.to === 'qi' ? 'payment code' : 'address'}${published(c)}:`)
-    const addr = h('span', { class: 'addr' }, to)
-    const copy = h('button', { type: 'button', class: 'btn btn-small' }, 'Copy')
-    copy.onclick = async () => {
-      try { await navigator.clipboard.writeText(to); copy.textContent = 'Copied' } catch { copy.textContent = 'Select and copy it' }
-      setTimeout(() => (copy.textContent = 'Copy'), 2000)
-    }
-    pick.replaceChildren(lead, addr, copy)
-    if (qr) pick.append(h('img', { src: qr, alt: `QR code for ${target.name}'s ${CHAIN_NAME[c.to]} ${c.to === 'qi' ? 'payment code' : 'address'}` }))
-    if (c.to === 'qi') pick.append(h('p', { class: 'small muted', style: 'margin:0' }, 'Qi payment codes work in Pelagus: send Qi to the code and only the gremlin can tell it was paid.'))
-  }
-
   const sync = () => {
     presetButtons.forEach((b, i) => b.classList.toggle('on', !custom.value && presets[i] === usd))
-    const c = coin()
-    hint.textContent = WALLET_HINT[c.family]
-    const copyMode = c.family === 'copy'
-    // (style, not the hidden attribute: .btn sets its own display)
-    go.style.display = copyMode ? 'none' : ''
-    pick.style.display = copyMode ? '' : 'none'
-    go.textContent = `Donate $${usd % 1 ? usd.toFixed(2) : usd}`
-    status.textContent = copyMode ? '' : c.family === 'solana' ? `Goes to ${target.name}'s Solana address ${shortAddr(target.solana!)}${published(c)}.` : ''
-    if (copyMode) void showPick()
+    const a = account()
+    const fams = familiesFor(a?.kind)
+    const sendable = coins.filter((c) => fams.includes(c.family))
+    held = holdings(sendable, balances, prices, usd)
+    if (!picked || !chosen || !held.some((x) => x.coin.id === chosen!.id)) chosen = bestSource(held)?.coin
+    go.style.display = ''
+    if (!a) {
+      go.textContent = 'Sign in to feed it'
+      from.textContent = 'With Pelagus, MetaMask, Phantom or any WalletConnect wallet. Or send from another wallet below.'
+    } else if (!sendable.length) {
+      go.style.display = 'none'
+      from.textContent = `Your ${a.kind === 'smartwallet' ? 'Quai Smart Wallet' : 'wallet'} can't send from this page yet: use the address or QR code below.`
+    } else if (reading) {
+      go.textContent = `Feed ${money(usd)}`
+      from.textContent = 'Checking what your wallet holds…'
+    } else if (chosen) {
+      go.textContent = `Feed ${money(usd)}`
+      const x = held.find((y) => y.coin.id === chosen!.id)!
+      from.replaceChildren(document.createTextNode(`from ${showAmount(x.balance, chosen.decimals)} ${chosen.label}${published(chosen)} · `))
+      if (held.length > 1) { const ch = h('button', { type: 'button', class: 'linkish' }, choices.hidden ? 'change' : 'done'); ch.onclick = () => { choices.hidden = !choices.hidden; sync() }; from.append(ch) }
+    } else {
+      go.style.display = 'none'
+      from.textContent = held.length
+        ? `Nothing in your wallet covers ${money(usd)} with its fee. Try a smaller amount, or send from another wallet below.`
+        : `Your wallet holds nothing ${target.name} can take from here. Send from another wallet below.`
+    }
+    // "change": only what you hold, with balances
+    choices.replaceChildren(...held.map((x) => {
+      const id = `pay-${x.coin.id}-${Math.random().toString(36).slice(2, 7)}`
+      const r = h('input', { type: 'radio', name: 'pay-with', id, value: x.coin.id }) as HTMLInputElement
+      r.checked = x.coin.id === chosen?.id
+      r.disabled = !x.enough || !x.feeOk
+      r.onchange = () => { chosen = x.coin; picked = true; sync() }
+      const l = h('label', { for: id, class: r.disabled ? 'off' : '' })
+      l.append(r, h('span', {}, `${x.coin.label}`), h('span', { class: 'muted' }, `${showAmount(x.balance, x.coin.decimals)}${x.usd !== null ? ` · ${money(Math.floor(x.usd * 100) / 100)}` : ''}${!x.feeOk ? ' · no coin for the fee' : !x.enough ? ' · not enough' : ''}`))
+      return l
+    }))
+    if (!manual.firstChild || manual.dataset.open !== String(!a || !chosen)) { manual.dataset.open = String(!a || !chosen); manual.replaceChildren(manualSend(target, !a || !chosen || !sendable.length)) }
   }
-  coinSelect.onchange = sync
+
+  // Reads balances for the signed-in wallet (only now, when the box is on screen).
+  let readRun = 0
+  const read = async () => {
+    const a = account(), me = ++readRun
+    const fams = familiesFor(a?.kind)
+    const sendable = coins.filter((c) => fams.includes(c.family))
+    if (!a || !sendable.length) { balances = new Map(); sync(); return }
+    reading = true; sync()
+    const sol = (globalThis as { phantom?: { solana?: { publicKey?: { toString(): string } } } }).phantom?.solana?.publicKey?.toString()
+    const owner = { evm: fams.includes('evm') ? a.address : undefined, quai: a.kind === 'pelagus' ? a.address : undefined, solana: sol }
+    const [b, p] = await Promise.all([readBalances(sendable, owner), pricesFor(sendable)])
+    if (me !== readRun) return
+    balances = b; prices = p; reading = false
+    sync()
+  }
+  onAccountChange(() => { picked = false; void read() })
 
   go.onclick = async () => {
-    const c = coin()
+    if (!account()) { try { await signIn() } catch { /* closed */ } return }
+    const c = chosen
+    if (!c) return
     const to = target[c.to]!
     go.setAttribute('disabled', '')
     status.textContent = 'Getting the price…'
     try {
       const amount = await amountFor(c, usd)
       const wallet = c.family === 'quai' ? 'Pelagus' : c.family === 'solana' ? 'Phantom' : 'your wallet'
-      status.textContent = `Sending ${showAmount(amount, c.decimals)} ${c.symbol} (about $${usd}) to ${target.name} at ${shortAddr(to)}${published(c)}. Confirm in ${wallet}…`
+      status.textContent = `Sending ${showAmount(amount, c.decimals)} ${c.symbol} (about ${money(usd)}) to ${target.name} at ${shortAddr(to)}${published(c)}. Confirm in ${wallet}…`
       const hash = c.family === 'quai' ? await sendQuai(to, amount) : c.family === 'solana' ? await sendSolana(c, to, amount) : await sendEvm(c, to, amount)
       const explorer = EXPLORER[c.family === 'solana' ? 'solana' : String(c.chainId)]
       status.replaceChildren(
         document.createTextNode(`Thank you! You sent ${showAmount(amount, c.decimals)} ${c.symbol} to ${target.name}; it will see it shortly. `),
         h('a', { href: explorer + hash, target: '_blank', rel: 'noopener' }, 'View transaction'),
       )
+      void read()
     } catch (e) {
       const msg = (e as { shortMessage?: string; message?: string }).shortMessage ?? (e as Error).message ?? String(e)
       status.textContent = /reject|denied|cancel/i.test(msg) ? 'Cancelled.' : msg
@@ -239,10 +263,9 @@ export function mountDonate(root: HTMLElement, target: DonateTarget) {
     }
   }
 
-  const row = h('div', { class: 'donate-row' })
-  row.append(coinSelect, hint)
-  root.append(amounts, row, go, pick, status)
+  root.append(amounts, go, from, choices, status, manual)
   sync()
+  void read()
 }
 
 // ── dialog (the compact and inline buttons) ─────────────────────────────────
