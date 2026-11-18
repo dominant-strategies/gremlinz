@@ -156,7 +156,7 @@ describe('hashference tools', () => {
     const h = fakeHashference()
     const paid: [string, bigint][] = []
     const [a, b] = InMemoryTransport.createLinkedPair()
-    await createMcp({ balances: { read: async () => ({}) }, hashference: { fetch: h.f, sleep: async () => { h.invoices.set('inv1', { status: 'paid' }) }, pay: async (to, amt) => { paid.push([to, amt]); return '0xtx' } } }).connect(a)
+    await createMcp({ balances: { read: async () => ({}) }, approve: () => undefined, hashference: { fetch: h.f, sleep: async () => { h.invoices.set('inv1', { status: 'paid' }) }, pay: async (to, amt) => { paid.push([to, amt]); return '0xtx' } } }).connect(a)
     const client = new Client({ name: 't', version: '0' })
     await client.connect(b)
     const r = (await client.callTool({ name: 'hashference_topup', arguments: { usd: 5 } })) as { content: { text: string }[]; isError?: boolean }

@@ -15,7 +15,7 @@ import { withDeadline } from '@gremlins/hatch/node'
 export async function remoteHealth<T>(path: string): Promise<T> {
   return withDeadline(async signal => {
     const response = await fetch(new URL(path, process.env.GREMLIN_HEALTH_URL!), {
-      method: 'POST', headers: { authorization: `Bearer ${process.env.GREMLIN_MCP_TOKEN ?? ''}` }, signal,
+      method: 'POST', headers: { authorization: `Bearer ${process.env.GREMLIN_SERVICE_TOKEN ?? process.env.GREMLIN_MCP_TOKEN ?? ''}` }, signal,
     })
     if (!response.ok) throw new Error(`health service ${response.status}`)
     return response.json() as Promise<T>

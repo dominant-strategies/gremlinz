@@ -34,7 +34,7 @@ beforeEach(async () => {
   const monitor = new HealthMonitor({ miner })
   monitor.check = async () => { checks++; writeHealth('ok'); return JSON.parse(readFileSync(join(home, 'health.json'), 'utf8')) }
   const [a, b] = InMemoryTransport.createLinkedPair()
-  await createServer({ balances: { read: async () => ({}) }, health: () => monitor, hashference: { fetch: (async () => new Response('{}', { status: 500 })) as typeof fetch } }).connect(a)
+  await createServer({ balances: { read: async () => ({}) }, health: () => monitor, approve: () => undefined, hashference: { fetch: (async () => new Response('{}', { status: 500 })) as typeof fetch } }).connect(a)
   client = new Client({ name: 't', version: '0' })
   await client.connect(b)
 })

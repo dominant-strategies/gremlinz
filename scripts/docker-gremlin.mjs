@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // A gremlin hatched from the real egg image, in a local container: the egg starts as root, announces itself on the
 // local board, gets a signed config, hatches with pretend funds, and gremlin-run starts the inference gateway and
-// gremlin-mcp and Hermes (the main agent, with sudo) as the gremlin user, its subagents' shell as gremlin-helper,
+// gremlin-mcp as the service user, Hermes as gremlin-agent and its delegated shell as gremlin-helper,
 // thinking with a local Ollama model.
 //
 // Every command takes --name (default boxer); several gremlins run side by side, each in its own container.
@@ -153,7 +153,7 @@ async function start() {
   console.log(`profile: ${board}/g/${egg.address}`)
 }
 
-const hermes = (...a) => ['exec', '-u', 'gremlin', '-e', 'HERMES_HOME=/var/lib/gremlin-hermes', NAME, '/opt/hermes/venv/bin/hermes', ...a]
+const hermes = (...a) => ['exec', '-u', 'gremlin-agent', '-e', 'HERMES_HOME=/var/lib/gremlin-hermes', NAME, '/opt/hermes/venv/bin/hermes', ...a]
 function wake() { process.exit(spawnSync('docker', hermes('cron', 'run', 'a0a0a0a0a0a1'), { stdio: 'inherit' }).status ?? 1) }
 function logs() { spawnSync('docker', ['logs', '--tail', '80', NAME], { stdio: 'inherit' }) }
 function stop() {
@@ -167,10 +167,9 @@ function check() {
   const ps = sh('root', 'ps -eo user:15,args').stdout
   ok('gateway runs as gremlin', /^gremlin\s.*gateway\/main\.js/m.test(ps))
   ok('gremlin-mcp runs as gremlin', /^gremlin\s.*main\.js --http/m.test(ps))
-  ok('Hermes (the main agent) runs as gremlin', /^gremlin\s.*gateway run/m.test(ps))
-  // The main agent owns its server.
-  ok('main agent can read its seed', sh('gremlin', 'test -r /var/lib/gremlin/seed').status === 0)
-  ok('main agent has sudo', sh('gremlin', 'sudo -n true').status === 0)
+  ok('Hermes (the main agent) runs as gremlin-agent', /^gremlin-agent\s.*gateway run/m.test(ps))
+  ok('main agent cannot read its seed', sh('gremlin-agent', 'test -r /var/lib/gremlin/seed').status !== 0)
+  ok('main agent cannot sudo as root', sh('gremlin-agent', 'sudo -n true').status !== 0)
   const t = spawnSync('docker', hermes('mcp', 'test', 'gremlin'), { encoding: 'utf8' }).stdout
   ok('Hermes reaches gremlin-mcp over HTTP', /Connected/.test(t), (t.match(/Tools discovered: \d+/) ?? [''])[0])
   // Subagents' shell runs as the helper.

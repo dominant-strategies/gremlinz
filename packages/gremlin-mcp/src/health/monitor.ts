@@ -102,15 +102,17 @@ const DAY = DAY_MS
 
 export function defaultResetCooldown(adminUrl = process.env.GREMLIN_GATEWAY_ADMIN ?? 'http://127.0.0.1:8711') {
   return async (provider?: string) => {
-    const r = await fetch(`${adminUrl}/admin/cooldown/reset`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(provider ? { provider } : {}), signal: AbortSignal.timeout(5000) })
+    const r = await fetch(`${adminUrl}/admin/cooldown/reset`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.GREMLIN_SERVICE_TOKEN ?? ''}` }, body: JSON.stringify(provider ? { provider } : {}), signal: AbortSignal.timeout(5000) })
     return r.ok
   }
 }
 
 export function defaultRerunWake(hermesBin = process.env.HERMES_BIN ?? 'hermes', hermesHome = process.env.HERMES_HOME ?? '/var/lib/gremlin-hermes') {
-  // Same OS user as Hermes (the gremlin), same home; Hermes' .env carries the MCP token. Runs detached from our loop.
+  // Drop to Hermes' user before running anything that loads its writable home or plugins.
   return () => new Promise<void>((resolve, reject) => {
-    const c = execFile(hermesBin, ['cron', 'run', WAKE_JOB_ID], { env: { ...process.env, HERMES_HOME: hermesHome, HOME: hermesHome }, timeout: 60 * 60_000 }, () => {})
+    const user = process.env.GREMLIN_HERMES_USER
+    const args = ['cron', 'run', WAKE_JOB_ID]
+    const c = execFile(user ? '/usr/bin/sudo' : hermesBin, user ? ['-n', '-u', user, '--', '/usr/bin/env', '-i', `PATH=${process.env.PATH ?? '/usr/bin:/bin'}`, `HOME=${hermesHome}`, `HERMES_HOME=${hermesHome}`, hermesBin, ...args] : args, { env: { ...process.env, HERMES_HOME: hermesHome, HOME: hermesHome }, timeout: 60 * 60_000 }, () => {})
     c.once('spawn', () => resolve())
     c.once('error', reject)
   })

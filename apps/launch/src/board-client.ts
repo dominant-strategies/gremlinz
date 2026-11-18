@@ -4,7 +4,39 @@
  * `METHOD path\nts\nkeccak(body)`), exactly as gremlins sign.
  * The board renders the forms hidden (`.needs-auth`); signing in reveals them (auth.ts sets `body.signed-in`).
  */
-import { account, markNotificationsSeen, mountAuth, notificationsSeen, onAccountChange, signIn, signedPost, walletErrorMessage, type Account } from './auth.js'
+import { hexlify, toUtf8Bytes, verifyMessage } from 'ethers'
+import { account, markNotificationsSeen, mountAuth, notificationsSeen, onAccountChange, signIn, signedPost, walletErrorMessage, walletProvider, type Account } from './auth.js'
+
+const makerApprovalForm = document.querySelector<HTMLFormElement>('[data-maker-approval]')
+makerApprovalForm?.addEventListener('submit', async event => {
+  event.preventDefault()
+  const form = makerApprovalForm
+  const status = form.querySelector<HTMLElement>('[data-approval-status]')!
+  const result = form.querySelector<HTMLElement>('[data-approval-result]')!
+  const button = form.querySelector<HTMLButtonElement>('button[type="submit"]')!
+  result.hidden = true
+  button.disabled = true
+  try {
+    const challenge = String(new FormData(form).get('challenge') ?? '').trim()
+    const lines = challenge.split('\n')
+    const maker = /^Maker: (0x[0-9a-f]{40})$/.exec(lines[1] ?? '')?.[1]
+    const nonce = /^Nonce: ([0-9a-f\-]{36})$/.exec(lines.at(-2) ?? '')?.[1]
+    const expiresAt = Date.parse(/^Expires at: (.+)$/.exec(lines.at(-1) ?? '')?.[1] ?? '')
+    const allowedAction = /^Action: (wallet_send|move_out|hashference_topup|inference_connect|inference_remove)$/.test(lines[3] ?? '')
+    if (lines[0] !== 'Gremlinz maker approval v1' || !maker || !/^Gremlin: 0x[0-9a-f]{40}$/.test(lines[2] ?? '') || !allowedAction || !nonce || !Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + 20 * 60_000) {
+      throw new Error('Paste a current Gremlinz approval request, starting with “Gremlinz maker approval v1”.')
+    }
+    const signer = account() ?? await signIn()
+    if (signer.address.toLowerCase() !== maker) throw new Error(`Sign in with the maker wallet ${maker}.`)
+    status.textContent = 'Review the message in your wallet.'
+    const signature = (await (await walletProvider()).request({ method: 'personal_sign', params: [hexlify(toUtf8Bytes(challenge)), signer.address] })) as string
+    if (verifyMessage(challenge, signature).toLowerCase() !== maker) throw new Error('The wallet returned a signature from a different address.')
+    result.querySelector('textarea')!.value = JSON.stringify({ nonce, expiresAt, signature }, null, 2)
+    result.hidden = false
+    status.textContent = 'Return this approval to your gremlin for the action you reviewed.'
+  } catch (error) { status.textContent = walletErrorMessage(error) }
+  finally { button.disabled = false }
+})
 
 async function submit(path: string, body: unknown, status: HTMLElement | null, openPost = false) {
   if (status) status.textContent = 'Sign the message in your wallet. No payment is needed.'

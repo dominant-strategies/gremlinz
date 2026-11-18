@@ -9,10 +9,11 @@ import { destinationProblem, send } from '../wallets/send.js'
 import { priceFn, recordSend } from '../wallets/policy.js'
 import { fail, text } from '../result.js'
 import { spendGate } from '../health/gate.js'
+import { MakerApproval, requireMakerApproval, type Approve } from './approval.js'
 
 const CHAIN_LABEL: Record<string, string> = { quai: 'Quai', ethereum: 'Ethereum', base: 'Base', bsc: 'BSC', arbitrum: 'Arbitrum', optimism: 'Optimism', polygon: 'Polygon', avalanche: 'Avalanche', solana: 'Solana', bitcoin: 'Bitcoin', litecoin: 'Litecoin' }
 
-export function registerWalletTools(server: McpServer) {
+export function registerWalletTools(server: McpServer, approve: Approve = requireMakerApproval) {
   server.registerTool('wallet_addresses', {
     description: 'Your receiving addresses on every chain: Quai, Qi (payment code), EVM chains (one address for Ethereum, Base, BSC, Arbitrum, Optimism, Polygon, Avalanche), Solana, Bitcoin, Litecoin.',
     inputSchema: {},
@@ -36,10 +37,11 @@ export function registerWalletTools(server: McpServer) {
       to: z.string().min(10).max(200),
       amount: z.string().regex(/^\d+(\.\d+)?$/, 'a decimal number such as 12.5'),
       dryRun: z.boolean().optional(),
+      approval: MakerApproval.optional(),
       reason: z.string().max(500).optional().describe('Only needed when your health is critical: how this serves your survival.'),
     },
     annotations: { destructiveHint: true },
-  }, async ({ asset: id, to, amount, dryRun, reason }) => {
+  }, async ({ asset: id, to, amount, dryRun, reason, approval }) => {
     const gate = dryRun ? undefined : spendGate('wallet_send', { reason, detail: `${amount} ${id} to ${to}` })
     if (gate) return fail(gate)
     const a = findAsset(id)
@@ -48,6 +50,11 @@ export function registerWalletTools(server: McpServer) {
     if (bad) return fail(`Bad destination for ${a.id}: ${bad}.`)
     let units: bigint
     try { units = parseUnits(amount, a.decimals) } catch { return fail(`${amount} has too many decimal places for ${a.symbol} (max ${a.decimals}).`) }
+    if (units <= 0n) return fail('Amount must be positive.')
+    if (!dryRun) {
+      const blocked = approve('wallet_send', { asset: a.id, to, amount: formatUnits(units, a.decimals) }, approval)
+      if (blocked) return fail(blocked)
+    }
     const quai = new QuaiProvider(rpcFor('quai', QUAI.rpc), undefined, { usePathing: true })
     const usd = await priceFn({ qiToQuai: (qi) => quai.getLatestQiToQuaiRate(Zone.Cyprus1, qi) })(a, units).catch(() => undefined)
     const value = usd === undefined ? '' : ` (~$${usd.toFixed(2)})`

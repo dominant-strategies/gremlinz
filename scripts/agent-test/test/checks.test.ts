@@ -27,6 +27,43 @@ describe('a healthy gremlin a day after hatching', () => {
   })
 })
 
+describe('VM and runtime liveness', () => {
+  it('fails if Docker reports an unhealthy container or the runtime heartbeat expires', () => {
+    const s = healthySnapshot()
+    s.egg.container.health = 'unhealthy'
+    s.egg.runtime.at = iso(NOW - THRESHOLDS.runtimeHeartbeatMaxMs)
+    expect(status(s, 'egg.container')).toBe('fail')
+    expect(status(s, 'egg.runtime')).toBe('fail')
+  })
+
+  it('fails if a required runtime service is unready', () => {
+    const s = healthySnapshot()
+    s.egg.runtime.ready.hermes = false
+    expect(byId(s)['egg.runtime']).toMatchObject({ status: 'fail', value: 3 })
+  })
+
+  it('skips runtime readiness while a configured egg waits for funding', () => {
+    const s = healthySnapshot()
+    s.board.egg.status = 'configured'
+    s.board.pulses = []
+    s.egg.files.state.stage = 'configured'
+    s.egg.runtime = { wanted: false }
+    expect(status(s, 'egg.container')).toBe('pass')
+    expect(status(s, 'egg.runtime')).toBe('skip')
+    expect(status(s, 'liveness.health')).toBe('skip')
+    expect(status(s, 'liveness.wake')).toBe('skip')
+  })
+
+  it('warns when cloud-init finished and enabled the lockdown unit for subsequent boots', () => {
+    const s = healthySnapshot()
+    s.egg.security.lockdown = 'inactive'
+    s.egg.security.lockdownEnabled = true
+    expect(status(s, 'security.lockdown')).toBe('warn')
+    s.egg.security.lockdownEnabled = false
+    expect(status(s, 'security.lockdown')).toBe('fail')
+  })
+})
+
 describe('parsing hermes cron runs', () => {
   it('reads attempts and their errors', () => {
     const runs = parseCronRuns(readFileSync(join(FIX, 'cron-runs.txt'), 'utf8'))

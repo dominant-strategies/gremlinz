@@ -7,13 +7,13 @@
  *
  * Writes $HERMES_HOME/SOUL.md (read-only), config.yaml, cron/jobs.json (only if absent: Hermes keeps run state in it).
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GremlinConfig } from '@gremlins/hatch'
 import { boardUrl, home, homeFile, keys } from '../env.js'
 import { soulMarkdown } from './soul.js'
-import { cronJobs, hermesConfig, refreshCronJobs, workspaceGuide } from './hermes.js'
+import { cronJobs, hermesConfig, refreshCronJobs, spareCapacityScript, workspaceGuide } from './hermes.js'
 import { writeDurable } from '@gremlins/hatch/node'
 
 const hermesHome = process.env.HERMES_HOME ?? '/var/lib/gremlin-hermes'
@@ -21,8 +21,9 @@ const skillsDir = process.env.GREMLIN_SKILLS ?? '/opt/gremlin/skills'
 const gatewayUrl = process.env.GREMLIN_GATEWAY_URL ?? 'http://127.0.0.1:8711/v1'
 const mcpMain = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'main.js')
 
-const config = GremlinConfig.parse(JSON.parse(readFileSync(process.env.GREMLIN_CONFIG ?? homeFile('config.json'), 'utf8')))
-const k = keys()
+const context = process.env.GREMLIN_BOOTSTRAP_CONTEXT ? JSON.parse(process.env.GREMLIN_BOOTSTRAP_CONTEXT) : undefined
+const config = GremlinConfig.parse(context?.config ?? JSON.parse(readFileSync(process.env.GREMLIN_CONFIG ?? homeFile('config.json'), 'utf8')))
+const k = context ? undefined : keys()
 
 const write = (rel: string, body: string, mode = 0o600) => {
   const f = join(hermesHome, rel)
@@ -32,10 +33,10 @@ const write = (rel: string, body: string, mode = 0o600) => {
 }
 
 // The maker's private directions (the egg opened them with its key): into SOUL.md, readable by the gremlin's own user only.
-const privateDirections = (() => {
+const privateDirections = context ? context.privateDirections : (() => {
   try { return (JSON.parse(readFileSync(homeFile('private-directions.json'), 'utf8')) as { text?: string }).text || undefined } catch { return undefined }
 })()
-write('SOUL.md', soulMarkdown(config, { evmAddress: k.evm.address, quaiAddress: k.quai.address, boardUrl: boardUrl(), workdir: join(hermesHome, 'work'), privateDirections }), privateDirections ? 0o400 : 0o444)
+write('SOUL.md', soulMarkdown(config, { evmAddress: context?.evmAddress ?? k!.evm.address, quaiAddress: context?.quaiAddress ?? k!.quai.address, boardUrl: boardUrl(), workdir: join(hermesHome, 'work'), privateDirections }), privateDirections ? 0o400 : 0o444)
 write('config.yaml', hermesConfig({
   gatewayUrl,
   mcp: process.env.GREMLIN_MCP_URL
@@ -53,7 +54,14 @@ const wakeEveryMinutes = Number(process.env.GREMLIN_WAKE_MINUTES ?? 45)
 const workdir = join(hermesHome, 'work')
 mkdirSync(workdir, { recursive: true, mode: 0o700 })
 write('work/AGENTS.md', workspaceGuide(workdir), 0o444)
+write('scripts/spare-capacity.py', spareCapacityScript(gatewayUrl), 0o500)
 write('cron/jobs.json', existsSync(jobsFile) ? refreshCronJobs(readFileSync(jobsFile, 'utf8'), { wakeEveryMinutes, workdir }) : cronJobs({ wakeEveryMinutes, workdir }))
+if (process.env.GREMLIN_BOOTSTRAP_PLUGIN) {
+  const target = join(hermesHome, 'plugins', 'gremlin')
+  rmSync(target, { recursive: true, force: true })
+  mkdirSync(dirname(target), { recursive: true, mode: 0o700 })
+  cpSync(process.env.GREMLIN_BOOTSTRAP_PLUGIN, target, { recursive: true })
+}
 console.log(`gremlin-bootstrap: ${config.name} ready in ${hermesHome}`)
 // This is a synchronous, one-shot CLI. SDK imports can retain network handles even after these files are ready.
 process.exit(0)

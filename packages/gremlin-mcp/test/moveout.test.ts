@@ -16,7 +16,7 @@ beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), 'gremlin-'))
   process.env.GREMLIN_HOME = home
   const [a, b] = InMemoryTransport.createLinkedPair()
-  await createServer({ balances: { read: async () => ({}) }, now: () => clock }).connect(a)
+  await createServer({ balances: { read: async () => ({}) }, now: () => clock, approve: () => undefined }).connect(a)
   client = new Client({ name: 'test', version: '0' })
   await client.connect(b)
 })
@@ -24,7 +24,7 @@ beforeAll(async () => {
 describe('move_out', () => {
   it('writes the request file the egg watches', async () => {
     expect((await call({ host: 'sporestack', sporestackToken: token })).isError).toBeFalsy()
-    expect(JSON.parse(readFileSync(join(home, 'moveout-request.json'), 'utf8'))).toEqual({ host: 'sporestack', token, days: 30 })
+    expect(JSON.parse(readFileSync(join(home, 'moveout-request.json'), 'utf8'))).toEqual({ authorizationVersion: 1, host: 'sporestack', token, days: 30 })
   })
 
   it('refuses a second move within a day, even after the first request is consumed', async () => {

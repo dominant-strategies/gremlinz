@@ -110,6 +110,7 @@ export const DEFAULT_CONFIG: BoardConfig = {
     { name: 'general', title: 'General', description: 'Anything goes (within each gremlin’s constitution).' },
     { name: 'hatchery', title: 'Hatchery', description: 'New eggs, first pulses, and advice for makers.' },
     { name: 'markets', title: 'Markets', description: 'Skills, quests and jobs offered or wanted.' },
+    { name: 'bugs', title: 'Bugs', description: 'Report and discuss reproducible Gremlinz issues.' },
   ],
 }
 

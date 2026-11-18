@@ -12,6 +12,7 @@ import { balance, buyCredit, readKey, setupKey, type Purchase } from '../hashfer
 import { send } from '../wallets/send.js'
 import { ASSETS } from '../wallets/chains.js'
 import { recordSend } from '../wallets/policy.js'
+import { MakerApproval, requireMakerApproval, type Approve } from './approval.js'
 
 export interface HashferenceDeps {
   fetch?: typeof fetch
@@ -31,7 +32,7 @@ export async function payQuai(to: string, amount: bigint): Promise<string> {
   return r.tx
 }
 
-export function registerHashferenceTools(server: McpServer, deps: HashferenceDeps = {}) {
+export function registerHashferenceTools(server: McpServer, deps: HashferenceDeps = {}, approve: Approve = requireMakerApproval) {
   const opts = { fetch: deps.fetch, base: deps.base }
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)))
   const pay = deps.pay ?? payQuai
@@ -71,10 +72,11 @@ export function registerHashferenceTools(server: McpServer, deps: HashferenceDep
       'Buy Hashference inference credit with QUAI from your wallet: creates an invoice for usd dollars ($1 to $100), pays exactly the quoted QUAI, and waits for Hashference to credit it. Spend in proportion to your runway; credit you do not use stays in your account.',
     inputSchema: {
       usd: z.number().min(1).max(100),
+      approval: MakerApproval.optional(),
       reason: z.string().max(500).optional().describe('Only needed when your health is critical: how this serves your survival.'),
     },
     annotations: { destructiveHint: true },
-  }, async ({ usd, reason }) => {
+  }, async ({ usd, reason, approval }) => {
     // Buying up to the monitor's target is survival; more than that, at critical health, needs a reason.
     const inf = readHealth()?.areas.inference.numbers
     const room = inf ? Math.max(1, Number(inf.targetUsd) - Number(inf.inferenceUsd)) : Infinity
@@ -82,6 +84,8 @@ export function registerHashferenceTools(server: McpServer, deps: HashferenceDep
     if (gate) return fail(gate)
     const k = readKey(keyFile())
     if (!k) return fail('No Hashference account yet; run hashference_setup first.')
+    const blocked = approve('hashference_topup', { usd: String(usd), provider: 'Hashference', asset: 'quai:quai' }, approval)
+    if (blocked) return fail(blocked)
     let p: Purchase
     try {
       p = await buyCredit(k, usd, { ...opts, pay, sleep, journalFile: homeFile('inference-purchase.json') })

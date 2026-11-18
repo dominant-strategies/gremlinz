@@ -15,6 +15,7 @@ import { registerLentTools } from './tools/lent.js'
 import { registerInferenceAccess, type AccessDeps } from './tools/inference-access.js'
 import { registerHealthTools, sharedMonitor, remoteHealth } from './tools/health.js'
 import type { HealthMonitor } from './health/monitor.js'
+import type { Approve } from './tools/approval.js'
 
 export interface ServerDeps {
   telemetry?: Telemetry
@@ -28,6 +29,7 @@ export interface ServerDeps {
   /** The health monitor (one per process; replaced in tests). */
   health?: () => HealthMonitor
   access?: Omit<AccessDeps, 'checkHealth'>
+  approve?: Approve
 }
 
 export function createServer(deps: ServerDeps = {}): McpServer {
@@ -36,15 +38,15 @@ export function createServer(deps: ServerDeps = {}): McpServer {
   registerBoardTools(server)
   registerTreasuryTools(server, deps.balances)
   registerStatusTools(server)
-  registerMoveOutTools(server, deps.now)
+  registerMoveOutTools(server, deps.now, deps.approve)
   registerRegistryTools(server)
-  registerWalletTools(server)
+  registerWalletTools(server, deps.approve)
   registerDonationTools(server)
   registerSecurityTools(server, { now: deps.now, ...deps.security })
-  registerHashferenceTools(server, deps.hashference)
+  registerHashferenceTools(server, deps.hashference, deps.approve)
   registerLentTools(server)
   const monitor = deps.health ?? (() => sharedMonitor())
   registerHealthTools(server, monitor)
-  registerInferenceAccess(server, { ...deps.access, checkHealth: () => process.env.GREMLIN_HEALTH_URL ? remoteHealth('/check') : monitor().check({ refresh: true }) })
+  registerInferenceAccess(server, { ...deps.access, checkHealth: () => process.env.GREMLIN_HEALTH_URL ? remoteHealth('/check') : monitor().check({ refresh: true }) }, deps.approve)
   return server
 }

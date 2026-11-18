@@ -10,7 +10,7 @@ function account(over: { vms?: { id: string; status: string; sshKeyIds?: string[
     apiKeys: [{ id: 'k1', name: 'backdoor', scopes: ['*'], createdAt: '' }, { id: 'k2', name: 'other', scopes: [], createdAt: '' }],
     sshKeys: [{ id: 's1', name: 'x', fingerprint: 'f', managedService: null }, { id: 's2', name: 'm', fingerprint: 'g', managedService: { id: 'm', name: 'managed' } }],
     vms: over.vms ?? [
-      { id: 'own', status: 'launched', sshKeyIds: ['s1'] },
+      { id: 'own', status: 'launched', sshKeyIds: [] },
       { id: 'stray', status: 'launched', sshKeyIds: [] },
       { id: 'draft', status: 'draft', sshKeyIds: [] },
       { id: 'old', status: 'terminated', sshKeyIds: [] },
@@ -38,7 +38,10 @@ function account(over: { vms?: { id: string; status: string; sshKeyIds?: string[
     if (m) {
       const vm = state.vms.find((v) => v.id === m[1])!
       if (m[2] === '/terminate' && method === 'POST') { vm.status = 'terminating'; return json({ id: vm.id, acceptedStatus: 'terminating' }, 202) }
-      if (m[2] === '/ssh-keys' && method === 'PUT') { vm.sshKeyIds = body.sshKeys; return json(vm) }
+      if (m[2] === '/ssh-keys' && method === 'PUT') {
+        if (vm.status !== 'draft') return json({ code: 'vm_not_draft' }, 409)
+        vm.sshKeyIds = body.sshKeys; return json(vm)
+      }
       if (!m[2] && method === 'DELETE') { state.vms = state.vms.filter((v) => v !== vm); return json(undefined, 204) }
     }
     return json({ error: `unexpected ${method} ${p}` }, 404)
@@ -48,7 +51,7 @@ function account(over: { vms?: { id: string; status: string; sshKeyIds?: string[
 }
 
 describe('fluence account cleanup', () => {
-  it('deletes every API key, stops strays, discards drafts, clears SSH keys and keeps its own VM', async () => {
+  it('deletes account keys and strays and verifies its running VM has no attached SSH keys', async () => {
     const a = account()
     const r = await cleanupFluenceAccount(a.fl, { vmId: 'own' })
     expect(r.errors).toEqual([])
@@ -62,7 +65,22 @@ describe('fluence account cleanup', () => {
     expect(r.accountSshKeysDeleted).toEqual(['s1'])
     const term = a.calls.find((c) => c.path === '/v3/vms/stray/terminate')!
     expect(term.headers['idempotency-key']).toBe('gremlin-cleanup-stray')
-    expect(a.calls.some((c) => c.path.startsWith('/v3/vms/own') && c.method !== 'PUT')).toBe(false)
+    expect(a.calls.some((c) => c.path.startsWith('/v3/vms/own'))).toBe(false)
+  })
+
+  it('reports an attached key on a running VM and still removes account keys', async () => {
+    const a = account({ vms: [{ id: 'own', status: 'launched', sshKeyIds: ['s1'] }] })
+    const r = await cleanupFluenceAccount(a.fl, { vmId: 'own' })
+    expect(r.vmSshKeysCleared).toBe(false)
+    expect(r.errors).toEqual([expect.stringMatching(/provider-managed SSH keys are attached/)])
+    expect(r.accountSshKeysDeleted).toEqual(['s1'])
+    expect(a.calls.some((c) => c.method === 'PUT')).toBe(false)
+  })
+
+  it('can still clear the keys of a draft', async () => {
+    const a = account({ vms: [{ id: 'own', status: 'draft', sshKeyIds: ['s1'] }] })
+    const r = await cleanupFluenceAccount(a.fl, { vmId: 'own' })
+    expect(r.vmSshKeysCleared).toBe(true)
     expect(a.calls.find((c) => c.method === 'PUT')!.body).toEqual({ sshKeys: [] })
   })
 

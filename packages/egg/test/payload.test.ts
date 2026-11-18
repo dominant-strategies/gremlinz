@@ -54,4 +54,16 @@ describe('move-out payload', () => {
     expect(() => restorePayload({ v: 1, phrase: 'x', files: { 'runtime/../../etc/passwd': '' } }, { gremlinHome: dir(), runtimeDir: dir() })).toThrow(/unsafe path/)
     expect(() => restorePayload({ v: 1, phrase: 'x', files: { 'elsewhere/a': '' } }, { gremlinHome: dir(), runtimeDir: dir() })).toThrow(/unknown area/)
   })
+
+  it('keeps unexpired consumed approvals across a move and skips links in the agent workspace', () => {
+    const home = dir(), runtimeDir = dir()
+    const folder = join(home, 'maker-approvals')
+    mkdirSync(folder)
+    const live = '8f277334-e50e-4cc9-9ac0-ccf436e455bc'
+    writeFileSync(join(folder, live), String(Date.now() + 60_000))
+    writeFileSync(join(folder, '3f277334-e50e-4cc9-9ac0-ccf436e455bc'), '1')
+    symlinkSync(join(folder, live), join(runtimeDir, 'shortcut'))
+    const payload = collectPayload({ phrase: 'test phrase', gremlinHome: home, runtimeDir })
+    expect(Object.keys(payload.files)).toEqual([`gremlin/maker-approvals/${live}`])
+  })
 })

@@ -5,6 +5,8 @@ import type { GrantPool } from './grant-pool.js'
 import type { Ledger } from './ledger.js'
 import { Reservations, type SpendingScope } from './reservations.js'
 
+export const MAINTENANCE_DAILY_USD = 0.25
+
 export function spending(cfg: GatewayConfig, ledger: Ledger, grants: Pick<GrantPool, 'allowanceFor'>, reservations: Reservations, now = Date.now): Pick<GatewayDeps, 'refuse' | 'reserve'> {
   const day = () => {
     const d = new Date(now())
@@ -18,7 +20,7 @@ export function spending(cfg: GatewayConfig, ledger: Ledger, grants: Pick<GrantP
       const limit = cap(recovery)
       return limit !== undefined && ledger.spent() + reservations.pending(dailyScope()) >= limit ? 'inference daily allowance is spent; free/local and lent routes remain available' : undefined
     },
-    reserve: (body, target, provider, recovery) => {
+    reserve: (body, target, provider, recovery, maintenance) => {
       const { start, until } = day()
       let scopes: SpendingScope[] = []
       let maxPerCallUsd: number | undefined
@@ -30,6 +32,7 @@ export function spending(cfg: GatewayConfig, ledger: Ledger, grants: Pick<GrantP
       } else {
         const limit = cap(recovery)
         if (limit !== undefined) scopes.push({ id: dailyScope(), limit, used: ledger.spent(), until })
+        if (maintenance) scopes.push({ id: `maintenance:${start}`, limit: MAINTENANCE_DAILY_USD, used: ledger.spent(true), until })
         if (provider.accountId && provider.accountDailyUsd !== undefined) scopes.push({ id: `account:${provider.accountId}:${start}`, limit: provider.accountDailyUsd, used: ledger.accountUsed(provider.accountId, start), until })
       }
       return reservations.reserve(body, target, scopes, maxPerCallUsd)

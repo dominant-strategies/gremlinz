@@ -5,6 +5,7 @@ import { AccessSource } from '../gateway/access.js'
 import { GLEAN_ENDPOINTS, sensitiveReason } from '../gateway/glean.js'
 import { recordAction } from '../health/stores.js'
 import { fail, text } from '../result.js'
+import { MakerApproval, requireMakerApproval, type Approve } from './approval.js'
 
 export interface AccessDeps {
   fetch?: typeof fetch
@@ -12,11 +13,11 @@ export interface AccessDeps {
   checkHealth: () => Promise<{ status: string; inferenceUsd: number }>
 }
 
-export function registerInferenceAccess(server: McpServer, deps: AccessDeps) {
+export function registerInferenceAccess(server: McpServer, deps: AccessDeps, approve: Approve = requireMakerApproval) {
   const request = async (path = '', body?: unknown) => {
     const base = new URL(deps.adminUrl?.() ?? process.env.GREMLIN_GATEWAY_ADMIN ?? (process.env.GREMLIN_GATEWAY_URL ?? 'http://127.0.0.1:8711/v1').replace(/\/v1\/?$/, ''))
     if (!['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname) || base.username || base.password) throw new Error('access management requires the local gateway')
-    const r = await (deps.fetch ?? fetch)(new URL(`/admin/access${path}`, base), { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(path === '/docs' ? 180_000 : 30_000) })
+    const r = await (deps.fetch ?? fetch)(new URL(`/admin/access${path}`, base), { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.GREMLIN_SERVICE_TOKEN ?? ''}` }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(path === '/docs' ? 180_000 : 30_000) })
     if (!r.ok) {
       // The admin API returns controlled diagnostics, never provider response bodies or raw credentials.
       const out = await r.json().catch(() => ({})) as { error?: { message?: string } }
@@ -34,8 +35,9 @@ export function registerInferenceAccess(server: McpServer, deps: AccessDeps) {
       documentHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
       reviewSummary: z.string().min(1).max(1500).optional(),
       sourceId: z.string().regex(/^discovered-[a-z0-9-]{1,48}$/).optional(),
+      approval: MakerApproval.optional(),
     },
-  }, async ({ action, source, sourceId, refresh, documentId, documentHash, reviewSummary }) => {
+  }, async ({ action, source, sourceId, refresh, documentId, documentHash, reviewSummary, approval }) => {
     try {
       if (action === 'docs') return text(JSON.stringify(await request('/docs', { force: refresh === true })))
       if (action === 'review_docs') {
@@ -58,12 +60,16 @@ export function registerInferenceAccess(server: McpServer, deps: AccessDeps) {
       if (action === 'connect') {
         if (!source) return fail('connect requires source metadata and a credential reference, never a raw key')
         if (sensitiveReason(source)) return fail('Source metadata looks like it contains a secret; keep keys in a secure file or environment variable')
+        const blocked = approve('inference_connect', { source: JSON.stringify(source) }, approval)
+        if (blocked) return fail(blocked)
         const result = await request('/connect', source)
         recordAction({ kind: 'inference-source-added', detail: `validated and connected ${source.id}` })
         return text(JSON.stringify(result))
       }
       if (action === 'remove') {
         if (!sourceId) return fail('remove requires sourceId')
+        const blocked = approve('inference_remove', { sourceId }, approval)
+        if (blocked) return fail(blocked)
         const result = await request('/remove', { id: sourceId })
         recordAction({ kind: 'inference-source-removed', detail: sourceId })
         return text(JSON.stringify(result))

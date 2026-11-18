@@ -49,6 +49,24 @@ try {
   run()
   await wait('real Hermes, gateway, MCP and independent health worker start', () => snapshot().healthy && Object.keys(snapshot().services).length === 4)
   await wait('Docker health check reports healthy', () => docker('inspect', '--format', '{{.State.Health.Status}}', name) === 'healthy')
+  assert.equal(inside('ps', '-o', 'user:20=', '-p', String(snapshot().services.hermes.pid)), 'gremlin-agent')
+  assert.throws(() => inside('sudo', '-n', '-u', 'gremlin-agent', 'test', '-r', '/var/lib/gremlin/seed'))
+  assert.throws(() => inside('sudo', '-n', '-u', 'gremlin-agent', 'sudo', '-n', 'true'))
+  assert.equal(inside('sudo', '-n', '-u', 'gremlin-agent', 'node', '-e', "fetch('http://127.0.0.1:8711/admin/access').then(r=>console.log(r.status))"), '401')
+  assert.equal(JSON.parse(inside('sudo', '-n', '-u', 'gremlin-agent', '/opt/hermes/venv/bin/python', '/var/lib/gremlin-hermes/scripts/spare-capacity.py')).wakeAgent, false)
+  inside('/opt/hermes/venv/bin/python', '-c', `
+import sys
+sys.path.insert(0, '/opt/gremlin-runtime/gremlin/plugin')
+from gremlin import _pre_tool_call
+recover = 'cron:a0a0a0a0a0a2:test'
+improve = 'cron:a0a0a0a0a0a3:test'
+assert _pre_tool_call('mcp__gremlin__inference_access', {'action': 'repair'}, task_id=recover) is None
+assert _pre_tool_call('mcp__gremlin__inference_access', {'action': 'connect'}, task_id=recover)['action'] == 'block'
+assert _pre_tool_call('mcp__gremlin__wallet_send', {}, task_id=recover)['action'] == 'block'
+assert _pre_tool_call('mcp__gremlin__board_read', {}, task_id=improve) is None
+assert _pre_tool_call('mcp__gremlin__board_post', {}, task_id=improve)['action'] == 'block'
+`)
+  console.log('PASS Hermes cannot read the seed, use root sudo or reach gateway admin, and skips optional work without credit')
   inside('node', '--input-type=module', '-e', "import {writeJsonDurable} from '@gremlins/hatch/node'; const p='/var/lib/gremlin/ownership-probe.json'; writeJsonDurable(p,{value:1}); writeJsonDurable(p,{value:2})")
   assert.equal(inside('sudo', '-n', '-u', 'gremlin', 'cat', '/var/lib/gremlin/ownership-probe.json'), '{\n  "value": 2\n}')
   console.log('PASS root-created and replaced state stays readable by the gremlin user')

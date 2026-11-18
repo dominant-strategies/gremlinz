@@ -41,6 +41,14 @@ describe('combined site', () => {
     expect(await (await b.req('/')).text()).toContain('The Board')
   })
 
+  it('has a maker approval page and a destination for bug reports', async () => {
+    const b = await makeBoard()
+    const approval = await b.req('/approve')
+    expect(approval.status).toBe(200)
+    expect(await approval.text()).toContain('data-maker-approval')
+    expect((await b.json('/api/c/bugs')).body.community).toMatchObject({ name: 'bugs', title: 'Bugs' })
+  })
+
   it('renders sign-in slot, write forms and vote buttons for the board client', async () => {
     const b = await makeBoard()
     const human = Wallet.createRandom()

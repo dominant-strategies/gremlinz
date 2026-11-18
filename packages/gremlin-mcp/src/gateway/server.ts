@@ -3,7 +3,7 @@
  * its only provider. For each request the gateway walks the alias's route, skipping providers in cooldown, and fails
  * over on provider-side errors. Streams are passed through as they arrive (failover only before the first byte).
  */
-import { randomUUID } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { GatewayConfig, ProviderConfig, RouteTarget } from './config.js'
 import { providerFetch, retryable, type UpstreamFetch } from './providers.js'
@@ -23,6 +23,8 @@ interface UpstreamUsage { prompt_tokens?: number; completion_tokens?: number; pr
 export interface CallRecord { at: string; alias: string; provider: string; model: string; status: number; usage?: Usage; ms: number; refused?: boolean; incomplete?: boolean; estimatedUsd?: number; accountId?: string; requestId?: string; free?: boolean; firstByteMs?: number; requestBytes?: number; messageCount?: number; toolCount?: number }
 
 export interface GatewayDeps {
+  adminToken?: string
+  maintenanceReady?: () => boolean
   /** Per-provider fetchers; defaults built from config (venice needs a signer, injected by the caller). */
   fetchers?: Record<string, UpstreamFetch>
   /** Called after each upstream call (the budget ledger subscribes here). */
@@ -34,7 +36,7 @@ export interface GatewayDeps {
   documentation?: { watch: Documentation; targets: () => DocumentationTarget[] }
   refreshLent?: () => Promise<void>
   /** Undefined means this target cannot afford the call; free/local targets bypass paid reservations. */
-  reserve?: (body: Record<string, unknown>, target: RouteTarget, provider: ProviderConfig, recovery: boolean) => Reservation | undefined
+  reserve?: (body: Record<string, unknown>, target: RouteTarget, provider: ProviderConfig, recovery: boolean, maintenance?: boolean) => Reservation | undefined
   captureDetails?: boolean
   now?: () => number
   log?: (...a: unknown[]) => void
@@ -111,8 +113,14 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
   return createServer(async (req, res) => {
     const requestId = randomUUID()
     try {
+      if (deps.adminToken && req.url?.startsWith('/admin/')) {
+        const supplied = Buffer.from(req.headers.authorization ?? '')
+        const expected = Buffer.from(`Bearer ${deps.adminToken}`)
+        if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return json(res, 401, { error: { message: 'service authorization required' } })
+      }
       if (req.method === 'GET' && req.url === '/v1/models')
-        return json(res, 200, { object: 'list', data: [...Object.keys(cfg.routes), ...(cfg.routes['gremlin-main'] && !cfg.routes['gremlin-recovery'] ? ['gremlin-recovery'] : []), ...(deps.router ? [AUTO] : [])].map((id) => ({ id, object: 'model', owned_by: 'gremlin' })) })
+        return json(res, 200, { object: 'list', data: [...Object.keys(cfg.routes), ...(cfg.routes['gremlin-main'] && !cfg.routes['gremlin-recovery'] ? ['gremlin-recovery'] : []), ...(cfg.routes['gremlin-main'] && deps.maintenanceReady ? ['gremlin-maintenance'] : []), ...(deps.router ? [AUTO] : [])].map((id) => ({ id, object: 'model', owned_by: 'gremlin' })) })
+      if (req.method === 'GET' && req.url === '/v1/maintenance-ready') return json(res, 200, { ready: deps.maintenanceReady?.() === true })
       if (req.url?.startsWith('/admin/access')) {
         if (!isLocal(req.socket.remoteAddress)) return json(res, 403, { error: { message: 'localhost only' } })
         if (req.url === '/admin/access' && req.method === 'GET') {
@@ -228,13 +236,15 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
       let body = withDirective(JSON.parse(await readBody(req)) as Record<string, unknown>, health?.directive)
       const alias = String(body.model ?? '')
       const recovery = alias === 'gremlin-recovery'
+      const maintenance = alias === 'gremlin-maintenance'
+      if (maintenance && (!deps.maintenanceReady?.() || !deps.reserve)) return json(res, 429, { error: { message: 'Optional maintenance requires spare inference capacity.' } })
       if (recovery && !isLocal(req.socket.remoteAddress)) return json(res, 403, { error: { message: 'recovery is localhost only' } })
       if (recovery || health?.conserve) {
         const cap = recovery ? cfg.budget?.recoveryMaxTokens ?? 512 : 1024
         const requested = Number(body.max_completion_tokens ?? body.max_tokens ?? cap)
         body = { ...body, [body.max_completion_tokens !== undefined ? 'max_completion_tokens' : 'max_tokens']: Math.min(Number.isFinite(requested) ? requested : cap, cap) }
       }
-      let route = alias === 'gremlin-glean' ? keepTo(cfg.routes[alias]) : recovery ? cfg.routes['gremlin-recovery'] ?? cfg.routes['gremlin-main'] : cfg.routes[alias]
+      let route = alias === 'gremlin-glean' ? keepTo(cfg.routes[alias]) : recovery ? cfg.routes['gremlin-recovery'] ?? cfg.routes['gremlin-main'] : maintenance ? cfg.routes['gremlin-main'] : cfg.routes[alias]
       let retryOnRefusal: RouteTarget[] = []
       if (alias === AUTO && deps.router) {
         const c = classify(body as Parameters<typeof classify>[0])
@@ -249,7 +259,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
       const errors: string[] = []
       const sensitive = sensitiveReason(body.messages)
       const tried = new Set<string>()
-      const lent = (alias === 'gremlin-glean' ? [] : await deps.lent?.() ?? []).map((l) => ({ ...l, targets: l.targets.filter(allowed) }))
+      const lent = (alias === 'gremlin-glean' || maintenance ? [] : await deps.lent?.() ?? []).map((l) => ({ ...l, targets: l.targets.filter(allowed) }))
       const lentBy = new Map(lent.map(l => [l.provider.id, l]))
       const managed = (deps.sources?.offers() ?? []).map(o => ({ ...o, fetch: providerFetch(o.provider, env), targets: o.targets.filter(t => (o.provider.free && cfg.policy?.freeModels) || allowed(t)) }))
       const dynamic = [...lent, ...managed]
@@ -261,7 +271,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
       const ownRoute = expandRoute(route).filter(allowed).filter(t => !refused || providers.get(t.provider)?.free || providers.get(t.provider)?.local)
       // Last resort for every route: the free endpoints. A gremlin that can't pay (or whose paid providers are all down)
       // still gets an answer, weaker but better than none; secrets never go there (checked below).
-      const lastResort = alias === 'gremlin-glean' ? [] : (keepTo(cfg.routes['gremlin-glean']) ?? []).filter((t) => !ownRoute.some((o) => o.provider === t.provider && o.model === t.model))
+      const lastResort = alias === 'gremlin-glean' || maintenance ? [] : (keepTo(cfg.routes['gremlin-glean']) ?? []).filter((t) => !ownRoute.some((o) => o.provider === t.provider && o.model === t.model))
       let queue = [...lent.flatMap((l) => l.targets), ...ownRoute, ...managed.flatMap(o => !refused || o.provider.free || o.provider.local ? o.targets : []), ...expandRoute(lastResort)].filter(allowed)
       if (refused && !queue.length) return json(res, 429, { error: { type: 'budget_exhausted', message: refused } })
       let lastRefusal: Record<string, unknown> | undefined
@@ -273,6 +283,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         // A request over a target's size cap would only come back 400; go straight to the next one.
         if (target.maxRequestBytes && requestBytes(body, target.model) > target.maxRequestBytes) { errors.push(`${target.provider}: request too large for ${target.model} (${Math.round(requestBytes(body, target.model) / 1000)} KB > ${Math.round(target.maxRequestBytes / 1000)} KB)`); continue }
         if (!p || !f) { errors.push(`${target.provider}: not configured`); continue }
+        if (maintenance && p.free) continue
         const gone = retired.get(`${target.provider}/${target.model}`)
         if (gone && gone > now()) { errors.push(`${target.provider}/${target.model}: not offered right now`); continue }
         const fp = credentialFingerprint(p, env)
@@ -293,7 +304,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         const prepared = offer?.prepare?.(requestBody)
         if (prepared && 'skip' in prepared) { errors.push(`${p.id}: ${prepared.skip}`); continue }
         if (prepared) requestBody = prepared.body
-        const reservation = !p.free && !p.local ? deps.reserve?.(requestBody, t, p, recovery) : undefined
+        const reservation = !p.free && !p.local ? deps.reserve?.(requestBody, t, p, recovery, maintenance) : undefined
         if (deps.reserve && !p.free && !p.local && !reservation) { errors.push(`${p.id}: insufficient allowance`); continue }
         lastCall.set(p.id, now())
         const started = now()

@@ -50,14 +50,23 @@ This document records the assessment (2026-10-12) and the port plan.
 provisioning, x402 top-ups to Conway, ERC-8004 on Base, replication via Conway sandboxes, TS self-modification and
 upstream pulls, the fake MCP installer, automaton's memory/planner/soul/orchestration (Hermes has its own).
 
-## Hermes settings a gremlin needs
+## Maker approvals and maintenance
 
-- `approvals.unattended_mode` / `cron_mode`: `deny`; `approvals.deny` globs for key files and the egg's directories.
-  The plugin's `pre_tool_call` is the real policy (constitution, mischief scope, covenants, move-out rules).
-- `auxiliary:` set explicitly (compression and judge default to the main model and cost money).
-- `cron.allow_agent_scheduling`: decide per gremlin; jobs the egg installs are not editable by the agent.
-- Spending cap: Hermes has none. The plugin prices every call and refuses calls past the budget (fail closed).
-- `fallback_providers`: keep a cloud provider behind a local model.
+The egg image runs Hermes as `gremlin-agent`. Its shell can work on its Hermes files and can switch to the unprivileged
+helper for delegated work. The wallet, hosting credentials, and gateway administration stay with the trusted services.
+The service token also restricts gateway administration on localhost.
+
+Wallet transfers, migrations, discretionary Hashference top-ups and inference provider changes require a signature from
+the wallet that signed the hatch. The tool returns the exact request to bring to the maker. Paste the request starting
+with `Gremlinz maker approval v1` into `/approve` on the board, review the details, sign with the maker wallet, and return
+the resulting JSON to the gremlin. Approvals expire after 20 minutes and can be used once. The signature binds the
+gremlin and the action parameters. A failed or uncertain payment needs its outcome checked before requesting another
+approval. The independent health worker can still buy survival credit under its existing limits.
+
+The daily improvement job checks runtime resources and inference headroom before it wakes. Its paid calls use at most
+an additional $0.25 slice of the ordinary daily inference allowance. It can repair and test its own work scripts. For
+shared changes, it saves a patch and draft pull request text for a maintainer to review and publish. Review commands and
+patches from board reports before using them. The improvement job has no publishing credential.
 
 ## Health
 

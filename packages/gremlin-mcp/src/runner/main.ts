@@ -5,10 +5,8 @@
  * (cron wake-ups, no chat platforms). Each service has its own liveness checks and restart backoff; the egg
  * restarts this supervisor if it fails.
  *
- * OS users (GREMLIN_SEPARATE_USERS=1, as root in the egg image): the gateway, gremlin-mcp and Hermes (the gremlin's
- * main agent) all run as the gremlin user, which owns the seed and everything else and has passwordless sudo: the
- * main agent has full control of its server. Its subagents' shell commands run as the unprivileged gremlin-helper
- * user (the gremlin plugin does that), which reaches only the work folder. Hermes reaches gremlin-mcp over localhost
+ * OS users (GREMLIN_SEPARATE_USERS=1): trusted services own the seed. Hermes runs as gremlin-agent without root or
+ * seed access. Its subagents' shell commands run as gremlin-helper, which shares the work folder. Hermes reaches MCP
  * HTTP with a token made fresh each start. GREMLIN_MCP_HTTP=1 uses the HTTP path without switching users.
  *
  * Env: GREMLIN_HOME, GREMLIN_CONFIG, HERMES_HOME, HERMES_BIN (hermes executable), GREMLIN_RUNTIME_DIR (checkout of
@@ -18,11 +16,11 @@
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, chmodSync, chownSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gatewayConfig } from '../bootstrap/gateway-config.js'
-import { boardUrl, home, homeFile } from '../env.js'
+import { boardUrl, home, homeFile, keys } from '../env.js'
 import { GremlinConfig } from '@gremlins/hatch'
 import { writeJsonDurable } from '@gremlins/hatch/node'
 import { telemetry, devTelemetryEnabled } from '../dev/telemetry.js'
@@ -52,7 +50,8 @@ if (separate && process.getuid?.() !== 0) { log('GREMLIN_SEPARATE_USERS=1 needs 
 const idsOf = (user: string): Ids => ({ uid: Number(execFileSync('id', ['-u', user], { encoding: 'utf8' })), gid: Number(execFileSync('id', ['-g', user], { encoding: 'utf8' })) })
 const gidOf = (group: string) => Number(execFileSync('getent', ['group', group], { encoding: 'utf8' }).split(':')[2])
 const gremlinIds = separate ? idsOf(process.env.GREMLIN_USER ?? 'gremlin') : undefined
-const hermesIds = gremlinIds // the main agent is the gremlin
+const hermesUser = 'gremlin-agent'
+const hermesIds = separate ? idsOf(hermesUser) : undefined
 // Nothing the gremlin's processes create is readable by other users; the work folder is shared with the helper
 // through its setgid group (group rw).
 if (separate) process.umask(0o007)
@@ -60,6 +59,7 @@ const mcpHttp = separate || process.env.GREMLIN_MCP_HTTP === '1'
 const independentHealth = mcpHttp && process.env.GREMLIN_HEALTH !== '0'
 const mcpPort = Number(process.env.GREMLIN_MCP_PORT ?? 8712)
 const mcpToken = mcpHttp ? randomBytes(32).toString('hex') : undefined
+const serviceToken = mcpHttp ? randomBytes(32).toString('hex') : undefined
 
 // Children of a previous gremlin-run that was itself killed outright (SIGKILL leaves them running): stop them, but
 // only if the pid still belongs to the same program (pids get reused).
@@ -89,45 +89,50 @@ const telemetryLaunch = (() => { try { return JSON.parse(readFileSync(existsSync
 const telemetryOn = devTelemetryEnabled(process.env, telemetryLaunch)
 const env = { ...process.env, GREMLIN_DEV_TELEMETRY: telemetryOn ? '1' : '0', HERMES_HOME: hermesHome, GREMLIN_SKILLS: skillsDir, GREMLIN_BOARD_URL: boardUrl(),
   ...(mcpHttp ? { GREMLIN_MCP_TOKEN: mcpToken! } : {}),
+  ...(serviceToken ? { GREMLIN_SERVICE_TOKEN: serviceToken } : {}),
+  ...(separate ? { GREMLIN_HERMES_USER: hermesUser } : {}),
   ...(independentHealth ? { GREMLIN_HEALTH_URL: `http://127.0.0.1:${healthPort}` } : {}) }
-const bootEnv = { ...env, ...(mcpHttp ? { GREMLIN_MCP_URL: `http://127.0.0.1:${mcpPort}/mcp`, GREMLIN_MCP_TOKEN: mcpToken! } : {}) }
-const boot = spawnSync(process.execPath, [resolve(here, '..', 'bootstrap', 'main.js')], { env: bootEnv, stdio: 'inherit', timeout: 60_000, killSignal: 'SIGKILL' })
-if (boot.error) log('bootstrap failed:', boot.error.message)
-if (boot.status !== 0) process.exit(boot.status ?? 1)
-
-// 2. the plugin, fresh every start (the agent cannot keep a modified copy)
-const pluginDst = join(hermesHome, 'plugins', 'gremlin')
-rmSync(pluginDst, { recursive: true, force: true })
-mkdirSync(dirname(pluginDst), { recursive: true })
-cpSync(join(runtimeDir, 'gremlin', 'plugin', 'gremlin'), pluginDst, { recursive: true })
 
 // Hermes' home belongs to the gremlin. The helper user (subagents' shell) may pass through it to the work folder,
 // which the two share through a setgid group; everything else in it is owner-only.
-const chownTree = (p: string, ids: Ids) => {
-  chownSync(p, ids.uid, ids.gid)
-  if (statSync(p).isDirectory()) for (const f of readdirSync(p)) chownTree(join(p, f), ids)
-}
-const ownerOnly = (p: string) => { chmodSync(p, statSync(p).mode & 0o7700); if (statSync(p).isDirectory()) for (const f of readdirSync(p)) ownerOnly(join(p, f)) }
 const workDir = join(hermesHome, 'work')
-if (hermesIds) {
-  chownTree(hermesHome, hermesIds)
-  for (const f of readdirSync(hermesHome)) if (f !== 'work') ownerOnly(join(hermesHome, f))
-  chmodSync(hermesHome, 0o711)
-  mkdirSync(workDir, { recursive: true })
-  const workGid = gidOf(process.env.GREMLIN_WORK_GROUP ?? 'gremlin-work')
-  const shareTree = (p: string) => {
-    chownSync(p, statSync(p).uid, workGid)
-    if (statSync(p).isDirectory()) { chmodSync(p, 0o2770); for (const f of readdirSync(p)) shareTree(join(p, f)) }
-    else chmodSync(p, (statSync(p).mode & 0o777) | 0o060)
-  }
-  shareTree(workDir)
-  chmodSync(join(workDir, 'AGENTS.md'), 0o444)
+const chownTree = (p: string, ids: Ids, mode: (directory: boolean, old: number) => number) => {
+  const s = lstatSync(p)
+  if (!s.isDirectory() && (!s.isFile() || s.nlink !== 1)) return
+  chownSync(p, ids.uid, ids.gid)
+  chmodSync(p, mode(s.isDirectory(), s.mode))
+  if (s.isDirectory()) for (const f of readdirSync(p)) chownTree(join(p, f), ids, mode)
 }
+if (hermesIds) {
+  mkdirSync(hermesHome, { recursive: true, mode: 0o700 })
+  const h = lstatSync(hermesHome)
+  if (!h.isDirectory()) throw new Error('Hermes home must be a directory')
+  // Migrate persisted homes once. Later writes in this tree run as the agent, including on restart.
+  if (h.uid !== hermesIds.uid || !existsSync(workDir)) {
+    chownTree(hermesHome, hermesIds, (d, old) => d ? 0o700 : old & 0o700)
+    mkdirSync(workDir, { recursive: true, mode: 0o700 })
+    if (!lstatSync(workDir).isDirectory()) throw new Error('Hermes work folder must be a directory')
+    chownTree(workDir, { uid: hermesIds.uid, gid: gidOf(process.env.GREMLIN_WORK_GROUP ?? 'gremlin-work') }, (d, old) => d ? 0o2770 : (old & 0o770) | 0o660)
+    chmodSync(hermesHome, 0o711)
+  }
+}
+const agentEnv = { PATH: process.env.PATH, LANG: process.env.LANG ?? 'C.UTF-8', HOME: hermesHome, HERMES_HOME: hermesHome }
+const publicBootEnv = { ...agentEnv, GREMLIN_BOARD_URL: env.GREMLIN_BOARD_URL, GREMLIN_SKILLS: skillsDir, GREMLIN_WAKE_MINUTES: process.env.GREMLIN_WAKE_MINUTES,
+  GREMLIN_GATEWAY_URL: process.env.GREMLIN_GATEWAY_URL, GREMLIN_BOOTSTRAP_PLUGIN: join(runtimeDir, 'gremlin', 'plugin', 'gremlin') }
+const bootContext = () => {
+  let privateDirections: string | undefined
+  try { privateDirections = JSON.parse(readFileSync(homeFile('private-directions.json'), 'utf8')).text } catch { /* optional */ }
+  const k = keys()
+  return JSON.stringify({ config: JSON.parse(readFileSync(process.env.GREMLIN_CONFIG ?? homeFile('config.json'), 'utf8')), evmAddress: k.evm.address, quaiAddress: k.quai.address, privateDirections })
+}
+const bootEnv = { ...(separate ? { ...publicBootEnv, GREMLIN_BOOTSTRAP_CONTEXT: bootContext() } : { ...env, ...publicBootEnv }),
+  ...(mcpHttp ? { GREMLIN_MCP_URL: `http://127.0.0.1:${mcpPort}/mcp`, GREMLIN_MCP_TOKEN: mcpToken! } : {}) }
+const boot = spawnSync(process.execPath, [resolve(here, '..', 'bootstrap', 'main.js')], { ...hermesIds, env: bootEnv, stdio: 'inherit', timeout: 60_000, killSignal: 'SIGKILL' })
+if (boot.error) log('bootstrap failed:', boot.error.message)
+if (boot.status !== 0) process.exit(boot.status ?? 1)
 // The egg (root) writes the seed and its state into GREMLIN_HOME; the gremlin user must own it and nobody else read it.
 if (gremlinIds) {
-  chownTree(home(), gremlinIds)
-  const lockDown = (p: string) => { const d = statSync(p).isDirectory(); chmodSync(p, d ? 0o700 : 0o600); if (d) for (const f of readdirSync(p)) lockDown(join(p, f)) }
-  lockDown(home()) // owner-only, whatever mode each file was created with
+  chownTree(home(), gremlinIds, d => d ? 0o700 : 0o600)
 }
 
 // 3. the inference gateway, keeping to the maker's model policy (bootstrap has already checked the config)
@@ -191,17 +196,17 @@ try {
   if (mcpHttp) {
     // Health has its own process and payment ownership: a broken tool server cannot stop survival checks.
     if (independentHealth) await supervisor.start({ name: 'health', command: process.execPath, args: [resolve(here, '..', 'health', 'main.js')], env: { ...env, GREMLIN_HEALTH_PORT: String(healthPort), GREMLIN_GATEWAY_ADMIN: `http://127.0.0.1:${port}` }, ...gremlinIds,
-      probe: httpProbe(`http://127.0.0.1:${healthPort}/healthz`, mcpToken) })
+      probe: httpProbe(`http://127.0.0.1:${healthPort}/healthz`, serviceToken) })
     await supervisor.start({ name: 'mcp', command: process.execPath, args: [resolve(here, '..', 'main.js'), '--http'], env: { ...env, GREMLIN_MCP_PORT: String(mcpPort), GREMLIN_GATEWAY_ADMIN: `http://127.0.0.1:${port}` }, ...gremlinIds,
       probe: httpProbe(`http://127.0.0.1:${mcpPort}/healthz`, mcpToken) })
   }
   const subagentEnv = { GREMLIN_PROTECTED_DIRS: home(), GREMLIN_SUBAGENT_ROOTS: `${workDir}:/tmp` }
   const hermesEnv: NodeJS.ProcessEnv = separate
-    ? { PATH: process.env.PATH, LANG: process.env.LANG ?? 'C.UTF-8', HOME: hermesHome, HERMES_HOME: hermesHome, GREMLIN_HOME: home(), ...subagentEnv }
+    ? { ...agentEnv, ...subagentEnv }
     : { ...env, ...subagentEnv }
   const startedAt = Date.now()
   await supervisor.start({ name: 'hermes', command: hermesBin, args: ['gateway', 'run', '--external-supervisor', '--replace'], env: hermesEnv, ...hermesIds,
-    probe: async () => schedulerResponsive(hermesHome, startedAt) })
+    probe: async () => schedulerResponsive(hermesHome, startedAt, Date.now(), hermesIds ? file => execFileSync('/bin/cat', [file], { ...hermesIds, encoding: 'utf8', timeout: 2000, maxBuffer: 1024 * 1024 }) : undefined, separate) })
   writeJsonDurable(join(home(), 'runtime-health.json'), supervisor.snapshot())
   log(`running: gateway ${port}, MCP ${mcpHttp ? mcpPort : 'stdio'}, independent health ${mcpHttp ? healthPort : 'on-demand'}`)
 } catch (error) {

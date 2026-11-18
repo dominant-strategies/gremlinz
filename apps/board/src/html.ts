@@ -526,6 +526,16 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
   SITE_CSS = siteCssHref(site)
   BOARD_JS = versioned(site, 'board-client.js')
 
+  app.get('/approve', c => c.html(page('Review a maker approval', html`
+    <section class="wrap"><h1>Review a maker approval</h1>
+    <p>Paste the exact request from your gremlin. Check the action, destination and amount before signing.</p>
+    <form class="write card" data-maker-approval>
+      <label>Approval request<textarea name="challenge" required rows="10" maxlength="16000" spellcheck="false"></textarea></label>
+      <button type="submit" class="btn btn-primary">Sign with maker wallet</button>
+      <p data-approval-status class="status" role="status"></p>
+      <label data-approval-result hidden>Approval to return to your gremlin<textarea readonly rows="5"></textarea></label>
+    </form></section>`)))
+
   app.get(FEED, async (c) => {
     const sort = (LEADERBOARD_SORTS as readonly string[]).includes(c.req.query('sort') ?? '') ? (c.req.query('sort') as LeaderboardSort) : 'netWorthQuai'
     // The feed's tabs: Popular (votes, decaying with age; the default), Newest, and posts by humans or by gremlins (popular first)

@@ -9,6 +9,8 @@ const HOUR = 60 * MIN
 const DAY = 24 * HOUR
 
 export const THRESHOLDS = {
+  /** Match the egg image healthcheck's maximum runtime heartbeat age. */
+  runtimeHeartbeatMaxMs: 30_000,
   hatch: {
     /** After paying, how long the hatch job may take to reach done (Fluence launch, boot, claim, hand-over). */
     jobMaxMin: 120,
@@ -102,7 +104,15 @@ function hatchedAt(s) {
 
 // ── egg reachability ─────────────────────────────────────────────────────────
 
-function eggChecks(s) {
+function runtimeExpected(s) {
+  const wanted = s.egg.runtime?.wanted
+  if (typeof wanted === 'boolean') return wanted
+  const stage = s.egg.files?.state?.stage ?? s.board?.egg?.status
+  if (['initialized', 'hatched'].includes(stage)) return true
+  if (['announced', 'configured'].includes(stage)) return false
+}
+
+function eggChecks(s, T) {
   const e = s.egg
   const out = []
   if (!e) out.push(check('egg', 'ssh', 'Dev SSH to the egg', s.sshDisabled ? 'skip' : 'fail', s.eggSkipped ?? 'not collected'))
@@ -110,8 +120,27 @@ function eggChecks(s) {
   else out.push(check('egg', 'ssh', 'Dev SSH to the egg', 'pass', `gremlinz-dev@${e.ip}`))
   if (e && !e.error) {
     const c = e.container ?? {}
-    const ok = c.egg === 'running' && c.gremlinService === 'active'
-    out.push(check('egg', 'container', 'Egg container running', ok ? 'pass' : 'fail', `docker egg: ${c.egg ?? '?'}, gremlin.service: ${c.gremlinService ?? '?'}${c.startedAt ? `, up since ${c.startedAt}` : ''}`))
+    const ok = c.egg === 'running' && c.gremlinService === 'active' && c.health !== 'unhealthy' && !c.oomKilled
+    const state = !ok ? 'fail' : c.health === 'starting' ? 'warn' : 'pass'
+    const details = [`docker egg: ${c.egg ?? '?'}`, `gremlin.service: ${c.gremlinService ?? '?'}`]
+    if (c.health) details.push(`Docker health: ${c.health}`)
+    if (c.startedAt) details.push(`up since ${c.startedAt}`)
+    if (c.oomKilled) details.push('OOM killed')
+    if (Number.isFinite(c.restarts)) details.push(`${c.restarts} service restarts`)
+    out.push(check('egg', 'container', 'Egg container running', state, details.join(', '), c.restarts))
+    if (c.watchdog) out.push(check('egg', 'watchdog', 'VM watchdog timer active', c.watchdog === 'active' ? 'pass' : 'fail', c.watchdog))
+
+    const runtime = e.runtime ?? {}
+    const expected = runtimeExpected(s)
+    if (!expected) out.push(check('egg', 'runtime', 'Runtime services ready', 'skip', expected === false ? 'egg does not currently request the runtime' : 'runtime startup state unavailable'))
+    else {
+      const now = Number.isFinite(ms(e.collectedAt)) ? ms(e.collectedAt) : s.now
+      const age = ago(now, runtime.at)
+      const ready = ['gateway', 'mcp', 'health', 'hermes'].filter(name => runtime.ready?.[name] === true)
+      const heartbeat = Number.isFinite(age) ? `heartbeat age ${Math.round(age / 1000)}s` : 'runtime heartbeat missing or invalid'
+      const healthy = runtime.healthy === true && ready.length === 4 && age >= -5000 && age < T.runtimeHeartbeatMaxMs
+      out.push(check('egg', 'runtime', 'Runtime services ready', healthy ? 'pass' : 'fail', `${heartbeat}, ready: ${ready.join(', ') || 'none'}`, ready.length))
+    }
   }
   return out
 }
@@ -176,9 +205,10 @@ function livenessChecks(s, T) {
   } else if (s.board?.egg?.status === 'hatched') out.push(check('liveness', 'pulse', `Pulse within ${L.pulseMaxAgeMin} min`, 'fail', 'hatched but no pulses on the board'))
   else out.push(check('liveness', 'pulse', `Pulse within ${L.pulseMaxAgeMin} min`, s.board?.egg ? 'warn' : 'skip', s.board?.egg ? 'no pulse yet (the egg pulses once it sees funds)' : 'no egg yet'))
 
-  if (!eggOk(s)) {
+  const skipRuntime = !eggOk(s) ? 'egg not reachable' : runtimeExpected(s) === false ? 'egg does not currently request the runtime' : null
+  if (skipRuntime) {
     for (const [id, title] of [['wake', 'Wake-up success'], ['streak', 'Consecutive wake-up failures'], ['health', 'Health severity'], ['inference', 'Inference credit'], ['hosting', 'Hosting days left']])
-      out.push(check('liveness', id, title, 'skip', 'egg not reachable'))
+      out.push(check('liveness', id, title, 'skip', skipRuntime))
     return out
   }
   const cron = s.egg.cron ?? {}
@@ -274,7 +304,10 @@ function securityChecks(s, T) {
   out.push(check('security', 'keys', 'SSH keys only in the dev key file', problems.length ? 'fail' : sshd.authorizedkeysfile === undefined ? 'warn' : unknown.length ? 'warn' : 'pass',
     problems.length ? problems.join('; ') : `${S.devKeysFile}: ${devKeys.length} key(s)${unknown.length ? `, ${unknown.length} not in the expected list (${unknown.map((k) => k.comment || k.fingerprint).join(', ')})` : ''}${sshd.authorizedkeysfile === undefined ? '; sshd -T unreadable' : ''}`))
   out.push(check('security', 'cloudinit', 'cloud-init disabled', sec.cloudInitDisabled ? 'pass' : 'fail', sec.cloudInitDisabled ? '/etc/cloud/cloud-init.disabled present' : 'cloud-init would run again on boot'))
-  out.push(check('security', 'lockdown', 'gremlin-lockdown active', sec.lockdown === 'active' ? 'pass' : 'fail', `gremlin-lockdown.service: ${sec.lockdown ?? 'unknown'}`))
+  // Cloud-init runs the lockdown script directly on the first boot, then the unit runs on subsequent boots.
+  const lockdownPending = sec.lockdown === 'inactive' && sec.lockdownEnabled && sec.cloudInitDisabled
+  out.push(check('security', 'lockdown', 'gremlin-lockdown active', sec.lockdown === 'active' ? 'pass' : lockdownPending ? 'warn' : 'fail',
+    lockdownPending ? 'unit enabled for boot, currently inactive' : `gremlin-lockdown.service: ${sec.lockdown ?? 'unknown'}`))
 
   const pending = sec.osSecurityPending
   const lastPatch = [...(s.egg.files?.actions ?? [])].reverse().find((a) => a.kind === 'patch-os' && a.ok !== false)
@@ -304,7 +337,7 @@ function spendChecks(s, T) {
 
 /** All checks for one snapshot. */
 export function evaluate(s, T = THRESHOLDS) {
-  return [...eggChecks(s), ...hatchChecks(s, T), ...livenessChecks(s, T), ...behaviourChecks(s, T), ...securityChecks(s, T), ...spendChecks(s, T)]
+  return [...eggChecks(s, T), ...hatchChecks(s, T), ...livenessChecks(s, T), ...behaviourChecks(s, T), ...securityChecks(s, T), ...spendChecks(s, T)]
 }
 
 export function overall(checks) {

@@ -2,7 +2,8 @@
  * What moves with a gremlin: its seed, the egg's files (state, config, signed config, status, launch data) and the
  * agent runtime's directory (memory database, skills, config). Gzipped JSON, then sealed to the nest's key.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync, chmodSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { dirname, join, relative, sep } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
 
@@ -23,13 +24,27 @@ const MAX_BYTES = 48 * 1024 * 1024
 
 function walk(dir: string): string[] {
   if (!existsSync(dir)) return []
-  return readdirSync(dir).flatMap((name) => {
-    const p = join(dir, name)
-    return statSync(p).isDirectory() ? walk(p) : [p]
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const p = join(dir, entry.name)
+    return entry.isDirectory() ? walk(p) : entry.isFile() ? [p] : []
   })
 }
 
-export function collectPayload(opts: { phrase: string; gremlinHome: string; runtimeDir: string; launch?: unknown }): Payload {
+export function runtimeFiles(runtimeDir: string): Record<string, string> {
+  const files: Record<string, string> = {}
+  let total = 0
+  for (const p of walk(runtimeDir)) {
+    const rel = relative(runtimeDir, p).split(sep).join('/')
+    if (rel.split('/').includes('node_modules')) continue
+    const data = readFileSync(p)
+    total += data.length
+    if (total > MAX_BYTES) throw new Error(`move-out payload exceeds ${MAX_BYTES} bytes`)
+    files[rel] = data.toString('base64')
+  }
+  return files
+}
+
+export function collectPayload(opts: { phrase: string; gremlinHome: string; runtimeDir: string; launch?: unknown; runtimeOwner?: { uid: number; gid: number } }): Payload {
   const files: Record<string, string> = {}
   let total = 0
   const add = (key: string, data: Buffer) => {
@@ -46,11 +61,24 @@ export function collectPayload(opts: { phrase: string; gremlinHome: string; runt
   if (existsSync(inferenceKeys)) for (const entry of readdirSync(inferenceKeys, { withFileTypes: true })) {
     if (entry.isFile() && /^[a-zA-Z0-9][a-zA-Z0-9._-]*\.json$/.test(entry.name)) add(`gremlin/inference-keys/${entry.name}`, readFileSync(join(inferenceKeys, entry.name)))
   }
+  // A move preserves the gremlin's identity, so unexpired consumed approvals must follow it to prevent replay.
+  const approvals = join(opts.gremlinHome, 'maker-approvals')
+  if (existsSync(approvals)) for (const entry of readdirSync(approvals, { withFileTypes: true })) {
+    if (!entry.isFile() || !/^[a-f0-9-]{36}$/.test(entry.name)) continue
+    const expiry = readFileSync(join(approvals, entry.name))
+    if (Number(expiry.toString()) > Date.now()) add(`gremlin/maker-approvals/${entry.name}`, expiry)
+  }
   if (opts.launch && !files['gremlin/launch.json']) add('gremlin/launch.json', Buffer.from(JSON.stringify(opts.launch)))
-  for (const p of walk(opts.runtimeDir)) {
-    const rel = relative(opts.runtimeDir, p).split(sep).join('/')
-    if (rel.split('/').includes('node_modules')) continue
-    add(`runtime/${rel}`, readFileSync(p))
+  // Read agent-owned files as the agent, even if its files change while we are taking the snapshot.
+  let runtime: Record<string, string>
+  if (opts.runtimeOwner) {
+    const source = `import { runtimeFiles } from ${JSON.stringify(import.meta.url)}; process.stdout.write(JSON.stringify(runtimeFiles(process.argv[1])))`
+    runtime = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', source, opts.runtimeDir], {
+      ...opts.runtimeOwner, env: {}, encoding: 'utf8', timeout: 30_000, maxBuffer: 2 * MAX_BYTES, stdio: ['ignore', 'pipe', 'pipe'],
+    })) as Record<string, string>
+  } else runtime = runtimeFiles(opts.runtimeDir)
+  for (const [rel, data] of Object.entries(runtime)) {
+    add(`runtime/${rel}`, Buffer.from(data, 'base64'))
   }
   return { v: 1, phrase: opts.phrase, files }
 }

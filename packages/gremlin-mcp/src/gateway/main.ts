@@ -12,13 +12,13 @@ import { Credentials } from './credentials.js'
 import { Documentation } from './documentation.js'
 import { documentationTargets } from './documentation-targets.js'
 import { AccessSources } from './access.js'
-import { spending } from './spending.js'
+import { MAINTENANCE_DAILY_USD, spending } from './spending.js'
 import { Reservations } from './reservations.js'
 import { veniceFetch } from './venice.js'
 import { setKnownSecrets } from './glean.js'
 import { base58 } from '@scure/base'
 import { hashferenceFetch } from './providers.js'
-import { healthReader } from '../health/gate.js'
+import { healthReader, readHealth } from '../health/gate.js'
 import { applyCatalog, fetchCatalog } from './catalog.js'
 
 const cfg = GatewayConfig.parse(JSON.parse(readFileSync(process.env.GATEWAY_CONFIG ?? '/etc/gremlin/gateway.json', 'utf8')))
@@ -69,12 +69,25 @@ const credentials = new Credentials({ file: homeFile('inference-credentials.json
 const sources = new AccessSources(homeFile('inference-sources.json'))
 const documentation = new Documentation({ file: homeFile('inference-docs.json'), dir: homeFile('inference-docs') })
 const targets = () => documentationTargets(cfg, sources)
+const providerEnv = { ...process.env }
+delete providerEnv.GREMLIN_SERVICE_TOKEN
+delete providerEnv.GREMLIN_MCP_TOKEN
 // Public docs are checked without model access or credentials; individual documents have a 24-hour TTL.
 const checkDocumentation = () => documentation.check(targets()).then(docs => { diagnostics.emit('documentation', { pendingReviews: docs.filter(d => d.status === 'needs-review').length, unreachableDocuments: docs.filter(d => d.status === 'unreachable').length }) }).catch(() => log('documentation check failed; maintenance should inspect official URLs'))
 void checkDocumentation()
 setInterval(() => void checkDocumentation(), 3_600_000).unref()
 // The health monitor's directive goes into every request (re-read every 30 s; none when health.json is stale).
 createGateway(cfg, {
+  adminToken: process.env.GREMLIN_SERVICE_TOKEN, env: providerEnv,
+  maintenanceReady: () => {
+    const h = readHealth()
+    const floor = h?.areas.inference.numbers.floorUsd
+    const budget = cfg.budget
+    return !!h && !!budget && h.status === 'ok' && h.areas.compute.level === 'ok' &&
+      typeof floor === 'number' && h.inferenceUsd >= floor + 1 &&
+      Number(h.areas.compute.numbers.diskFreePct) >= 20 && Number(h.areas.compute.numbers.memFreePct) >= 20 &&
+      ledger.spent(true) < MAINTENANCE_DAILY_USD && budget.dailyUsd - budget.emergencyUsd - ledger.spent() >= MAINTENANCE_DAILY_USD
+  },
   log, fetchers, router, credentials, sources, documentation: { watch: documentation, targets }, refreshLent: async () => { await grants.offers(true) }, lent: () => grants.offers(), lentStatus: () => grants.status(), health: healthReader(),
   captureDetails: diagnostics.enabled,
   onCall: (r, t) => {

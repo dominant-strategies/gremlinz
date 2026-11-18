@@ -50,8 +50,15 @@ export async function cleanupFluenceAccount(fl: Fluence, o: { vmId: string; keep
     } else if (await attempt(`terminate VM ${v.id}`, () => fl.terminate(v.id, `gremlin-cleanup-${v.id}`))) report.vmsTerminated.push(v.id)
   }
 
-  // Always replace, even when the list looks empty: a pending change applies on the next restart.
-  report.vmSshKeysCleared = await attempt('clear VM SSH keys', () => fl.setVmSshKeys(o.vmId, []))
+  report.vmSshKeysCleared = await attempt('verify VM SSH keys', async () => {
+    if (own.status === 'draft') {
+      await fl.setVmSshKeys(o.vmId, [])
+      return
+    }
+    const keyIds = own.sshKeyIds ?? (await fl.vm(o.vmId)).sshKeyIds
+    if (!Array.isArray(keyIds)) throw new Error('Fluence did not report attached SSH keys')
+    if (keyIds.length) throw new Error('provider-managed SSH keys are attached and can only be changed on a draft')
+  })
   for (const k of await fl.listSshKeys()) {
     if (k.managedService) continue
     if (await attempt(`delete SSH key ${k.id}`, () => fl.deleteSshKey(k.id))) report.accountSshKeysDeleted.push(k.id)

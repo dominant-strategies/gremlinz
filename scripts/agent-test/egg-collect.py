@@ -90,6 +90,22 @@ def egg_state():
     return {k: s.get(k) for k in ("stage", "bootedAt", "pulseSeq", "lastPulseAt")} | {"log": (s.get("log") or [])[-20:]}
 
 
+def runtime_health():
+    heartbeat = read_json(os.path.join(HOME, "egg-heartbeat.json"))
+    runtime = read_json(os.path.join(HOME, "runtime-health.json"))
+    out = {"wanted": heartbeat.get("runtimeWanted") if isinstance(heartbeat, dict) else None}
+    if isinstance(runtime, dict):
+        services = runtime.get("services")
+        services = services if isinstance(services, dict) else {}
+        out.update({
+            "at": runtime.get("at"),
+            "healthy": runtime.get("healthy"),
+            "ready": {name: services[name].get("ready") for name in ("gateway", "mcp", "health", "hermes")
+                      if isinstance(services.get(name), dict)},
+        })
+    return out
+
+
 def cron():
     out = {}
     jobs = read_json(os.path.join(HERMES, "cron", "jobs.json"))
@@ -98,8 +114,12 @@ def cron():
         if j:
             out["job"] = {k: j.get(k) for k in ("last_status", "last_run_at", "next_run_at", "failure_streak", "enabled")}
             out["job"]["last_error"] = (j.get("last_error") or "")[:300] or None
-    code, so, se = run(["docker", "exec", "-u", "gremlin", "-e", "HERMES_HOME=" + HERMES, "egg",
-                        "/opt/hermes/venv/bin/hermes", "cron", "runs", WAKE_JOB, "--limit", "200"], timeout=90)
+    command = ["docker", "exec", "-u", "gremlin-agent", "-e", "HERMES_HOME=" + HERMES, "egg",
+               "/opt/hermes/venv/bin/hermes", "cron", "runs", WAKE_JOB, "--limit", "200"]
+    code, so, se = run(command, timeout=90)
+    if code != 0 and "no matching entries" in se:
+        command[3] = "gremlin"
+        code, so, se = run(command, timeout=90)
     if code == 0:
         out["runsText"] = so[-200_000:]
     else:
@@ -153,8 +173,10 @@ def security():
         "devKeys": dev_keys(),
         "cloudInitDisabled": os.path.exists("/etc/cloud/cloud-init.disabled"),
     }
-    code, so, _ = run(["systemctl", "is-active", "gremlin-lockdown.service"])
+    _, so, _ = run(["systemctl", "is-active", "gremlin-lockdown.service"])
     out["lockdown"] = so.strip() or None
+    _, so, _ = run(["systemctl", "is-enabled", "gremlin-lockdown.service"])
+    out["lockdownEnabled"] = so.strip() == "enabled"
     code, so, se = run(["apt-get", "-s", "-o", "Debug::NoLocking=1", "upgrade"], timeout=120)
     if code == 0:
         out["osSecurityPending"] = sum(1 for l in so.splitlines() if l.startswith("Inst ") and re.search(r"-security\b", l))
@@ -166,14 +188,21 @@ def security():
 
 def container():
     out = {}
-    code, so, _ = run(["docker", "inspect", "-f", "{{.State.Status}}|{{.State.StartedAt}}|{{.Config.Image}}", "egg"])
+    template = ("{{.State.Status}}|{{.State.StartedAt}}|{{.Config.Image}}|"
+                "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.State.OOMKilled}}")
+    code, so, _ = run(["docker", "inspect", "-f", template, "egg"])
     if code == 0 and so.strip():
-        st, started, image = (so.strip().split("|") + ["", "", ""])[:3]
-        out.update({"egg": st, "startedAt": started, "image": image})
+        st, started, image, health, oom = so.strip().split("|")
+        out.update({"egg": st, "startedAt": started, "image": image, "health": health, "oomKilled": oom == "true"})
     else:
         out["egg"] = "missing"
     code, so, _ = run(["systemctl", "is-active", "gremlin.service"])
     out["gremlinService"] = so.strip() or None
+    code, so, _ = run(["systemctl", "show", "-p", "NRestarts", "--value", "gremlin.service"])
+    if code == 0 and so.strip().isdigit():
+        out["restarts"] = int(so.strip())
+    _, so, _ = run(["systemctl", "is-active", "gremlin-watchdog.timer"])
+    out["watchdog"] = so.strip() or None
     try:
         with open("/proc/uptime") as f:
             out["uptimeHours"] = round(float(f.read().split()[0]) / 3600, 2)
@@ -184,7 +213,6 @@ def container():
 
 f = os.path.join
 result = {
-    "collectedAt": datetime.now(timezone.utc).isoformat(),
     "files": {
         "health": read_json(f(HOME, "health.json")),
         "status": read_json(f(HOME, "status.json")),
@@ -212,4 +240,6 @@ for e in jsonl(f(HOME, "earnings.jsonl")):
         continue
     folded[i].update({k: v for k, v in e.items() if v is not None and k not in ("at", "note")})
 result["files"]["earnings"] = [{k: v for k, v in e.items() if k in ("id", "what", "amountUsd", "counterparty", "status", "at")} for e in folded.values()]
+result["runtime"] = runtime_health()
+result["collectedAt"] = datetime.now(timezone.utc).isoformat()
 print(json.dumps(result))

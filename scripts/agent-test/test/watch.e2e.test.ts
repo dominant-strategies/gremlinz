@@ -63,10 +63,11 @@ describe('watch.mjs against a mock board and a local stand-in egg', () => {
     const last = JSON.parse(readFileSync(join(dir, 'pip', 'last.json'), 'utf8'))
     const st = Object.fromEntries(last.checks.map((c: any) => [c.id, c.status]))
     expect(st).toMatchObject({
-      'egg.ssh': 'pass', 'egg.container': 'pass', 'hatch.job': 'pass', 'hatch.announced': 'pass', 'hatch.config': 'pass', 'hatch.handover': 'pass', 'hatch.sweep': 'pass',
+      'egg.ssh': 'pass', 'egg.container': 'pass', 'egg.watchdog': 'pass', 'egg.runtime': 'fail', 'hatch.job': 'pass', 'hatch.announced': 'pass', 'hatch.config': 'pass', 'hatch.handover': 'pass', 'hatch.sweep': 'pass',
       'liveness.pulse': 'pass', 'liveness.wake': 'pass', 'liveness.streak': 'pass', 'liveness.health': 'pass', 'liveness.inference': 'pass', 'liveness.hosting': 'pass',
       'behaviour.board': 'pass', 'behaviour.earnings': 'pass', 'behaviour.secrets': 'pass', 'security.lockdown': 'pass', 'security.os': 'pass', 'spend.inference': 'pass', 'spend.hosting': 'pass',
     })
+    expect(last.snapshot.egg.container).toMatchObject({ health: 'healthy', oomKilled: false })
     // This Mac is not an egg: no /etc/cloud/cloud-init.disabled here, so that check fails and the pass exits 1.
     expect(st['security.cloudinit']).toBe('fail')
     expect(code).toBe(1)

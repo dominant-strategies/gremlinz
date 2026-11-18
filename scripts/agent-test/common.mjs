@@ -120,6 +120,8 @@ export function collectFromEgg(ip, { hours = 48, key = DEV_KEY, timeoutMs = 240_
       if (err && !stdout) return resolve({ ip, error: (stderr || err.message).trim().split('\n').slice(-2).join(' ').slice(0, 300) })
       try { resolve({ ip, ...JSON.parse(stdout) }) } catch { resolve({ ip, error: `unparseable collector output: ${(stderr || stdout).slice(0, 200)}` }) }
     })
+    // An unreachable host can close stdin early. The SSH callback reports the connection error.
+    child.stdin.on('error', () => {})
     child.stdin.end(script)
   })
 }

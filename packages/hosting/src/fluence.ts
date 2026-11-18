@@ -25,6 +25,7 @@ export interface Plan {
 export interface FluenceVm {
   id: string
   status: string
+  sshKeyIds?: string[]
   bootDiskId?: string
   interfaceIds?: string[]
   hasCloudInit?: boolean
@@ -205,8 +206,8 @@ export function fluence(opts: { signer: HostingSigner; baseUrl?: string; fetchIm
     terminate: (vmId: string, idempotencyKey: string) => call<unknown>('POST', `/v3/vms/${vmId}/terminate`, undefined, { 'idempotency-key': idempotencyKey }),
     /** Throw away a draft (never provisioned). */
     discardDraft: (vmId: string) => call<void>('DELETE', `/v3/vms/${vmId}`),
-    listVms: () => paged<FluenceVm & { sshKeyIds?: string[] }>('/v3/vms'),
-    /** Replace the VM's SSH keys (Fluence applies them on the next restart). */
+    listVms: () => paged<FluenceVm>('/v3/vms'),
+    /** Replace the SSH keys on a draft, before provisioning. */
     setVmSshKeys: (vmId: string, sshKeyIds: string[]) => call<FluenceVm>('PUT', `/v3/vms/${vmId}/ssh-keys`, { sshKeys: sshKeyIds }),
 
     // Account access. Anyone holding a sign-in token (2 hours, not revocable) can mint API keys and SSH keys; the owner

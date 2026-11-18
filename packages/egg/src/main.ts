@@ -12,7 +12,7 @@
  *   GREMLIN_RUNTIME  command that starts the agent runtime; gets GREMLIN_CONFIG + GREMLIN_HOME
  *   AUTOMATON_DIR    runtime state dir moved with the gremlin (default ~/.automaton)
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -192,7 +192,13 @@ async function runEgg() {
     },
     stopRuntime,
     startRuntime: () => { paused = false; nextStartAt = 0; startRuntime() },
-    collect: () => collectPayload({ phrase: keys.phrase, gremlinHome: home, runtimeDir, launch: el }),
+    collect: () => {
+      const runtimeOwner = process.env.GREMLIN_SEPARATE_USERS === '1' ? {
+        uid: Number(execFileSync('id', ['-u', 'gremlin-agent'], { encoding: 'utf8' })),
+        gid: Number(execFileSync('id', ['-g', 'gremlin-agent'], { encoding: 'utf8' })),
+      } : undefined
+      return collectPayload({ phrase: keys.phrase, gremlinHome: home, runtimeDir, launch: el, runtimeOwner })
+    },
     pulseSeq: () => store.load()?.pulseSeq ?? 0,
     wipe: async () => {
       for (const f of ['seed', 'state.json', 'config.json', 'signed-config.json', 'private-directions.json', 'status.json', 'hosting.json']) rmSync(join(home, f), { force: true })
@@ -221,9 +227,12 @@ async function runEgg() {
       const req = readJson<MoveOutRequest>(requestPath)
       if (req && (!moveOut || moveOut.stage === 'reverted' || moveOut.stage === 'moved') && store.load()?.stage === 'hatched') {
         unlinkSync(requestPath)
-        moveOut = { ...(await startMoveOut(moveOutDeps(req))), request: req } as MoveOutState & { request: MoveOutRequest }
-        writeJson(moveOutPath, moveOut)
-        log('move-out started, nest launch', moveOut.launchId)
+        if (req.authorizationVersion !== 1) log('discarded a move-out request without maker authorization')
+        else {
+          moveOut = { ...(await startMoveOut(moveOutDeps(req))), request: req } as MoveOutState & { request: MoveOutRequest }
+          writeJson(moveOutPath, moveOut)
+          log('move-out started, nest launch', moveOut.launchId)
+        }
       }
       if (moveOut && (moveOut.stage === 'launching' || moveOut.stage === 'handed-off')) {
         const req = (moveOut as MoveOutState & { request: MoveOutRequest }).request
@@ -263,7 +272,7 @@ async function runEgg() {
  * - sporestack: the token must already hold enough credit (new tokens need a $100 first deposit).
  * (Conway was a host until it discontinued its service.)
  */
-type MoveOutRequest = { host: 'sporestack'; token: string; flavor?: string; provider?: Provider; days?: number; image?: string }
+type MoveOutRequest = { authorizationVersion?: number; host: 'sporestack'; token: string; flavor?: string; provider?: Provider; days?: number; image?: string }
 
 
 type NestLaunch = Parameters<MoveOutDeps['launchNest']>[0]

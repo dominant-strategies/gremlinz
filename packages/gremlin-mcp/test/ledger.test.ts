@@ -3,6 +3,9 @@ import { appendFileSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Ledger, costUsd } from '../src/gateway/ledger.js'
+import { GatewayConfig } from '../src/gateway/config.js'
+import { Reservations } from '../src/gateway/reservations.js'
+import { MAINTENANCE_DAILY_USD, spending } from '../src/gateway/spending.js'
 
 const target = { provider: 'p', model: 'm', inputPerM: 2, outputPerM: 8 }
 const rec = (at: string, promptTokens = 1_000_000, completionTokens = 0) => ({ at, alias: 'gremlin-main', provider: 'p', model: 'm', status: 200, ms: 5, usage: { promptTokens, completionTokens } })
@@ -30,6 +33,23 @@ describe('inference ledger', () => {
   it('has no cap when no budget is configured', () => {
     const l = new Ledger(join(mkdtempSync(join(tmpdir(), 'ledger-')), 'x.jsonl'))
     expect(l.refuse(undefined)).toBeUndefined()
+  })
+
+  it('retains the separate maintenance cap after restart and preserves normal inference room', () => {
+    let clock = Date.parse('2026-10-12T10:00:00Z')
+    const now = () => clock
+    const file = join(mkdtempSync(join(tmpdir(), 'ledger-')), 'x.jsonl')
+    const cfg = GatewayConfig.parse({ providers: [{ id: 'p', kind: 'openai', baseUrl: 'https://provider.example/v1' }], routes: { 'gremlin-main': [target] }, budget: { dailyUsd: 2 } })
+    const original = new Ledger(file, now)
+    original.record({ ...rec(new Date(clock).toISOString(), 125_000), alias: 'gremlin-maintenance' }, target)
+    const restarted = new Ledger(file, now)
+    expect(restarted.spent(true)).toBeCloseTo(MAINTENANCE_DAILY_USD)
+    const policy = spending(cfg, restarted, { allowanceFor: () => undefined }, new Reservations({ now }), now)
+    const attempt = (maintenance: boolean) => policy.reserve!({ messages: [], max_tokens: 30 }, target, cfg.providers[0]!, false, maintenance)
+    expect(attempt(true)).toBeUndefined()
+    expect(attempt(false)).toBeDefined()
+    clock += 86_400_000
+    expect(attempt(true)).toBeDefined()
   })
 })
 

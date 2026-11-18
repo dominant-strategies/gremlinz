@@ -29,7 +29,7 @@ async function connect(security: SecurityDeps, image?: string) {
   process.env.GREMLIN_LAUNCH = join(home, 'cloud-launch.json')
   if (image) writeFileSync(process.env.GREMLIN_LAUNCH, JSON.stringify({ mode: 'egg', image }))
   const [a, b] = InMemoryTransport.createLinkedPair()
-  await createServer({ balances: { read: async () => ({}) }, now: () => clock, security }).connect(a)
+  await createServer({ balances: { read: async () => ({}) }, now: () => clock, security, approve: () => undefined }).connect(a)
   const client = new Client({ name: 'test', version: '0' })
   await client.connect(b)
   return async (name: string, args: Record<string, unknown> = {}) => {

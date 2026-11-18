@@ -56,7 +56,7 @@ beforeEach(async () => {
   base = `http://127.0.0.1:${(gw.address() as { port: number }).port}`
   const [a, b] = InMemoryTransport.createLinkedPair()
   const monitor = { check: async () => { checks++; return { status: 'ok', inferenceUsd: 10 } } } as unknown as HealthMonitor
-  await createServer({ health: () => monitor, access: { adminUrl: () => base } }).connect(a)
+  await createServer({ health: () => monitor, access: { adminUrl: () => base }, approve: () => undefined }).connect(a)
   client = new Client({ name: 'test', version: '1' })
   await client.connect(b)
 })

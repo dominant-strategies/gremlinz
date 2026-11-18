@@ -51,7 +51,8 @@ export function healthySnapshot(): any {
         lockdown: 'active',
         osSecurityPending: 0,
       },
-      container: { egg: 'running', gremlinService: 'active', startedAt: iso(NOW - 27 * HOUR) },
+      container: { egg: 'running', gremlinService: 'active', health: 'healthy', watchdog: 'active', restarts: 0, startedAt: iso(NOW - 27 * HOUR) },
+      runtime: { wanted: true, healthy: true, at: iso(NOW - 5000), ready: { gateway: true, mcp: true, health: true, hermes: true } },
     },
     expectedDevKeys: ['SHA256:dev'],
   }

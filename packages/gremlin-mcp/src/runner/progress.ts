@@ -3,12 +3,12 @@ import { join } from 'node:path'
 import { WAKE_JOB_ID } from '../bootstrap/hermes.js'
 
 /** A paused scheduler and a future wake-up are healthy. Detect an overdue scheduler, not a provider outage. */
-export function schedulerResponsive(home: string, startedAt: number, now = Date.now()): boolean {
+export function schedulerResponsive(home: string, startedAt: number, now = Date.now(), read = (file: string) => readFileSync(file, 'utf8'), requireWake = false): boolean {
   try {
-    const jobs = JSON.parse(readFileSync(join(home, 'cron/jobs.json'), 'utf8')).jobs as Record<string, unknown>[]
+    const jobs = JSON.parse(read(join(home, 'cron/jobs.json'))).jobs as Record<string, unknown>[]
     const job = jobs.find(job => job.id === WAKE_JOB_ID)
     if (!job) return false
-    if (job.enabled === false || job.state === 'paused') return true
+    if (job.enabled === false || job.state === 'paused') return !requireWake
     const next = Date.parse(String(job.next_run_at ?? ''))
     if (!Number.isFinite(next)) return now - startedAt < 300_000
     return now - next < 3_600_000

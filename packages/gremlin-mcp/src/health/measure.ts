@@ -4,6 +4,7 @@
  * tolerates a missing or torn file: no reading is a fact too ("unknown"), never a crash.
  */
 import { existsSync, readFileSync, statfsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { cpus, freemem, loadavg, totalmem, uptime } from 'node:os'
 import { join } from 'node:path'
 import type { LedgerEntry } from '../gateway/ledger.js'
@@ -67,7 +68,10 @@ export const failedForInference = (status?: string, error?: string) => status ==
 
 export function wakeState(hermesHome: string, jobId: string = WAKE_JOB_ID): WakeState {
   try {
-    const { jobs } = JSON.parse(readFileSync(join(hermesHome, 'cron', 'jobs.json'), 'utf8')) as { jobs?: Record<string, unknown>[] }
+    const file = join(hermesHome, 'cron', 'jobs.json')
+    const user = process.env.GREMLIN_HERMES_USER
+    const raw = user ? execFileSync('/usr/bin/sudo', ['-n', '-u', user, '--', '/bin/cat', file], { encoding: 'utf8', timeout: 2000, maxBuffer: 1024 * 1024 }) : readFileSync(file, 'utf8')
+    const { jobs } = JSON.parse(raw) as { jobs?: Record<string, unknown>[] }
     const j = jobs?.find((x) => x.id === jobId)
     if (!j) return { found: false, failureStreak: 0, forInference: false }
     const str = (v: unknown) => (typeof v === 'string' ? v : undefined)
@@ -86,6 +90,14 @@ export interface Incident { jobId: string; sig: string; state: string; type: str
 
 /** Hermes' cron incidents (cron/executions.db), open ones only. Needs node:sqlite; without it, none. */
 export async function cronIncidents(hermesHome: string): Promise<Incident[]> {
+  const user = process.env.GREMLIN_HERMES_USER
+  if (user) {
+    try {
+      const source = `import { cronIncidents } from ${JSON.stringify(import.meta.url)}; console.log(JSON.stringify(await cronIncidents(process.argv[1])))`
+      const raw = execFileSync('/usr/bin/sudo', ['-n', '-u', user, '--', '/usr/bin/env', '-i', process.execPath, '--input-type=module', '-e', source, hermesHome], { encoding: 'utf8', timeout: 4000, maxBuffer: 128 * 1024, stdio: ['ignore', 'pipe', 'pipe'] })
+      return JSON.parse(raw) as Incident[]
+    } catch { return [] }
+  }
   const file = join(hermesHome, 'cron', 'executions.db')
   if (!existsSync(file)) return []
   try {

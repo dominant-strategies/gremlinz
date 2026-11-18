@@ -36,7 +36,7 @@ describe('Hermes config', () => {
 describe('wake-up job', () => {
   it('is a valid pre-seeded Hermes cron job that carries context from its last run', () => {
     const { jobs } = JSON.parse(cronJobs({ wakeEveryMinutes: 30, now: new Date('2026-10-12T00:00:00Z') }))
-    expect(jobs).toHaveLength(2)
+    expect(jobs).toHaveLength(3)
     expect(jobs[0].id).toMatch(/^[0-9a-f]{12}$/)
     expect(jobs[0].schedule).toEqual({ kind: 'interval', minutes: 30, display: 'every 30m' })
     expect(jobs[0].context_from).toEqual(['self'])
@@ -114,10 +114,17 @@ describe('proactive inference maintenance', () => {
     expect(access.prompt).toContain('review is not proof of a successful renewal')
     expect(access.prompt).toContain('inference_access repair')
     expect(access.prompt).toContain('inference_access discover')
-    expect(access.prompt).toContain('inference_access connect')
+    expect(access.prompt).toContain('Refer provider changes to your maker')
     expect(access.prompt).toContain('at most eight model calls')
     const refreshed = JSON.parse(refreshCronJobs(JSON.stringify({ jobs: [jobs[0]] })))
     expect(refreshed.jobs.some((j: { id: string }) => j.id === ACCESS_JOB_ID)).toBe(true)
+  })
+
+  it('installs daily self-improvement with a precheck and no fast retries', () => {
+    const jobs = JSON.parse(cronJobs({ workdir: '/h/work' })).jobs
+    const improvement = jobs.find((job: { name: string }) => job.name === 'gremlin-self-improvement')
+    expect(improvement).toMatchObject({ model: 'gremlin-maintenance', schedule: { minutes: 1440 }, script: 'spare-capacity.py', retry_failures: false, workdir: '/h/work' })
+    expect(JSON.parse(refreshCronJobs(JSON.stringify({ jobs: [jobs[0]] }))).jobs).toHaveLength(3)
   })
   it('preserves maintenance run state and restores its owned model and prompt after restart', () => {
     const old = JSON.parse(cronJobs())

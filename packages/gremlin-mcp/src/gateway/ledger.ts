@@ -19,6 +19,7 @@ export class Ledger {
   private now: () => number
   private today = ''
   private spentToday = 0
+  private maintenanceToday = 0
 
   constructor(file: string, now: () => number = Date.now) {
     this.file = file
@@ -32,12 +33,16 @@ export class Ledger {
     if (d === this.today) return
     this.today = d
     this.spentToday = 0
+    this.maintenanceToday = 0
     if (!existsSync(this.file)) return
     for (const line of readFileSync(this.file, 'utf8').split('\n')) {
       if (!line.startsWith('{')) continue
       try {
         const e = JSON.parse(line) as LedgerEntry
-        if (day(e.at) === d && !e.grantId) this.spentToday += e.usd
+        if (day(e.at) === d && !e.grantId) {
+          this.spentToday += e.usd
+          if (e.alias === 'gremlin-maintenance') this.maintenanceToday += e.usd
+        }
       } catch { /* a torn last line after a crash */ }
     }
   }
@@ -47,7 +52,10 @@ export class Ledger {
     const usd = r.usage ? costUsd(r, t) : (r.estimatedUsd ?? 0)
     const entry: LedgerEntry = { ...r, usd, priced: t.inputPerM > 0 || t.outputPerM > 0, ...(t.grantId ? { grantId: t.grantId } : {}) }
     // A lent key's calls are the lender's money: valued for repayment, not counted against the gremlin's budget.
-    if (day(r.at) === this.today && !t.grantId) this.spentToday += usd
+    if (day(r.at) === this.today && !t.grantId) {
+      this.spentToday += usd
+      if (r.alias === 'gremlin-maintenance') this.maintenanceToday += usd
+    }
     appendDurable(this.file, JSON.stringify(entry) + '\n')
     return entry
   }
@@ -66,9 +74,9 @@ export class Ledger {
     return usd
   }
 
-  spent(): number {
+  spent(maintenance = false): number {
     this.roll()
-    return this.spentToday
+    return maintenance ? this.maintenanceToday : this.spentToday
   }
 
   /** All credentials/grants in one account draw from the same reported allowance. */
