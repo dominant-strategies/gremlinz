@@ -32,8 +32,9 @@ export function readKey(file: string): HashferenceKey | undefined {
   } catch { return undefined }
 }
 
+// The live usage API emits res_ IDs. Keep accepting previously supported IDs for existing ledger rows.
 export const isHashferenceReservation = (id: unknown): id is string =>
-  typeof id === 'string' && /^rxs_[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id)
+  typeof id === 'string' && /^(?:res|rxs)_[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id)
 
 async function call<T>(f: Fetch, method: string, path: string, opts: { body?: unknown; auth?: string; base?: string } = {}): Promise<T> {
   const base = opts.base ?? HASHFERENCE

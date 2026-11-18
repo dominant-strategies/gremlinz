@@ -9,7 +9,7 @@ import { MAINTENANCE_DAILY_USD, spending } from '../src/gateway/spending.js'
 import { settledHashferenceUsage } from '../src/hashference.js'
 import { burnFromLedger } from '../src/health/measure.js'
 
-const providerReservationId = 'rxs_47cf7775-4bd8-4a99-9e10-7639b336644a'
+const providerReservationId = 'res_47cf7775-4bd8-4a99-9e10-7639b336644a'
 
 const target = { provider: 'p', model: 'm', inputPerM: 2, outputPerM: 8 }
 const rec = (at: string, promptTokens = 1_000_000, completionTokens = 0) => ({ at, alias: 'gremlin-main', provider: 'p', model: 'm', status: 200, ms: 5, usage: { promptTokens, completionTokens } })
@@ -117,14 +117,17 @@ describe('budget enforcement in the gateway', () => {
       await response.text()
       const reserveAgain = () => policy.reserve!(body, cfg.routes['gremlin-main']![0]!, cfg.providers[0]!, false)
       expect(reserveAgain()).toBeUndefined()
+      const previouslySupportedId = providerReservationId.replace('res_', 'rxs_')
       const get = (async () => Response.json({ recent: [
         { id: providerReservationId, status: 'open', costMicrousd: 0 },
         { id: providerReservationId, status: 'settled', costMicrousd: 4_500 },
         { id: providerReservationId, status: 'settled', costMicrousd: '0' },
+        { id: 'res_not-a-uuid', status: 'settled', costMicrousd: 0 },
+        { id: previouslySupportedId, status: 'settled', costMicrousd: 1 },
       ] })) as typeof fetch
       const receipts = await settledHashferenceUsage({ apiKey: 'hf_mock', address: '', createdAt: '' }, get)
-      expect(receipts).toEqual([{ id: providerReservationId, costMicrousd: 4_500 }])
-      for (const receipt of receipts) expect(ledger.settle('hashference', receipt.id, receipt.costMicrousd)).toBe(true)
+      expect(receipts).toEqual([{ id: providerReservationId, costMicrousd: 4_500 }, { id: previouslySupportedId, costMicrousd: 1 }])
+      expect(receipts.map(receipt => ledger.settle('hashference', receipt.id, receipt.costMicrousd))).toEqual([true, false])
       const status = await (await fetch(`${base}/admin/access`)).json()
       expect(status.dailyAccounting.settledUsd).toBeCloseTo(0.0045)
       expect(status.dailyAccounting.pendingUsd).toBe(0)
