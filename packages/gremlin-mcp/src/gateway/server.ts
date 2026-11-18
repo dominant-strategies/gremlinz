@@ -15,15 +15,17 @@ import { gleanRoute, sensitiveReason } from './glean.js'
 import { refAllowed } from '@gremlins/hatch'
 import type { LentOffer } from './grants.js'
 import { classify, isRefusal, mayRetryRefusal, permissiveRoute, routeFor, type RouterInput } from './router.js'
+import { HASHFERENCE, isHashferenceReservation } from '../hashference.js'
 
 export const AUTO = 'gremlin-auto'
 
 export interface Usage { promptTokens: number; completionTokens: number; cachedPromptTokens?: number; reasoningTokens?: number }
 interface UpstreamUsage { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number }; completion_tokens_details?: { reasoning_tokens?: number } }
-export interface CallRecord { at: string; alias: string; provider: string; model: string; status: number; usage?: Usage; ms: number; refused?: boolean; incomplete?: boolean; estimatedUsd?: number; accountId?: string; requestId?: string; free?: boolean; firstByteMs?: number; requestBytes?: number; messageCount?: number; toolCount?: number }
+export interface CallRecord { at: string; alias: string; provider: string; model: string; status: number; usage?: Usage; ms: number; refused?: boolean; incomplete?: boolean; estimatedUsd?: number; accountId?: string; requestId?: string; providerReservationId?: string; free?: boolean; firstByteMs?: number; requestBytes?: number; messageCount?: number; toolCount?: number }
 
 export interface GatewayDeps {
   adminToken?: string
+  budgetStatus?: () => Record<string, string | number> | undefined
   maintenanceReady?: () => boolean
   /** Per-provider fetchers; defaults built from config (venice needs a signer, injected by the caller). */
   fetchers?: Record<string, UpstreamFetch>
@@ -135,7 +137,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
               }
             }),
             states: credentials.snapshot(), sources: deps.sources?.list() ?? [],
-            budget: cfg.budget, documentation: deps.documentation?.watch.status() ?? [],
+            budget: cfg.budget, dailyAccounting: deps.budgetStatus?.(), documentation: deps.documentation?.watch.status() ?? [],
           })
         }
         if (req.url === '/admin/access/docs' && (req.method === 'GET' || req.method === 'POST')) {
@@ -319,10 +321,11 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         let up: Response
         let recorded = false
         let headersMs: number | undefined
+        let providerReservationId: string | undefined
         const details = deps.captureDetails ? { requestBytes: Buffer.byteLength(JSON.stringify(upstreamBody)), messageCount: Array.isArray(upstreamBody.messages) ? upstreamBody.messages.length : 0, toolCount: Array.isArray(upstreamBody.tools) ? upstreamBody.tools.length : 0 } : {}
         const recordCall = (r: CallRecord) => {
           release(r.usage ? r.usage.promptTokens + r.usage.completionTokens : undefined)
-          deps.onCall?.({ ...r, requestId, free: !!(p.free || p.local), ...(deps.captureDetails ? { ...details, firstByteMs: headersMs } : {}), ...(accountId ? { accountId } : {}), ...(!r.usage && (r.status === 200 || r.status === 0) ? { estimatedUsd: reservation?.estimatedUsd } : {}) }, t)
+          deps.onCall?.({ ...r, requestId, providerReservationId, free: !!(p.free || p.local), ...(deps.captureDetails ? { ...details, firstByteMs: headersMs } : {}), ...(accountId ? { accountId } : {}), ...((!r.usage || r.incomplete) && (r.status === 200 || r.status === 0) ? { estimatedUsd: reservation?.estimatedUsd } : {}) }, t)
           recorded = true
         }
         const abort = new AbortController()
@@ -342,6 +345,10 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
               new Promise<never>((_, reject) => { firstByte = setTimeout(() => { const e = new Error(`no response in ${p.firstByteMs / 1000}s`); abort.abort(e); reject(e) }, p.firstByteMs) }),
             ])
             headersMs = now() - started
+            if (p.kind === 'hashference' && new URL(p.baseUrl).origin === HASHFERENCE) {
+              const id = up.headers.get('x-hashference-reservation')
+              if (isHashferenceReservation(id)) providerReservationId = id
+            }
             // The response has started: from here the stream watchdog (stalls) and the whole-request limit apply.
             clearTimeout(firstByte)
           } catch (e) {
@@ -409,7 +416,9 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
 }
 
 function usageOf(u?: UpstreamUsage | null): Usage | undefined {
-  return u ? { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0, ...(typeof u.prompt_tokens_details?.cached_tokens === 'number' ? { cachedPromptTokens: u.prompt_tokens_details.cached_tokens } : {}), ...(typeof u.completion_tokens_details?.reasoning_tokens === 'number' ? { reasoningTokens: u.completion_tokens_details.reasoning_tokens } : {}) } : undefined
+  if (!u || typeof u.prompt_tokens !== 'number' || !Number.isSafeInteger(u.prompt_tokens) || u.prompt_tokens < 0 ||
+    typeof u.completion_tokens !== 'number' || !Number.isSafeInteger(u.completion_tokens) || u.completion_tokens < 0) return undefined
+  return { promptTokens: u.prompt_tokens, completionTokens: u.completion_tokens, ...(typeof u.prompt_tokens_details?.cached_tokens === 'number' ? { cachedPromptTokens: u.prompt_tokens_details.cached_tokens } : {}), ...(typeof u.completion_tokens_details?.reasoning_tokens === 'number' ? { reasoningTokens: u.completion_tokens_details.reasoning_tokens } : {}) }
 }
 
 /**

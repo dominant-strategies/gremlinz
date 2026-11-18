@@ -49,6 +49,7 @@ export const RouteTarget = z.object({
   model: z.string(),
   /** USD per million tokens, for the budget. Unknown prices count as zero (and are reported as such). */
   inputPerM: z.number().min(0).default(0),
+  cachedInputPerM: z.number().nonnegative().finite().optional(),
   outputPerM: z.number().min(0).default(0),
   /** Answers what other models refuse; used to retry after an over-refusal. */
   permissive: z.boolean().optional(),

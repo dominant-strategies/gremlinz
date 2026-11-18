@@ -81,6 +81,7 @@ export interface CatalogModel {
   tools: boolean
   /** USD per million tokens. */
   inputPerM: number
+  cachedInputPerM?: number
   outputPerM: number
   context?: number
 }
@@ -197,7 +198,10 @@ export function hashferenceCatalog(body: unknown): CatalogModel[] {
     const id = String(m.id), name = String(m.name ?? id), description = String(m.description ?? '')
     const tools = !!m.supports_tools
     const { family, traits } = classifyModel(id, { name, description, tools, private: m.hosting === 'hashference' || /zero-retention|private/i.test(description) })
-    return { ref: `hashference/${id}`, provider: 'hashference', id, name, family, traits, tools, inputPerM: num(m.credits_per_million_input_tokens) / 1000, outputPerM: num(m.credits_per_million_output_tokens) / 1000, context: num(m.context_length) || undefined }
+    const cached = m.credits_per_million_cached_input_tokens
+    return { ref: `hashference/${id}`, provider: 'hashference', id, name, family, traits, tools, inputPerM: num(m.credits_per_million_input_tokens) / 1000,
+      ...(typeof cached === 'number' && Number.isFinite(cached) && cached >= 0 ? { cachedInputPerM: cached / 1000 } : {}),
+      outputPerM: num(m.credits_per_million_output_tokens) / 1000, context: num(m.context_length) || undefined }
   })
 }
 

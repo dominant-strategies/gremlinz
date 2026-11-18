@@ -7,7 +7,7 @@ import { existsSync, readFileSync, statfsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { cpus, freemem, loadavg, totalmem, uptime } from 'node:os'
 import { join } from 'node:path'
-import type { LedgerEntry } from '../gateway/ledger.js'
+import type { LedgerRecord } from '../gateway/ledger.js'
 import { WAKE_JOB_ID } from '../bootstrap/hermes.js'
 import { HEALTH } from './policy.js'
 
@@ -30,7 +30,7 @@ export interface Burn {
 /** Spend per day over the last few days (the gremlin's own money: lent keys excluded), and provider error rates. */
 export function burnFromLedger(file: string, now: number, windowDays: number = HEALTH.inference.burnWindowDays): Burn {
   const since = now - windowDays * DAY
-  const entries = jsonl<LedgerEntry>(file).filter((e) => Date.parse(e.at) >= since)
+  const entries = jsonl<LedgerRecord>(file).filter((e) => Date.parse(e.at) >= since)
   const own = entries.filter((e) => !e.grantId)
   const first = Math.min(...own.map((e) => Date.parse(e.at)))
   // A gremlin a few hours old: spread its spend over at least a day, not over its short life.
@@ -38,6 +38,7 @@ export function burnFromLedger(file: string, now: number, windowDays: number = H
   const spent = own.reduce((a, e) => a + (e.usd || 0), 0)
   const by = new Map<string, { calls: number; errors: number }>()
   for (const e of entries.filter((x) => Date.parse(x.at) >= now - DAY)) {
+    if (e.kind === 'settlement') continue
     const p = by.get(e.provider) ?? { calls: 0, errors: 0 }
     p.calls++
     if (e.status >= 400) p.errors++

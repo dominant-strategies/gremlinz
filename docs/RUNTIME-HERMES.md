@@ -139,6 +139,12 @@ output at 1,024. Missing usage or interrupted replies are charged the reservatio
 provider billing guarantees, especially for images, reasoning or other non-text charges; retain provider-side hard
 limits on dedicated sub-keys.
 
+Hashference usage is priced with its published cached-input rate when it reports cached tokens. The reservation still
+prices the full request before dispatch. For responses carrying a Hashference reservation ID, the gateway checks
+recent settled receipts every minute and records a correction for each exact match. Unmatched calls keep their local
+valuation, including older ledger entries. `inference_access status` reports settled spend, estimated spend and pending
+reservations under `dailyAccounting`. The health monitor reports provider credit separately.
+
 The emergency allowance is **inside** the daily cap. Ordinary calls leave it untouched; localhost calls using
 `model: "gremlin-recovery"` may spend it and are capped at 512 output tokens by default. This alias uses
 `gremlin-main` unless a dedicated `gremlin-recovery` route is configured. Localhost processes are trusted to use

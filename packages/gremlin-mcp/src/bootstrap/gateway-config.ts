@@ -35,9 +35,9 @@ export function gatewayConfig(e: GatewayEnv = {}): GatewayConfig {
   const hashferenceRoute = e.hashferenceModel
     ? [{ provider: 'hashference', model: e.hashferenceModel, inputPerM: 0, outputPerM: 0 }]
     : [
-        { provider: 'hashference', model: 'z-ai-glm-5-3-flash', inputPerM: 0.18, outputPerM: 0.6 },
-        { provider: 'hashference', model: 'deepseek-v4-flash', inputPerM: 0.17, outputPerM: 0.33 },
-        { provider: 'hashference', model: HASHFERENCE_MAIN_MODEL, inputPerM: 0.441, outputPerM: 1.386, maxRequestBytes: 235_000 },
+        { provider: 'hashference', model: 'z-ai-glm-5-3-flash', inputPerM: 0.18, cachedInputPerM: 0.036, outputPerM: 0.6 },
+        { provider: 'hashference', model: 'deepseek-v4-flash', inputPerM: 0.1656, cachedInputPerM: 0.0336, outputPerM: 0.33 },
+        { provider: 'hashference', model: HASHFERENCE_MAIN_MODEL, inputPerM: 0.441, cachedInputPerM: 0.0819, outputPerM: 1.386, maxRequestBytes: 235_000 },
       ]
   const providers: GatewayConfig['providers'] = [hashference, venice]
   const main: GatewayConfig['routes'][string] = withPolicy([...hashferenceRoute, veniceMain], e.policy, providers.map((p) => p.id))

@@ -7,7 +7,7 @@ import { Reservations, type SpendingScope } from './reservations.js'
 
 export const MAINTENANCE_DAILY_USD = 0.25
 
-export function spending(cfg: GatewayConfig, ledger: Ledger, grants: Pick<GrantPool, 'allowanceFor'>, reservations: Reservations, now = Date.now): Pick<GatewayDeps, 'refuse' | 'reserve'> {
+export function spending(cfg: GatewayConfig, ledger: Ledger, grants: Pick<GrantPool, 'allowanceFor'>, reservations: Reservations, now = Date.now): Pick<GatewayDeps, 'refuse' | 'reserve' | 'budgetStatus'> {
   const day = () => {
     const d = new Date(now())
     const start = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
@@ -16,6 +16,15 @@ export function spending(cfg: GatewayConfig, ledger: Ledger, grants: Pick<GrantP
   const cap = (recovery = false) => cfg.budget ? cfg.budget.dailyUsd - (recovery ? 0 : cfg.budget.emergencyUsd) : undefined
   const dailyScope = () => `own:${day().start}`
   return {
+    budgetStatus: () => {
+      if (!cfg.budget) return undefined
+      const accounting = ledger.dailyAccounting()
+      const pendingUsd = reservations.pending(dailyScope())
+      const normalLimitUsd = cfg.budget.dailyUsd - cfg.budget.emergencyUsd
+      return { ...accounting, pendingUsd, normalLimitUsd, dailyLimitUsd: cfg.budget.dailyUsd,
+        normalRemainingUsd: Math.max(0, normalLimitUsd - accounting.spentUsd - pendingUsd),
+        recoveryRemainingUsd: Math.max(0, cfg.budget.dailyUsd - accounting.spentUsd - pendingUsd) }
+    },
     refuse: recovery => {
       const limit = cap(recovery)
       return limit !== undefined && ledger.spent() + reservations.pending(dailyScope()) >= limit ? 'inference daily allowance is spent; free/local and lent routes remain available' : undefined

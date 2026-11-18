@@ -94,8 +94,8 @@ describe('catalogues', () => {
     expect(m!.traits).toEqual(expect.arrayContaining(['uncensored', 'private']))
   })
   it('normalises Hashference (credits to dollars)', () => {
-    const [m] = hashferenceCatalog({ data: [{ id: 'hashference-glm-5-3', name: 'GLM-5.3', hosting: 'hashference', supports_tools: true, credits_per_million_input_tokens: 441, credits_per_million_output_tokens: 1386, context_length: 131072 }] })
-    expect(m).toMatchObject({ ref: 'hashference/hashference-glm-5-3', family: 'glm', tools: true, inputPerM: 0.441, outputPerM: 1.386 })
+    const [m] = hashferenceCatalog({ data: [{ id: 'hashference-glm-5-3', name: 'GLM-5.3', hosting: 'hashference', supports_tools: true, credits_per_million_input_tokens: 441, credits_per_million_cached_input_tokens: 81.9, credits_per_million_output_tokens: 1386, context_length: 131072 }] })
+    expect(m).toMatchObject({ ref: 'hashference/hashference-glm-5-3', family: 'glm', tools: true, inputPerM: 0.441, cachedInputPerM: 0.0819, outputPerM: 1.386 })
     expect(m!.traits).toEqual(expect.arrayContaining(['private', 'open-weights']))
   })
 })

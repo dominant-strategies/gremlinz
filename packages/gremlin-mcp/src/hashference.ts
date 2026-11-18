@@ -32,6 +32,9 @@ export function readKey(file: string): HashferenceKey | undefined {
   } catch { return undefined }
 }
 
+export const isHashferenceReservation = (id: unknown): id is string =>
+  typeof id === 'string' && /^rxs_[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id)
+
 async function call<T>(f: Fetch, method: string, path: string, opts: { body?: unknown; auth?: string; base?: string } = {}): Promise<T> {
   const base = opts.base ?? HASHFERENCE
   const res = await f(base + path, {
@@ -49,6 +52,16 @@ async function call<T>(f: Fetch, method: string, path: string, opts: { body?: un
     throw new HashferenceError(res.status, `Hashference ${method} ${path} ${res.status}: ${typeof msg === 'string' ? msg : msg?.message ?? text.slice(0, 200)}`)
   }
   return json as T
+}
+
+/** Use only matched, settled receipts. Recent usage may lag completion and may include calls by other clients. */
+export async function settledHashferenceUsage(key: HashferenceKey, get: Fetch = fetch): Promise<{ id: string; costMicrousd: number }[]> {
+  const r = await call<{ recent?: unknown }>(get, 'GET', '/v1/usage?days=7&limit=100', { auth: key.apiKey })
+  if (!Array.isArray(r?.recent)) return []
+  return r.recent.flatMap(row => {
+    if (!row || row.status !== 'settled' || !isHashferenceReservation(row.id) || !Number.isSafeInteger(row.costMicrousd) || row.costMicrousd < 0) return []
+    return [{ id: row.id, costMicrousd: row.costMicrousd }]
+  })
 }
 
 /**

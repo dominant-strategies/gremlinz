@@ -34,17 +34,25 @@ export function sparesFor(policy: ModelPolicy, models: CatalogModel[], route: Ro
     .filter((m) => m.tools && providerIds.has(m.provider) && !routed.has(m.ref) && policy.alternatives.length > 0 && modelAllowed(policy, m))
     .sort((a, b) => Number(b.family === primary?.family) - Number(a.family === primary?.family) || Math.abs(price(a) - target) - Math.abs(price(b) - target) || price(a) - price(b))
     .slice(0, n)
-    .map((m) => ({ provider: m.provider, model: m.id, inputPerM: m.inputPerM, outputPerM: m.outputPerM }))
+    .map((m) => ({ provider: m.provider, model: m.id, inputPerM: m.inputPerM, cachedInputPerM: m.cachedInputPerM, outputPerM: m.outputPerM }))
 }
 
 /** Prices unknown targets and (under a policy) refreshes the spares at the end of gremlin-main. Mutates `cfg.routes`. */
 export function applyCatalog(cfg: GatewayConfig, models: CatalogModel[], spares: Set<string>): string[] {
   if (!models.length) return []
   const byRef = new Map(models.map((m) => [m.ref, m]))
+  const officialHashference = new Set(cfg.providers.filter(p => p.kind === 'hashference' && new URL(p.baseUrl).origin === 'https://hashference.com').map(p => p.id))
   const notes: string[] = []
   for (const route of Object.values(cfg.routes)) for (const t of route) {
     const m = byRef.get(`${t.provider}/${t.model}`)
-    if (m && !t.inputPerM && !t.outputPerM && (m.inputPerM || m.outputPerM)) { t.inputPerM = m.inputPerM; t.outputPerM = m.outputPerM; notes.push(`priced ${m.ref}`) }
+    if (!m || !(m.inputPerM || m.outputPerM)) continue
+    if ((!t.inputPerM && !t.outputPerM) || officialHashference.has(t.provider)) {
+      const changed = t.inputPerM !== m.inputPerM || t.outputPerM !== m.outputPerM || t.cachedInputPerM !== m.cachedInputPerM
+      t.inputPerM = m.inputPerM
+      t.outputPerM = m.outputPerM
+      t.cachedInputPerM = m.cachedInputPerM
+      if (changed) notes.push(`priced ${m.ref}`)
+    }
   }
   const main = cfg.routes['gremlin-main']
   if (cfg.policy && main) {

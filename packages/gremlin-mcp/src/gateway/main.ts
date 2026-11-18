@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { telemetry } from '../dev/telemetry.js'
 import { GatewayConfig } from './config.js'
 import { createGateway } from './server.js'
-import { Ledger, type LedgerEntry } from './ledger.js'
+import { Ledger, type LedgerRecord } from './ledger.js'
 import { loadRatings, observe, type ModelRating, type Observed } from './ratings.js'
 import { boardUrl, chainKeys, homeFile, keys, phrase } from '../env.js'
 import { boardGrantPool } from './grant-pool.js'
@@ -20,6 +20,7 @@ import { base58 } from '@scure/base'
 import { hashferenceFetch } from './providers.js'
 import { healthReader, readHealth } from '../health/gate.js'
 import { applyCatalog, fetchCatalog } from './catalog.js'
+import { HASHFERENCE, readKey, settledHashferenceUsage } from '../hashference.js'
 
 const cfg = GatewayConfig.parse(JSON.parse(readFileSync(process.env.GATEWAY_CONFIG ?? '/etc/gremlin/gateway.json', 'utf8')))
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a)
@@ -48,6 +49,26 @@ const refreshCatalog = async () => {
 void refreshCatalog()
 setInterval(() => void refreshCatalog(), 6 * 3_600_000).unref()
 
+const billedProviders = cfg.providers.filter(p => p.kind === 'hashference' && new URL(p.baseUrl).origin === HASHFERENCE)
+let syncingCharges = false
+async function syncCharges() {
+  if (syncingCharges) return
+  syncingCharges = true
+  try {
+    for (const p of billedProviders) {
+      const key = p.keyFile ? readKey(p.keyFile) : undefined
+      if (!key) continue
+      try {
+        for (const charge of await settledHashferenceUsage(key)) ledger.settle(p.id, charge.id, charge.costMicrousd)
+      } catch { log('Hashference charge reconciliation unavailable; keeping local estimates') }
+    }
+  } finally { syncingCharges = false }
+}
+if (billedProviders.length) {
+  void syncCharges()
+  setInterval(() => void syncCharges(), 60_000).unref()
+}
+
 // gremlin-auto reads ratings (GREMLIN_HOME/ratings.json, refreshed by the rating skill) and the last 30 days of the
 // ledger, at most once a minute.
 let cache: { at: number; ratings: ModelRating[]; seen: Map<string, Observed> } | undefined
@@ -55,7 +76,7 @@ const router = () => {
   if (!cache || Date.now() - cache.at > 60_000) {
     const since = new Date(Date.now() - 30 * 86_400_000).toISOString()
     const entries = existsSync(ledgerFile)
-      ? readFileSync(ledgerFile, 'utf8').split('\n').flatMap((l) => { try { const e = JSON.parse(l) as LedgerEntry; return e.at >= since ? [e] : [] } catch { return [] } })
+      ? readFileSync(ledgerFile, 'utf8').split('\n').flatMap((l) => { try { const e = JSON.parse(l) as LedgerRecord; return e.kind !== 'settlement' && e.at >= since ? [e] : [] } catch { return [] } })
       : []
     cache = { at: Date.now(), ratings: loadRatings(homeFile('ratings.json')), seen: observe(entries) }
   }
@@ -92,7 +113,7 @@ createGateway(cfg, {
   captureDetails: diagnostics.enabled,
   onCall: (r, t) => {
     const entry = ledger.record(r, t)
-    diagnostics.emit('inference', { requestId: r.requestId, provider: r.provider, model: r.model, alias: r.alias, status: r.status, durationMs: r.ms, firstByteMs: r.firstByteMs, requestBytes: r.requestBytes, messageCount: r.messageCount, toolCount: r.toolCount, inputTokens: r.usage?.promptTokens, outputTokens: r.usage?.completionTokens, cachedInputTokens: r.usage?.cachedPromptTokens, reasoningTokens: r.usage?.reasoningTokens, valuedUsd: entry.usd, priced: entry.priced, estimated: !r.usage, usageReported: !!r.usage, lent: !!t.grantId, free: r.free, incomplete: !!r.incomplete, refused: !!r.refused })
+    diagnostics.emit('inference', { requestId: r.requestId, provider: r.provider, model: r.model, alias: r.alias, status: r.status, durationMs: r.ms, firstByteMs: r.firstByteMs, requestBytes: r.requestBytes, messageCount: r.messageCount, toolCount: r.toolCount, inputTokens: r.usage?.promptTokens, outputTokens: r.usage?.completionTokens, cachedInputTokens: r.usage?.cachedPromptTokens, reasoningTokens: r.usage?.reasoningTokens, valuedUsd: entry.usd, priced: entry.priced, estimated: !r.usage || !!r.incomplete, usageReported: !!r.usage, lent: !!t.grantId, free: r.free, incomplete: !!r.incomplete, refused: !!r.refused })
   },
   ...spending(cfg, ledger, grants, reservations),
 })
