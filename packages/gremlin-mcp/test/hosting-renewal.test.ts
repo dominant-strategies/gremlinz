@@ -44,6 +44,7 @@ describe('deterministic hosting renewal', () => {
   it('does not spend when hosting is healthy or the hosting wallet lacks USDC', async () => {
     const t = setup()
     await expect(renewHosting({ ...low, daysLeft: 30 }, t.deps)).resolves.toMatchObject({ state: 'skipped' })
+    await expect(renewHosting({ ...low, daysLeft: undefined }, t.deps)).resolves.toMatchObject({ state: 'skipped' })
     t.state.usdc = 0n
     await expect(renewHosting(low, t.deps)).resolves.toMatchObject({ state: 'skipped' })
     expect(t.state.pays).toBe(0)

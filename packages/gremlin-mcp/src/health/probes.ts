@@ -4,7 +4,7 @@
  */
 import { formatUnits } from 'ethers'
 import { JsonRpcProvider as QuaiProvider, Zone } from 'quais'
-import { fluence, localSigner, sporestack } from '@gremlins/hosting'
+import { fluence, localSigner, sporestack, type FluenceCharge } from '@gremlins/hosting'
 import { chainKeys, homeFile, phrase } from '../env.js'
 import { allBalances } from '../wallets/balances.js'
 import { QUAI, rpcFor } from '../wallets/chains.js'
@@ -13,36 +13,70 @@ import { readJson } from './stores.js'
 
 export interface HostingInfo { provider: string; balanceUsd?: number; hourlyUsd?: number; daysLeft?: number; error?: string }
 
+function billingNumber(value: unknown): number | undefined {
+  if (typeof value === 'string' && /^-?\d+(?:\.\d+)?$/.test(value)) value = Number(value)
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
 /**
- * Fluence's balance endpoint (/v2/users/balances) is not typed in our client. Read the first plausible USD figure from
- * its items; an unrecognised shape is "unknown", never zero.
+ * Fluence labels the CPU balance "usage". Accept the older unlabeled shape as well.
  */
 export function fluenceBalanceUsd(raw: unknown): number | undefined {
   const items = Array.isArray(raw) ? raw : Array.isArray((raw as { items?: unknown[] })?.items) ? (raw as { items: unknown[] }).items : [raw]
+  const balances = items.filter((it): it is Record<string, unknown> => !!it && typeof it === 'object')
+  const cpu = balances.some((it) => typeof it.featureKey === 'string') ? balances.filter((it) => it.featureKey === 'usage') : balances
   let total: number | undefined
-  for (const it of items) {
-    if (!it || typeof it !== 'object') continue
-    const o = it as Record<string, unknown>
-    const v = ['availableBalance', 'available', 'balance', 'amount'].map((k) => Number(o[k])).find((n) => Number.isFinite(n))
-    if (v !== undefined) total = (total ?? 0) + v
+  for (const it of cpu) {
+    const balance = ['availableBalance', 'available', 'balance', 'amount'].map((key) => billingNumber(it[key])).find((value) => value !== undefined)
+    if (balance === undefined) return undefined
+    total = (total ?? 0) + balance
   }
-  return total
+  return Number.isFinite(total) ? total : undefined
+}
+
+/** Use the newest account billing day that covers the VM and its attached billable resources. */
+function fluenceHourlyUsd(charges: FluenceCharge[], days: string[], resourceIds: string[]): number | undefined {
+  if (!Array.isArray(charges)) return undefined
+  for (const day of days) {
+    const rows = charges.filter((row) => row?.periodStart?.slice(0, 10) === day)
+    const billed = new Set<string>()
+    let hourlyUsd = 0
+    for (const row of rows) {
+      const cost = billingNumber(row.totalCost)
+      const hours = billingNumber(row.totalUsageHours)
+      if (cost === 0 && hours === 0) continue
+      if (cost === undefined || cost < 0 || hours === undefined || hours <= 0) return undefined
+      if (row.resourceId) billed.add(row.resourceId)
+      hourlyUsd += cost / hours
+    }
+    if (resourceIds.every((id) => billed.has(id)) && Number.isFinite(hourlyUsd) && hourlyUsd > 0) return hourlyUsd
+  }
+  return undefined
 }
 
 /** Fluence (hatch custody: hosting.json) or SporeStack (sporestack.json { token, machineId }, if the gremlin keeps one). */
-export async function hostingInfo(opts: { fetchImpl?: typeof fetch } = {}): Promise<HostingInfo | undefined> {
+export async function hostingInfo(opts: { fetchImpl?: typeof fetch; now?: () => number } = {}): Promise<HostingInfo | undefined> {
   const fl = readJson<{ provider?: string; hostingKey?: string; vmId?: string }>(homeFile('hosting.json'))
   if (fl?.hostingKey && fl.vmId) {
+    let balanceUsd: number | undefined
     try {
       const f = fluence({ signer: localSigner(fl.hostingKey as `0x${string}`), fetchImpl: opts.fetchImpl })
       await f.login()
-      const [bal, est] = await Promise.all([f.balance(), f.estimate(fl.vmId)])
-      const balanceUsd = fluenceBalanceUsd(bal)
-      const hourlyUsd = Number(est.hourlyTotal)
-      const daysLeft = balanceUsd !== undefined && hourlyUsd > 0 ? balanceUsd / (hourlyUsd * 24) : undefined
-      return { provider: 'fluence', balanceUsd, hourlyUsd: Number.isFinite(hourlyUsd) ? hourlyUsd : undefined, daysLeft, ...(balanceUsd === undefined ? { error: 'balance shape not recognised' } : {}) }
+      balanceUsd = fluenceBalanceUsd(await f.balance())
+      if (balanceUsd === undefined) return { provider: 'fluence', error: 'balance shape not recognised' }
+      const now = (opts.now ?? Date.now)()
+      const today = new Date(now).toISOString().slice(0, 10)
+      const yesterday = new Date(now - 86_400_000).toISOString().slice(0, 10)
+      const [vm, interfaces, charges] = await Promise.all([f.vm(fl.vmId), f.vmInterfaces(fl.vmId), f.dailyCharges(yesterday, today)])
+      if (vm.status !== 'launched' || !vm.bootDiskId) return { provider: 'fluence', balanceUsd, error: 'running VM billing resources unavailable' }
+      const disks = [vm.bootDiskId, ...(vm.dataDiskIds ?? [])]
+      const ips = interfaces.items.flatMap((iface) => iface.publicIpId ? [iface.publicIpId] : [])
+      const hourlyUsd = fluenceHourlyUsd(charges, [today, yesterday], [fl.vmId, ...disks, ...ips])
+      if (hourlyUsd === undefined) return { provider: 'fluence', balanceUsd, error: 'incomplete recent charges for the running VM' }
+      const daysLeft = Math.max(0, balanceUsd) / (hourlyUsd * 24)
+      return { provider: 'fluence', balanceUsd, hourlyUsd, ...(Number.isFinite(daysLeft) ? { daysLeft } : {}) }
     } catch (e) {
-      return { provider: 'fluence', error: (e as Error).message.slice(0, 160) }
+      return { provider: 'fluence', balanceUsd, error: (e as Error).message.slice(0, 160) }
     }
   }
   const ss = readJson<{ token?: string; machineId?: string }>(homeFile('sporestack.json'))

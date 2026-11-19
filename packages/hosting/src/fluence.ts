@@ -27,6 +27,7 @@ export interface FluenceVm {
   status: string
   sshKeyIds?: string[]
   bootDiskId?: string
+  dataDiskIds?: string[]
   interfaceIds?: string[]
   hasCloudInit?: boolean
   failure?: unknown
@@ -35,6 +36,13 @@ export interface FluenceVm {
 export interface Estimate {
   hourlyTotal: string
   monthlyTotal: string
+}
+
+export interface FluenceCharge {
+  periodStart?: string | null
+  resourceId?: string | null
+  totalUsageHours: string
+  totalCost: string
 }
 
 /** A Fluence API refusal, with the HTTP status and the problem `code` when Fluence names one. */
@@ -154,6 +162,10 @@ export function fluence(opts: { signer: HostingSigner; baseUrl?: string; fetchIm
     },
 
     balance: () => call<unknown>('GET', '/v2/users/balances'),
+    dailyCharges: (startDate: string, endDate: string) => {
+      const query = new URLSearchParams({ startDate, endDate, period: 'DAY' })
+      return call<FluenceCharge[]>('GET', `/v3/account/charges/aggregated?${query}`)
+    },
 
     /** Cheapest configuration with at least `minVcpu`/`minRamGb` in a cluster that still has a public IPv4. */
     async cheapestPlan(minVcpu = 1, minRamGb = 2): Promise<Plan> {
@@ -202,6 +214,7 @@ export function fluence(opts: { signer: HostingSigner; baseUrl?: string; fetchIm
     estimate: (vmId: string) => call<Estimate>('GET', `/v3/vms/${vmId}/estimate`),
     provision: (vmId: string) => call<FluenceVm>('POST', `/v3/vms/${vmId}/provision`),
     vm: (vmId: string) => call<FluenceVm>('GET', `/v3/vms/${vmId}`),
+    vmInterfaces: (vmId: string) => call<{ items: { publicIpId?: string | null }[] }>('GET', `/v3/vms/${vmId}/interfaces`),
     /** Terminate a provisioned VM. Its disks and public IP are retained (and billed) until deleted separately. */
     terminate: (vmId: string, idempotencyKey: string) => call<unknown>('POST', `/v3/vms/${vmId}/terminate`, undefined, { 'idempotency-key': idempotencyKey }),
     /** Throw away a draft (never provisioned). */

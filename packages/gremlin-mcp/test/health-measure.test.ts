@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { burnFromLedger, failedForInference, runnerEvents, wakeState } from '../src/health/measure.js'
 import { addEarning, earnings, inflowUsd, noteIssue, openIssues, signature, updateEarning } from '../src/health/stores.js'
-import { fluenceBalanceUsd } from '../src/health/probes.js'
+import { fluenceBalanceUsd, hostingInfo } from '../src/health/probes.js'
 
 const NOW = Date.parse('2026-11-10T12:00:00Z')
 const iso = (msAgo: number) => new Date(NOW - msAgo).toISOString()
@@ -106,5 +106,52 @@ describe('fluence balance', () => {
     expect(fluenceBalanceUsd({ items: [{ currency: 'USDC', balance: '12.5' }] })).toBe(12.5)
     expect(fluenceBalanceUsd([{ availableBalance: 3 }, { availableBalance: 2 }])).toBe(5)
     expect(fluenceBalanceUsd({ whatever: true })).toBeUndefined()
+    expect(fluenceBalanceUsd([{ featureKey: 'other', balance: '99' }, { featureKey: 'usage', balance: '0.24' }])).toBe(0.24)
+    expect(fluenceBalanceUsd([{ featureKey: 'other', balance: '99' }, { featureKey: 'usage', balance: null }])).toBeUndefined()
+  })
+})
+
+describe('Fluence hosting runway', () => {
+  const today = '2026-11-10'
+  const yesterday = '2026-11-09'
+  function charge(day: string, resourceId: string, totalCost: string, totalUsageHours = '10') {
+    return { periodStart: `${day}T00:00:00Z`, resourceId, totalCost, totalUsageHours }
+  }
+  function fakeFluence(charges: ReturnType<typeof charge>[], balance = '0.24') {
+    writeFileSync(join(home, 'hosting.json'), JSON.stringify({ hostingKey: `0x${'1'.repeat(64)}`, vmId: 'vm' }))
+    return (async (url: string, init?: RequestInit) => {
+      const { pathname, searchParams } = new URL(url)
+      if (pathname === '/v1/auth/siwe/nonce') return Response.json({ nonce: 'abcdefgh12345678' })
+      if (pathname === '/v1/auth/siwe') return Response.json({ accessToken: 'mock-token' })
+      expect(init?.method).toBe('GET')
+      if (pathname === '/v2/users/balances') return Response.json([{ featureKey: 'usage', balance }])
+      if (pathname === '/v3/vms/vm') return Response.json({ id: 'vm', status: 'launched', bootDiskId: 'boot', dataDiskIds: ['data'] })
+      if (pathname === '/v3/vms/vm/interfaces') return Response.json({ items: [{ publicIpId: 'ip' }] })
+      if (pathname === '/v3/account/charges/aggregated') {
+        expect(Object.fromEntries(searchParams)).toEqual({ startDate: yesterday, endDate: today, period: 'DAY' })
+        return Response.json(charges)
+      }
+      return new Response('Unexpected endpoint', { status: 409 })
+    }) as typeof fetch
+  }
+
+  const fullDay = (day: string) => [charge(day, 'vm', '0.025'), charge(day, 'boot', '0.01'), charge(day, 'data', '0.005'), charge(day, 'ip', '0.03')]
+
+  it('uses the running VM and account charges, including attached and separately billed resources', async () => {
+    const fetchImpl = fakeFluence([
+      ...fullDay(today), charge(today, 'retained-disk', '0.03'), charge(yesterday, 'old-vm', '10'),
+    ])
+    const info = await hostingInfo({ fetchImpl, now: () => NOW })
+    expect(info).toMatchObject({ provider: 'fluence', balanceUsd: 0.24 })
+    expect(info?.hourlyUsd).toBeCloseTo(0.01)
+    expect(info?.daysLeft).toBeCloseTo(1)
+  })
+
+  it('uses yesterday if today has incomplete billing, then reports unknown if neither day covers the VM', async () => {
+    const incomplete = [charge(today, 'vm', '0.01')]
+    const afterMidnight = await hostingInfo({ fetchImpl: fakeFluence([...incomplete, ...fullDay(yesterday)]), now: () => NOW })
+    expect(afterMidnight?.hourlyUsd).toBeCloseTo(0.007)
+    const noHistory = await hostingInfo({ fetchImpl: fakeFluence(incomplete), now: () => NOW })
+    expect(noHistory).toEqual({ provider: 'fluence', balanceUsd: 0.24, error: 'incomplete recent charges for the running VM' })
   })
 })
