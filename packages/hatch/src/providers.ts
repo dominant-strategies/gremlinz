@@ -178,8 +178,9 @@ export const PROVIDERS: LendingProvider[] = [
     budgetApi: 'none',
     setup: 'In the Claude Console, create a workspace just for this gremlin with a monthly spend limit (the default workspace can\'t have one), then an API key (sk-ant-api…) in that workspace.',
     notApiKeys: [{ re: /^sk-ant-(oat|ort|sid)/, why: 'This is a Claude.ai subscription token, not an API key. Anthropic does not allow Pro/Max credentials to be used by third-party tools or agents.' }],
-    suggestedModels: ['claude-sonnet-4-5', 'claude-haiku-4-5'],
-    price: { inputPerM: 3, outputPerM: 15 },
+    // Current models only: Anthropic answers 404 for a model it no longer serves (claude-sonnet-4-5 did, Nov 2026).
+    suggestedModels: ['claude-sonnet-5-5', 'claude-haiku-5-5'],
+    price: { inputPerM: 2, outputPerM: 10 },
   },
   {
     id: 'venice', name: 'Venice API', kind: 'api', stance: 'allowed-with-conditions',
