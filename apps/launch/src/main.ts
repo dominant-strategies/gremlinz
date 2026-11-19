@@ -5,7 +5,7 @@
  *  for that egg's address and hands it over → 7 fund it.
  * Nothing here holds the gremlin's keys; the egg generates them on its own server.
  */
-import { GremlinConfig as GremlinConfigSchema, ModelPolicy, MODEL_FAMILIES, MODEL_PROVIDERS, MODEL_TRAITS, classifyModel, describeRule, namedModels, type CatalogModel, type ModelRule, type ModelTrait, CONSTITUTION_SECTIONS, COVENANTS, DEFAULT_VAULT_TERMS, ECONOMIC_MODELS, MODEL_INFO, configHash, economicsOf, PRIVATE_DIRECTIONS_MAX, eggPublicKey, newPrivateDirections, privateCommitment, sealPrivateDirections, type Covenant, type Economics, type GremlinConfig } from '@gremlins/hatch'
+import { GremlinConfig as GremlinConfigSchema, ModelPolicy, MODEL_FAMILIES, MODEL_PROVIDERS, MODEL_TRAITS, classifyModel, describePolicy, describeRule, namedModels, type CatalogModel, type ModelRule, type ModelTrait, CONSTITUTION_SECTIONS, COVENANTS, DEFAULT_VAULT_TERMS, ECONOMIC_MODELS, MODEL_INFO, configHash, economicsOf, PRIVATE_DIRECTIONS_MAX, eggPublicKey, newPrivateDirections, privateCommitment, sealPrivateDirections, type Covenant, type Economics, type GremlinConfig } from '@gremlins/hatch'
 import { creatureSvg, type CreatureMood } from '@gremlins/hatch/creature'
 import { renderCloudInit } from '@gremlins/egg/dist/cloud-init.js'
 import { devSshKeys } from '@gremlins/egg/dist/dev-ssh.js'
@@ -491,7 +491,7 @@ async function stepModels() {
     try { pol = current() } catch (e) { return formError(form, (e as Error).message) }
     d.models = pol
     save()
-    next('models', byRef.get(pol.primary)?.name ?? pol.primary)
+    next('models', (pol.primary && byRef.get(pol.primary)?.name) ?? pol.primary ?? describePolicy(pol).split('\n')[0]!.replace(/^Primary: /, ''))
   }
 }
 

@@ -7,7 +7,7 @@
 import { GatewayConfig } from '../gateway/config.js'
 import { homeFile } from '../env.js'
 import { HASHFERENCE_MAIN_MODEL } from '../hashference.js'
-import { refAllowed, type ModelPolicy } from '@gremlins/hatch'
+import { namedModels, refAllowed, type ModelPolicy } from '@gremlins/hatch'
 
 export interface GatewayEnv {
   ollamaUrl?: string
@@ -66,7 +66,7 @@ type Target = GatewayConfig['routes'][string][number]
  */
 export function withPolicy(defaults: Target[], policy: ModelPolicy | undefined, providerIds: string[]): Target[] {
   if (!policy) return defaults
-  const named = [policy.primary, ...policy.approved].flatMap((ref) => {
+  const named = namedModels(policy).flatMap((ref) => {
     const i = ref.indexOf('/'), provider = ref.slice(0, i), model = ref.slice(i + 1)
     if (!providerIds.includes(provider)) return []
     return [defaults.find((d) => d.provider === provider && d.model === model) ?? { provider, model, inputPerM: 0, outputPerM: 0 }]

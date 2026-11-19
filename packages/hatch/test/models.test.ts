@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { GremlinConfig, ModelPolicy, classifyModel, configHash, describePolicy, hashferenceCatalog, modelAllowed, namedModels, refAllowed, veniceCatalog } from '../src/index.js'
+import { GremlinConfig, ModelPolicy, classifyModel, configHash, describePolicy, hashferenceCatalog, modelAllowed, namedModels, refAllowed, veniceCatalog, ModelChoice, UNKNOWN_PRICE, censored, classOf, legacyChoice, openaiCatalog, priceOf, rankModels } from '../src/index.js'
 
 const c = (id: string, hints = {}) => classifyModel(id, hints)
 
@@ -97,5 +97,53 @@ describe('catalogues', () => {
     const [m] = hashferenceCatalog({ data: [{ id: 'hashference-glm-5-3', name: 'GLM-5.3', hosting: 'hashference', supports_tools: true, credits_per_million_input_tokens: 441, credits_per_million_cached_input_tokens: 81.9, credits_per_million_output_tokens: 1386, context_length: 131072 }] })
     expect(m).toMatchObject({ ref: 'hashference/hashference-glm-5-3', family: 'glm', tools: true, inputPerM: 0.441, cachedInputPerM: 0.0819, outputPerM: 1.386 })
     expect(m!.traits).toEqual(expect.arrayContaining(['private', 'open-weights']))
+  })
+})
+
+describe('choosing models without naming them', () => {
+  // Anthropic's GET /v1/models shape, after claude-sonnet-4-5 was withdrawn.
+  const anthropic = openaiCatalog('anthropic', { data: [
+    { type: 'model', id: 'claude-opus-5-5', display_name: 'Claude Opus 5.5' },
+    { type: 'model', id: 'claude-sonnet-5-5', display_name: 'Claude Sonnet 5.5' },
+    { type: 'model', id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6' },
+    { type: 'model', id: 'claude-haiku-5-5', display_name: 'Claude Haiku 5.5' },
+  ] })
+
+  it('picks by tier from what the key actually serves, newest first', () => {
+    expect(rankModels(anthropic)[0]!.id).toBe('claude-sonnet-5-5')
+    expect(rankModels(anthropic, ModelChoice.parse({ tier: 'best' }))[0]!.id).toBe('claude-opus-5-5')
+    expect(rankModels(anthropic, ModelChoice.parse({ tier: 'fast' }))[0]!.id).toBe('claude-haiku-5-5')
+  })
+
+  it('reads an old grant\'s model list as preferences, then the same family', () => {
+    const c = legacyChoice(['claude-sonnet-4-5', 'claude-haiku-4-5'])
+    expect(c.families).toEqual(['anthropic'])
+    const ranked = rankModels(anthropic, c).map((m) => m.id)
+    expect(ranked[0]).toBe('claude-sonnet-5-5') // the named ones are gone; the family is not
+    const mixed = [...anthropic, ...openaiCatalog('openrouter', { data: [{ id: 'qwen/qwen3-235b-a22b' }] })]
+    expect(rankModels(mixed, c).some((m) => m.family === 'qwen')).toBe(false)
+  })
+
+  it('keeps to named models when told to, and skips models that aren\'t for chat', () => {
+    const c = ModelChoice.parse({ models: ['claude-haiku-5-5'], only: true })
+    expect(rankModels(anthropic, c).map((m) => m.id)).toEqual(['claude-haiku-5-5'])
+    expect(openaiCatalog('openai', { data: [{ id: 'text-embedding-3-large' }, { id: 'whisper-1' }] })).toEqual([])
+  })
+
+  it('looks prices up: catalogue first, then the table, never under-counting an unknown model', () => {
+    expect(priceOf('claude-sonnet-5-5')).toMatchObject({ inputPerM: 2, outputPerM: 10, source: 'table' })
+    expect(priceOf('claude-opus-9-9')).toMatchObject({ inputPerM: 5, outputPerM: 25 }) // Opus line
+    expect(priceOf('claude-nova-1')).toMatchObject({ inputPerM: 10, outputPerM: 50, source: 'estimate' }) // family worst case
+    expect(priceOf('some-new-model')).toMatchObject(UNKNOWN_PRICE)
+    const or = openaiCatalog('openrouter', { data: [{ id: 'deepseek/deepseek-v4', pricing: { prompt: '0.0000003', completion: '0.0000012' }, supported_parameters: ['tools'] }] })[0]!
+    expect(priceOf(or.id, or)).toMatchObject({ inputPerM: 0.3, outputPerM: 1.2, source: 'catalogue' })
+  })
+
+  it('sorts models into provider, open-source and uncensored classes', () => {
+    expect(classOf(classifyModel('claude-sonnet-5-5'))).toBe('frontier')
+    expect(classOf(classifyModel('qwen3-235b-a22b'))).toBe('open')
+    expect(classOf(classifyModel('llama-3.3-70b-abliterated'))).toBe('uncensored')
+    expect(censored(classifyModel('venice-uncensored'))).toBe(false)
+    expect(rankModels([...anthropic, { id: 'qwen3-abliterated', ...classifyModel('qwen3-abliterated') }], ModelChoice.parse({ classes: ['uncensored'] })).map((m) => m.id)).toEqual(['qwen3-abliterated'])
   })
 })
