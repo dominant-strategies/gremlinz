@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Wallet } from 'ethers'
-import { buildGrant, openApiKey } from '@gremlins/hatch'
+import { ANY_MODEL, buildGrant, openApiKey } from '@gremlins/hatch'
 import { DEFAULT_BUDGET, formPolicy, providerOptions } from '../src/lend-form.js'
 
 describe('lending form', () => {
@@ -34,7 +34,7 @@ describe('lending form', () => {
     const gremlin = Wallet.createRandom()
     const g = await buildGrant({
       lender: Wallet.createRandom().address, gremlin: gremlin.address, gremlinPublicKey: gremlin.signingKey.publicKey, providerId: 'hashference',
-      models: ['hashference-glm-5-3'], inputPerM: 0.441, outputPerM: 1.386, repay: 'patron', apiKey: 'hf_secret',
+      choice: ANY_MODEL, repay: 'patron', apiKey: 'hf_secret',
       wishes: { purposes: ['anything'], forbidden: '', preferredModels: [], creditAs: '' }, policy: formPolicy(DEFAULT_BUDGET, 'hashference'),
     })
     expect(g.provider).toMatchObject({ id: 'hashference', baseUrl: 'https://hashference.com/v1', budgetApi: 'hashference' })

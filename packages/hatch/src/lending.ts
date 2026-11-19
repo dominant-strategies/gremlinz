@@ -5,6 +5,7 @@
  */
 import { GrantPolicy, GrantWishes, newGrantId, sealApiKey, type GrantProvider, type KeyGrant } from './grants.js'
 import { keyProblem, lendProblem, lendingProvider, providerOf, type LendingProvider } from './providers.js'
+import { ModelChoice, describeChoice, priceOf } from './models.js'
 
 export type LendPreset =
   /** "Use up to {pct}% of what's left within {hours} hours of my reset" */
@@ -55,9 +56,10 @@ export function policyLines(policy: GrantPolicy): string[] {
 }
 
 /** The whole grant in plain language, for the review step. */
-export function grantSummary(g: Pick<KeyGrant, 'provider' | 'policy' | 'repay' | 'wishes' | 'expiresAt'>, gremlinName: string): string[] {
+export function grantSummary(g: Pick<KeyGrant, 'provider' | 'policy' | 'repay' | 'wishes' | 'expiresAt' | 'modelChoice'>, gremlinName: string): string[] {
   const p = providerOf(g.provider)
-  const out = [`${gremlinName} may call ${p?.name ?? g.provider.label} with your key, using ${g.provider.models.join(', ')}.`, ...policyLines(g.policy)]
+  const using = g.modelChoice ? `${describeChoice(g.modelChoice)}, from the models your key offers` : g.provider.models.join(', ')
+  const out = [`${gremlinName} may call ${p?.name ?? g.provider.label} with your key, using ${using}.`, ...policyLines(g.policy)]
   out.push(`Your key is sealed in this browser so only ${gremlinName} can open it; the board only relays ciphertext.`)
   out.push(g.repay === 'patron' ? 'It repays you as a patron: what it uses is credited to you, publicly.' : 'It repays you as a syndicate backer: it buys you shares out of its income.')
   const w = g.wishes
@@ -109,15 +111,29 @@ export interface GrantDraft {
   /** Only for the custom provider: the lender's own server. */
   baseUrl?: string
   label?: string
-  models: string[]
-  inputPerM: number
-  outputPerM: number
+  /** Which of the key's models to use. Prices and the model list for older gremlins are filled in from it. */
+  choice: ModelChoice
   policy: GrantPolicy
   repay: KeyGrant['repay']
   wishes: GrantWishes
   apiKey: string
   expiresAt?: string
   now?: Date
+}
+
+/**
+ * The model list older gremlins read (they predate modelChoice): the models named, else the provider's current
+ * defaults. Nobody types these.
+ */
+export function compatModels(d: Pick<GrantDraft, 'providerId' | 'choice'>): string[] {
+  const named = d.choice.models.slice(0, 20)
+  return named.length ? named : (lendingProvider(d.providerId)?.suggestedModels ?? ['default']).slice(0, 20)
+}
+
+/** The flat price older gremlins value every call at: the dearest of those models, so a budget is never under-counted. */
+export function compatPrice(models: string[]): { inputPerM: number; outputPerM: number } {
+  const ps = models.map((m) => priceOf(m))
+  return { inputPerM: Math.max(...ps.map((p) => p.inputPerM)), outputPerM: Math.max(...ps.map((p) => p.outputPerM)) }
 }
 
 /** Every reason this draft can't be lent, checked BEFORE the key is sealed. Empty: fine. */
@@ -135,11 +151,12 @@ export function draftProblems(d: Omit<GrantDraft, 'gremlinPublicKey'>): string[]
   }
   const kp = keyProblem(d.providerId, d.apiKey)
   if (kp) out.push(kp)
-  if (!d.models.length) out.push('pick at least one model')
+  if (!ModelChoice.safeParse(d.choice).success) out.push('the model choice is incomplete')
+  else if (d.choice.only && !d.choice.models.length) out.push('name at least one model, or let it use any')
   if (!GrantPolicy.safeParse(d.policy).success) out.push('the budget rules are incomplete')
   const w = GrantWishes.safeParse(d.wishes)
   if (!w.success) out.push('the wishes are too long')
-  else if (d.wishes.preferredModels.some((m) => !d.models.includes(m))) out.push('preferred models must be among the models you lend')
+  else if (d.wishes.preferredModels.some((m) => !compatModels(d).includes(m))) out.push('preferred models must be among the models you lend')
   return out
 }
 
@@ -150,11 +167,11 @@ export async function buildGrant(d: GrantDraft): Promise<KeyGrant> {
   const p = lendingProvider(d.providerId)!
   const provider: GrantProvider = {
     id: p.id, label: (d.label || p.name).slice(0, 80), baseUrl: (p.kind === 'custom' ? d.baseUrl! : p.baseUrl!).replace(/\/$/, ''),
-    models: d.models, inputPerM: d.inputPerM, outputPerM: d.outputPerM, budgetApi: p.budgetApi,
+    models: compatModels(d), ...compatPrice(compatModels(d)), budgetApi: p.budgetApi,
   }
   return {
     kind: 'key-grant', address: d.lender, gremlin: d.gremlin, grantId: newGrantId(), provider, policy: d.policy, repay: d.repay,
-    wishes: GrantWishes.parse(d.wishes), sealedKey: await sealApiKey(d.gremlinPublicKey, d.apiKey.trim()), createdAt: (d.now ?? new Date()).toISOString(),
+    wishes: GrantWishes.parse(d.wishes), modelChoice: ModelChoice.parse(d.choice), sealedKey: await sealApiKey(d.gremlinPublicKey, d.apiKey.trim()), createdAt: (d.now ?? new Date()).toISOString(),
     ...(d.expiresAt ? { expiresAt: d.expiresAt } : {}),
   }
 }

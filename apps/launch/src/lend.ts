@@ -7,7 +7,7 @@
  */
 import { creatureSvg } from '@gremlins/hatch/creature'
 import {
-  buildGrant, draftProblems, grantSummary, lendingProvider, messageDigest, publicKeyFromSigned,
+  ModelChoice, buildGrant, compatModels, compatPrice, describeChoice, draftProblems, grantSummary, lendingProvider, messageDigest, publicKeyFromSigned,
   type EggAnnouncement, type GrantWishes, type KeyGrant, type KeyRevoke, type Signed,
 } from '@gremlins/hatch'
 import { account, keyWallet, mountAuth, onAccountChange, walletErrorMessage } from './auth.js'
@@ -82,12 +82,8 @@ function onProvider() {
     ${p.conditions.length ? `<p class="small"><b>By lending you accept:</b></p><ul class="small">${p.conditions.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>` : ''}
     ${src ? `<details class="small"><summary>What ${esc(p.name)}'s terms say</summary><ul>${src}</ul></details>` : ''}
     ${p.limits ? `<p class="small muted">The gremlin will use at most ${Math.floor(p.limits.rpm / 2)} requests a minute and ${Math.max(1, Math.floor(p.limits.concurrency / 2))} at a time on your key (half of ${esc(p.name)}'s entry tier), and backs off whenever ${esc(p.name)} says so.</p>` : ''}`
-  $<HTMLInputElement>('models').value = (p.suggestedModels ?? []).join(', ')
-  $<HTMLInputElement>('in-price').value = String(p.price?.inputPerM ?? 1)
-  $<HTMLInputElement>('out-price').value = String(p.price?.outputPerM ?? 3)
   // "What's left" needs a provider that reports it.
   $('leftover-note').textContent = p.budgetApi === 'none' ? `${p.name} doesn't report what's left on a key, so this counts as a share of your budget.` : `${p.name} reports what's left on your key, so the gremlin only ever uses what you didn't.`
-  renderPreferred()
   update()
 }
 
@@ -100,16 +96,27 @@ function renderPurposes() {
 
 const models = () => val('models').split(',').map((m) => m.trim()).filter(Boolean)
 
-function renderPreferred() {
-  const keep = new Set(checked('preferred'))
-  $('preferred').innerHTML = models().map((m) => `<label><input type="checkbox" name="preferred" value="${esc(m)}"${keep.has(m) ? ' checked' : ''}> ${esc(m)}</label>`).join('') || '<span class="small muted">Add models above.</span>'
+/** Which of the key's models: any (the default), some kinds, or only the ones named; and which tier first. */
+function choice(): ModelChoice {
+  // A provider that serves only its own models has no kinds to pick between.
+  const single = !!lendingProvider(providerId())?.singleMaker
+  $('model-kinds-pick').hidden = single
+  if (single && document.querySelector<HTMLInputElement>('input[name=model-mode][value=kinds]')?.checked) document.querySelector<HTMLInputElement>('input[name=model-mode][value=any]')!.checked = true
+  const mode = document.querySelector<HTMLInputElement>('input[name=model-mode]:checked')?.value ?? 'any'
+  $('model-kinds').hidden = mode !== 'kinds'
+  $('model-names').hidden = mode !== 'named'
+  return ModelChoice.parse({
+    tier: val('tier') || 'balanced',
+    classes: mode === 'kinds' ? checked('model-class') : [],
+    ...(mode === 'named' ? { models: models().slice(0, 20), only: true } : {}),
+  })
 }
 
 const checked = (name: string) => [...document.querySelectorAll<HTMLInputElement>(`input[name=${name}]:checked`)].map((i) => i.value)
 
 function wishes(): GrantWishes {
   const purposes = checked('purpose')
-  return { purposes: purposes.includes('anything') || !purposes.length ? ['anything'] : purposes, forbidden: val('forbidden').trim(), preferredModels: checked('preferred'), creditAs: val('credit').trim() }
+  return { purposes: purposes.includes('anything') || !purposes.length ? ['anything'] : purposes, forbidden: val('forbidden').trim(), preferredModels: [], creditAs: val('credit').trim() }
 }
 
 // ── budget ────────────────────────────────────────────────────────────────
@@ -135,7 +142,7 @@ function draft() {
   const expires = val('expires')
   return {
     lender: account()?.address ?? '0x0000000000000000000000000000000000000000', gremlin, providerId: p.id, baseUrl: p.kind === 'custom' ? val('base-url').trim() : undefined,
-    label: val('label').trim() || undefined, models: models(), inputPerM: num('in-price'), outputPerM: num('out-price'), policy,
+    label: val('label').trim() || undefined, choice: choice(), policy,
     repay: (document.querySelector<HTMLInputElement>('input[name=repay]:checked')?.value ?? 'patron') as KeyGrant['repay'], wishes: wishes(), apiKey: val('api-key'),
     ...(expires ? { expiresAt: new Date(`${expires}T23:59:59Z`).toISOString() } : {}),
   }
@@ -152,7 +159,7 @@ function update() {
     const d = draft()
     const problems = draftProblems(d)
     const p = lendingProvider(d.providerId)!
-    const lines = grantSummary({ provider: { id: p.id, label: d.label ?? p.name, baseUrl: d.baseUrl ?? p.baseUrl ?? 'https://example.invalid/v1', models: d.models, inputPerM: d.inputPerM, outputPerM: d.outputPerM, budgetApi: p.budgetApi }, policy: d.policy, repay: d.repay, wishes: d.wishes, expiresAt: d.expiresAt }, gremlinName)
+    const lines = grantSummary({ provider: { id: p.id, label: d.label ?? p.name, baseUrl: d.baseUrl ?? p.baseUrl ?? 'https://example.invalid/v1', models: compatModels(d), ...compatPrice(compatModels(d)), budgetApi: p.budgetApi }, policy: d.policy, repay: d.repay, wishes: d.wishes, expiresAt: d.expiresAt, modelChoice: d.choice }, gremlinName)
     // An empty key field isn't a mistake (it's also how the form looks right after lending): the button just waits.
     const shown = problems.filter((x) => x !== 'paste the API key')
     out.innerHTML = `<ul>${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>${shown.length ? `<p class="lend-problems">Before you can lend: ${shown.map(esc).join('; ')}.</p>` : ''}`
@@ -215,7 +222,7 @@ async function loadMine() {
     const state = g.revokedAt ? `<span class="pill pill-plain">revoked ${g.revokedAt.slice(0, 10)}</span>`
       : g.status === 'disabled' ? `<span class="pill pill-dead">stopped</span> <span class="small">The provider refused the key (${g.statusDetail?.httpStatus}), so ${esc(gremlinName)} stopped using it for good. If you revoked it at the provider, revoke it here too; to lend again, make a new key.</span>`
       : '<span class="pill pill-alive">active</span>'
-    return `<div class="card lend-grant"><div><b>${esc(m.provider.label)}</b> · ${esc(m.provider.models.join(', '))} · $${m.policy.budgetUsd} per ${m.policy.period.every} <span class="small muted">since ${m.createdAt.slice(0, 10)}</span></div>
+    return `<div class="card lend-grant"><div><b>${esc(m.provider.label)}</b> · ${esc(m.modelChoice ? describeChoice(ModelChoice.parse(m.modelChoice)) : m.provider.models.join(', '))} · $${m.policy.budgetUsd} per ${m.policy.period.every} <span class="small muted">since ${m.createdAt.slice(0, 10)}</span></div>
       <div>${state}</div>${!g.revokedAt ? `<button class="btn btn-small" data-revoke="${m.grantId}">Revoke</button>` : ''}</div>`
   }).join('')
 }
@@ -235,7 +242,7 @@ async function revoke(grantId: string) {
 renderProviders()
 $('lend-form').addEventListener('input', update)
 $('lend-form').addEventListener('change', update)
-$('models').addEventListener('input', renderPreferred)
+for (const el of document.querySelectorAll('input[name=model-mode], input[name=model-class], #models, #tier')) el.addEventListener(el.id === 'models' ? 'input' : 'change', update)
 $('lend-form').addEventListener('submit', (e) => { e.preventDefault(); void lend() })
 $('mine').addEventListener('click', (e) => { const id = (e.target as HTMLElement).dataset.revoke; if (id) void revoke(id) })
 onAccountChange(() => { void loadMine(); update() })

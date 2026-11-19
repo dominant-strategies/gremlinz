@@ -7,7 +7,7 @@ import { messageDigest, type KeyRevoke } from '@gremlins/hatch'
 import { account, hasSiteKey, keyWallet, onAccountChange, sitePostJson, unlockSiteKey, walletErrorMessage } from './auth.js'
 
 interface Gift { id: number; kind: 'crypto' | 'hashrate'; gremlin: string; chain: string; txHash: string | null; coin: string; amount: string; decimals: number; usd: number | null; public: boolean; status: string; detail: string | null; at: string }
-interface Grant { grantId: string; gremlin: string; provider: string; models: string[]; budgetUsd: number; period: string | null; createdAt: string; revokedAt: string | null; disabled: boolean; public: boolean }
+interface Grant { grantId: string; gremlin: string; provider: string; models: string[]; modelChoice?: string; budgetUsd: number; period: string | null; createdAt: string; revokedAt: string | null; disabled: boolean; public: boolean }
 interface Name { name: string; avatar: string; href: string }
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!)
@@ -67,7 +67,7 @@ export function mountGiving(root: HTMLElement) {
         const f = face(g.gremlin)
         const state = g.revokedAt ? `<span class="gv-status">taken back ${day(g.revokedAt)}</span>` : g.disabled ? '<span class="gv-status bad">the provider refused it</span>' : '<span class="gv-status">in use</span>'
         return { at: g.createdAt, html: `<li class="give">${f.pic}<div style="flex:1"><div class="gv-row"><div><div class="give-what">An API key: ${esc(g.provider)}, up to $${g.budgetUsd}${g.period ? ` a ${esc(g.period)}` : ''} ${state}</div>
-          <div class="small muted">to <a href="${f.href}">${f.name}</a> · ${day(g.createdAt)} · ${esc(g.models.slice(0, 3).join(', '))}</div></div>
+          <div class="small muted">to <a href="${f.href}">${f.name}</a> · ${day(g.createdAt)} · ${esc(g.modelChoice ?? g.models.slice(0, 3).join(', '))}</div></div>
           <div class="gv-acts">${vis('grant', g.grantId, g.public)}${g.revokedAt ? '' : `<button type="button" class="btn btn-small" data-revoke="${g.grantId}">Take it back</button>`}</div></div></div></li>` }
       }),
     ].sort((a, b) => b.at.localeCompare(a.at))

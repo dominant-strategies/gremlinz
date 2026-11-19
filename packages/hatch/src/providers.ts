@@ -68,6 +68,8 @@ export interface LendingProvider {
   notApiKeys?: { re: RegExp; why: string }[]
   /** Models to suggest on the lending page. */
   suggestedModels?: string[]
+  /** Serves only its own maker's models (Anthropic, Google): there are no kinds to choose between. */
+  singleMaker?: boolean
   /** Value per million tokens to suggest, for repayment accounting. */
   price?: { inputPerM: number; outputPerM: number }
 }
@@ -139,7 +141,7 @@ export const PROVIDERS: LendingProvider[] = [
     setup: 'Use a pay-as-you-go balance (not a subscription) and lend only what you are happy to spend: NanoGPT has no per-key cap we could confirm, so keep the balance small or use a separate account.',
   },
   {
-    id: 'gemini', name: 'Google Gemini API', kind: 'api', stance: 'allowed-with-conditions',
+    id: 'gemini', name: 'Google Gemini API', kind: 'api', stance: 'allowed-with-conditions', singleMaker: true,
     conditions: [
       'You stay responsible for generated content and for anyone you share it with.',
       'Use a separate Google Cloud project for the key, with a budget alert (Google budgets alert; they do not hard-cap).',
@@ -157,7 +159,7 @@ export const PROVIDERS: LendingProvider[] = [
     suggestedModels: ['gemini-2.5-flash', 'gemini-2.5-pro'],
   },
   {
-    id: 'anthropic', name: 'Anthropic API (Claude, pay as you go)', kind: 'api', stance: 'allowed-with-conditions',
+    id: 'anthropic', name: 'Anthropic API (Claude, pay as you go)', kind: 'api', stance: 'allowed-with-conditions', singleMaker: true,
     conditions: [
       'An API key from a Console workspace you pay for, never a Claude Pro/Max/Team login or token.',
       'You stay responsible for all activity on the key, and nothing is resold.',

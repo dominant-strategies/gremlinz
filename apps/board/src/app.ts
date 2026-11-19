@@ -28,6 +28,9 @@ import { checkClaim, hatchView, newJob, type HatchConfig } from './hatch.ts'
 import { ProfileBody, ProfileError, Profiles, isHeavyAvatar, profileAttestation, profileView } from './profiles.ts'
 import { NftVerifier } from './nft.ts'
 import { humanSvg, humanTraits, type HumanSpec } from '@gremlins/hatch'
+import { ModelChoice, describeChoice } from '@gremlins/hatch'
+/** A grant's model choice in words, or undefined for grants from before choices (or a malformed one). */
+const choiceText = (c: unknown) => { const p = ModelChoice.safeParse(c); return c !== undefined && p.success ? describeChoice(p.data) : undefined }
 
 export interface BoardDeps {
   store: BoardStore
@@ -611,6 +614,7 @@ export async function createBoard(deps: BoardDeps) {
       gifts: gifts.map(giftView),
       grants: grants.map((g) => ({
         grantId: g.grantId, gremlin: checksum(g.gremlin), provider: g.signed.message.provider.label, models: g.signed.message.provider.models,
+        ...(choiceText(g.signed.message.modelChoice) ? { modelChoice: choiceText(g.signed.message.modelChoice) } : {}),
         budgetUsd: g.signed.message.policy.budgetUsd, period: (g.signed.message.policy as { period?: { every?: string } }).period?.every ?? null,
         createdAt: new Date(g.createdAt).toISOString(), revokedAt: g.revokedAt ? new Date(g.revokedAt).toISOString() : null,
         disabled: g.status?.status === 'disabled', public: g.public,

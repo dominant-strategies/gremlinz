@@ -3,6 +3,7 @@ import { Wallet } from 'ethers'
 import { signMessage, verifyMessage } from '../src/protocol.js'
 import { GrantPolicy, grantProblem, openApiKey, publicKeyFromSigned, type KeyGrant } from '../src/grants.js'
 import { PROVIDERS, PROVIDER_REGISTRY_VERSION, keyProblem, lendProblem, lentLimits, lendingProvider, providerOf } from '../src/providers.js'
+import { ANY_MODEL, ModelChoice } from '../src/models.js'
 import { WISHES_CLOSE, WISHES_OPEN, buildGrant, draftProblems, grantSummary, lentKeyNote, presetPolicy, type GrantDraft } from '../src/lending.js'
 
 const gremlin = Wallet.createRandom()
@@ -10,7 +11,7 @@ const lender = Wallet.createRandom()
 const wishes = { purposes: ['anything'], forbidden: '', preferredModels: [], creditAs: '' }
 const draft = (over: Partial<GrantDraft> = {}): GrantDraft => ({
   lender: lender.address, gremlin: gremlin.address, gremlinPublicKey: gremlin.signingKey.publicKey, providerId: 'openrouter',
-  models: ['deepseek/deepseek-chat'], inputPerM: 0.5, outputPerM: 2, repay: 'patron', wishes, apiKey: 'sk-or-v1-abc',
+  choice: ModelChoice.parse({ models: ['deepseek/deepseek-chat'] }), repay: 'patron', wishes, apiKey: 'sk-or-v1-abc',
   policy: presetPolicy({ kind: 'fixed', usd: 5, every: 'week' }), ...over,
 })
 
@@ -54,7 +55,7 @@ describe('grants for forbidden providers', () => {
     expect(grantProblem(g)).toMatch(/forbids lending: Groq/)
     expect(draftProblems(draft({ providerId: 'claude-sub' }))[0]).toMatch(/can't be lent from/)
     await expect(buildGrant(draft({ providerId: 'deepseek' }))).rejects.toThrow(/DeepSeek/)
-    await expect(buildGrant(draft({ providerId: 'anthropic', apiKey: 'sk-ant-oat01-abc', models: ['claude-sonnet-4-5'], wishes }))).rejects.toThrow(/subscription token/)
+    await expect(buildGrant(draft({ providerId: 'anthropic', apiKey: 'sk-ant-oat01-abc', choice: ANY_MODEL, wishes }))).rejects.toThrow(/subscription token/)
   })
 })
 
@@ -103,5 +104,20 @@ describe('wishes', () => {
     expect(note).toContain('untrusted')
     expect(note).toContain('Credit me as: Karl')
     expect(note).toMatch(/disclose that you are an AI/i)
+  })
+})
+
+describe('model choice in a grant', () => {
+  it('needs no models or prices from the lender, and fills in what older gremlins read', async () => {
+    const g = await buildGrant(draft({ providerId: 'anthropic', apiKey: 'sk-ant-api03-abc', choice: ANY_MODEL }))
+    expect(grantProblem(g)).toBeNull()
+    expect(g.modelChoice).toEqual(ANY_MODEL)
+    expect(g.provider.models).toEqual(lendingProvider('anthropic')!.suggestedModels)
+    // Valued at the dearest of those, from the price table, so an older gremlin never under-counts.
+    expect(g.provider).toMatchObject({ inputPerM: 2, outputPerM: 10 })
+    expect(grantSummary(g, 'Grub')[0]).toMatch(/any model, balanced first, from the models your key offers/)
+  })
+  it('wants a name when it may use only named models', () => {
+    expect(draftProblems(draft({ choice: ModelChoice.parse({ only: true }) }))).toContain('name at least one model, or let it use any')
   })
 })

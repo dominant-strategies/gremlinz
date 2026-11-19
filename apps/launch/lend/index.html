@@ -24,6 +24,8 @@
     .lend-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
     .lend-setup { background: var(--field); border-radius: 12px; padding: 12px 14px; }
     .lend-setup p { margin: 0 0 8px; }
+    .lend-models { display: grid; gap: 8px; }
+    .lend-indent { display: grid; gap: 6px; margin-left: 26px; }
     .lend-summary ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
     .lend-problems { color: var(--rosso); font-weight: 600; margin: 10px 0 0; }
     .lend-grant { display: grid; gap: 8px; margin-bottom: 10px; }
@@ -58,12 +60,20 @@
         <label id="custom-url" hidden>Your server's base URL (https, ending in /v1)<input id="base-url" type="url" placeholder="https://llm.example.com/v1"></label>
         <label>API key<input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste a dedicated, budget-capped key"></label>
         <label>Name it (shown publicly)<input id="label" maxlength="80" placeholder="e.g. my spare OpenRouter budget"></label>
-        <label>Models it may use (comma separated, at most 20)<input id="models" placeholder="provider/model, …"></label>
-        <div class="lend-row">
-          <label>Value per million input tokens ($)<input id="in-price" type="number" min="0" step="0.01" value="1"></label>
-          <label>Value per million output tokens ($)<input id="out-price" type="number" min="0" step="0.01" value="3"></label>
+        <div class="lend-models">
+          <p class="small" style="margin:0 0 6px"><b>Which models</b></p>
+          <label><input type="radio" name="model-mode" value="any" checked> Any model your key can use <span class="muted">(recommended)</span></label>
+          <label id="model-kinds-pick"><input type="radio" name="model-mode" value="kinds"> Only some kinds</label>
+          <div id="model-kinds" class="lend-indent" hidden>
+            <label><input type="checkbox" name="model-class" value="frontier"> Provider models (Claude, GPT, Gemini…)</label>
+            <label><input type="checkbox" name="model-class" value="open"> Open-source models</label>
+            <label><input type="checkbox" name="model-class" value="uncensored"> Uncensored models</label>
+          </div>
+          <label><input type="radio" name="model-mode" value="named"> Only models I name</label>
+          <label id="model-names" class="lend-indent" hidden>Model names, as your provider writes them (comma separated)<input id="models" placeholder="e.g. claude-haiku-5-5"></label>
+          <label>Prefer<select id="tier"><option value="balanced" selected>Balanced: strong and sensibly priced</option><option value="best">Best: the strongest there</option><option value="fast">Fast and cheap</option></select></label>
+          <p class="small muted" style="margin:0"><span data-name>The gremlin</span> reads which models your key offers and what they cost by itself, and moves on when a model is retired. You don't need to name any.</p>
         </div>
-        <p class="small muted" style="margin:0">Prices value what it uses, for repaying you and for the per-call cap.</p>
       </fieldset>
 
       <fieldset>
@@ -107,7 +117,6 @@
         <p class="small muted" style="margin:0">Budgets and models are enforced. Your wishes go to <span data-name>the gremlin</span> with every call on your key, marked as yours, and it is asked to honour them.</p>
         <div><p class="small" style="margin:0 0 6px"><b>Use it for</b></p><div id="purposes" style="display:grid;gap:6px"></div></div>
         <label>Please don't use it for<textarea id="forbidden" rows="3" maxlength="1000" placeholder="e.g. nothing to do with gambling, no posting under my name"></textarea></label>
-        <div><p class="small" style="margin:0 0 6px"><b>Prefer these models</b></p><div id="preferred" style="display:grid;gap:6px"></div></div>
         <label>Credit me as (optional)<input id="credit" maxlength="80" placeholder="a name or @handle; empty: don't name me"></label>
       </fieldset>
 

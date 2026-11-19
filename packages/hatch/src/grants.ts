@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { messageDigest, type Signed } from './protocol.js'
 import { open, seal, type Sealed } from './seal.js'
 import { lendProblem } from './providers.js'
+import { ModelChoice } from './models.js'
 
 export const GrantRule = z.object({
   /** The rule applies only this close to the lender's reset. */
@@ -93,6 +94,11 @@ export interface KeyGrant {
   policy: GrantPolicy
   repay: 'patron' | 'syndicate'
   wishes?: GrantWishes
+  /**
+   * Which of the key's models to use, by tier and kind; the gremlin reads the key's model list and prices itself.
+   * Gremlins from before choices use provider.models and its prices instead, which the lend page fills in for them.
+   */
+  modelChoice?: ModelChoice
   /** The API key, sealed to the gremlin's public key. */
   sealedKey: Sealed
   createdAt: string
@@ -145,6 +151,7 @@ export function grantProblem(g: KeyGrant, now = new Date()): string | null {
   if (refused) return refused
   if (!GrantPolicy.safeParse(g.policy).success) return 'bad policy'
   if (g.wishes !== undefined && !GrantWishes.safeParse(g.wishes).success) return 'bad wishes'
+  if (g.modelChoice !== undefined && !ModelChoice.safeParse(g.modelChoice).success) return 'bad model choice'
   if (g.wishes?.preferredModels.some((m) => !g.provider.models.includes(m))) return "bad wishes: a preferred model is not one of the grant's models"
   if (g.expiresAt && (!Number.isFinite(Date.parse(g.expiresAt)) || Date.parse(g.expiresAt) <= now.getTime())) return 'expired'
   return null
