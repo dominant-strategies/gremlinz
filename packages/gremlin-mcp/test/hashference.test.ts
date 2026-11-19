@@ -225,6 +225,34 @@ describe('withdrawn models', () => {
       expect(seen).toEqual(['gone', 'live', 'live']) // retired after the first refusal; the provider itself was not benched
     } finally { gw.close(); up.close() }
   })
+  it('reads Anthropic\'s 404 for a model it no longer serves as the model being gone', async () => {
+    const seen: string[] = []
+    const up = createServer((req, res) => {
+      let body = ''
+      req.on('data', (c) => (body += c))
+      req.on('end', () => {
+        const model = JSON.parse(body).model as string
+        seen.push(model)
+        if (model === 'claude-sonnet-4-5') { res.statusCode = 404; return res.end('{"type":"error","error":{"type":"not_found_error","message":"model: claude-sonnet-4-5"}}') }
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: model } }] }))
+      })
+    })
+    await new Promise<void>((r) => up.listen(0, '127.0.0.1', r))
+    const u = `http://127.0.0.1:${(up.address() as { port: number }).port}`
+    const gw = createGateway(GatewayConfig.parse({
+      providers: [{ id: 'lent', kind: 'openai', baseUrl: `${u}/v1` }],
+      routes: { 'gremlin-main': [{ provider: 'lent', model: 'claude-sonnet-4-5' }, { provider: 'lent', model: 'claude-opus-5-5' }] },
+      glean: { enabled: false },
+    }))
+    await new Promise<void>((r) => gw.listen(0, '127.0.0.1', r))
+    const base = `http://127.0.0.1:${(gw.address() as { port: number }).port}/v1`
+    try {
+      const r = await (await fetch(`${base}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'gremlin-main', messages: [{ role: 'user', content: 'hi' }] }) })).json()
+      expect(r.choices[0].message.content).toBe('claude-opus-5-5')
+      expect(seen).toEqual(['claude-sonnet-4-5', 'claude-opus-5-5'])
+    } finally { gw.close(); up.close() }
+  })
 })
 
 describe('Hashference credential repair', () => {

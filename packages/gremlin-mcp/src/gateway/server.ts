@@ -81,7 +81,8 @@ const requestBytes = (body: Record<string, unknown>, model: string) => Buffer.by
 
 /** A model its provider stopped offering is skipped this long before trying it again. */
 const RETIRED_MS = 6 * 3_600_000
-const MODEL_GONE = /unsupported model|model not found|no such model|unknown model|model .{0,40} (?:does not exist|is not available)/i
+// Anthropic says it as not_found_error with the message "model: <id>".
+const MODEL_GONE = /unsupported model|model not found|no such model|unknown model|model .{0,40} (?:does not exist|is not available)|not_found_error.{0,80}"model: /i
 /** The longest a last-resort request waits for a free provider's call interval. */
 const LAST_RESORT_WAIT_MS = 20_000
 const DRAFT_LIMIT = 1024
