@@ -153,6 +153,11 @@ export interface BuyDeps {
   base?: string
   /** Pays `amountWei` QUAI to `to`; returns the transaction hash. */
   pay: (to: string, amountWei: bigint) => Promise<string>
+  /**
+   * The paying wallet's transaction count, pending included. With it, a payment that failed before broadcast (empty
+   * wallet, RPC refused it) is recognised as never sent instead of blocking every later top-up.
+   */
+  sentCount?: () => Promise<number>
   sleep?: (ms: number) => Promise<void>
   now?: () => number
   /** Shared by the monitor and manual top-ups; records intent before any transfer. */
@@ -160,19 +165,21 @@ export interface BuyDeps {
 }
 
 export interface Purchase { invoiceId: string; tx: string; quaiWei: bigint; status: Invoice['status']; usd?: number; recovered?: boolean }
-interface PurchaseJournal { requestId: string; usd: number; state: 'creating' | 'prepared' | 'sending' | 'sent' | 'complete'; invoice?: Invoice; tx?: string }
+interface PurchaseJournal { requestId: string; usd: number; state: 'creating' | 'prepared' | 'sending' | 'sent' | 'complete'; invoice?: Invoice; tx?: string; nonceBefore?: number }
 
 /**
  * Buy `usd` of credit: invoice, pay exactly the quoted QUAI, then poll for a few minutes (and point Hashference at the
  * transaction if it hasn't noticed). A transfer error may have happened after broadcast; the journal preserves that
- * uncertainty and refuses to pay again until the provider confirms the original invoice.
+ * uncertainty and refuses to pay again until the provider confirms the original invoice, unless the wallet's nonce
+ * shows nothing was sent. Dropping the purchase then is safe even if the lost transfer surfaces later: the next
+ * payment reuses that same nonce, so at most one of the two can ever be mined.
  */
 export async function buyCredit(key: HashferenceKey, usd: number, deps: BuyDeps): Promise<Purchase> {
   if (deps.journalFile) return withFileLock(deps.journalFile + '.lock', () => purchase(key, usd, deps))
   return purchase(key, usd, deps)
 }
 
-async function purchase(key: HashferenceKey, usd: number, deps: BuyDeps): Promise<Purchase> {
+async function purchase(key: HashferenceKey, usd: number, deps: BuyDeps, retried = false): Promise<Purchase> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const opts = { fetch: deps.fetch, base: deps.base }
   let journal: PurchaseJournal | undefined
@@ -185,9 +192,14 @@ async function purchase(key: HashferenceKey, usd: number, deps: BuyDeps): Promis
   if (!j.invoice) { j.invoice = await createQuaiInvoice(key, j.usd, { ...opts, requestId: j.requestId }); j.state = 'prepared'; save() }
   const inv = j.invoice
   const amount = BigInt(inv.amountAtomic)
+  const neverSent = async () => j.nonceBefore !== undefined && !!deps.sentCount && (await deps.sentCount()) === j.nonceBefore
   if (j.state === 'sending' && !j.tx) {
     const remote = await invoice(key, inv.id, opts)
-    if (remote.status !== 'paid') throw new Error(`Payment outcome unknown for invoice ${inv.id}; refusing another transfer until reconciled`)
+    if (remote.status !== 'paid') {
+      if (retried || !(await neverSent())) throw new Error(`Payment outcome unknown for invoice ${inv.id}; refusing another transfer until reconciled`)
+      j.state = 'complete'; save()
+      return purchase(key, usd, deps, true)
+    }
     j.state = 'complete'; save()
     return { invoiceId: inv.id, tx: 'unknown (provider confirmed payment)', quaiWei: amount, status: 'paid', usd: j.usd, recovered: true }
   }
@@ -196,8 +208,15 @@ async function purchase(key: HashferenceKey, usd: number, deps: BuyDeps): Promis
       j.state = 'complete'; save()
       throw new Error('the invoice expires too soon to pay safely; try again')
     }
+    if (deps.sentCount) j.nonceBefore = await deps.sentCount()
     j.state = 'sending'; save()
-    j.tx = await deps.pay(inv.addresses[0]!, amount)
+    try {
+      j.tx = await deps.pay(inv.addresses[0]!, amount)
+    } catch (e) {
+      // Leave the journal at 'sending' unless the nonce proves the transfer never left.
+      if (await neverSent().catch(() => false)) { j.state = 'complete'; save() }
+      throw e
+    }
     j.state = 'sent'; save()
   }
   const tx = j.tx!

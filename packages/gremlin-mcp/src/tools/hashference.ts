@@ -10,7 +10,8 @@ import { fail, text } from '../result.js'
 import { readHealth, spendGate } from '../health/gate.js'
 import { balance, buyCredit, readKey, setupKey, type Purchase } from '../hashference.js'
 import { send } from '../wallets/send.js'
-import { ASSETS } from '../wallets/chains.js'
+import { JsonRpcProvider as QuaiProvider } from 'quais'
+import { ASSETS, QUAI, rpcFor } from '../wallets/chains.js'
 import { recordSend } from '../wallets/policy.js'
 import { MakerApproval, requireMakerApproval, type Approve } from './approval.js'
 
@@ -19,6 +20,7 @@ export interface HashferenceDeps {
   base?: string
   /** Pays an invoice; defaults to a real QUAI transfer from the gremlin's wallet. Returns the transaction hash. */
   pay?: (to: string, amountWei: bigint) => Promise<string>
+  sentCount?: () => Promise<number>
   sleep?: (ms: number) => Promise<void>
 }
 
@@ -32,10 +34,17 @@ export async function payQuai(to: string, amount: bigint): Promise<string> {
   return r.tx
 }
 
+/** The gremlin's Quai transaction count, pending included: payQuai's next nonce. */
+export async function quaiSentCount(): Promise<number> {
+  const provider = new QuaiProvider(rpcFor('quai', QUAI.rpc), undefined, { usePathing: true })
+  return provider.getTransactionCount((await chainKeys()).quai.address, 'pending')
+}
+
 export function registerHashferenceTools(server: McpServer, deps: HashferenceDeps = {}, approve: Approve = requireMakerApproval) {
   const opts = { fetch: deps.fetch, base: deps.base }
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)))
   const pay = deps.pay ?? payQuai
+  const sentCount = deps.pay ? deps.sentCount : (deps.sentCount ?? quaiSentCount)
 
   server.registerTool('hashference_setup', {
     description:
@@ -88,7 +97,7 @@ export function registerHashferenceTools(server: McpServer, deps: HashferenceDep
     if (blocked) return fail(blocked)
     let p: Purchase
     try {
-      p = await buyCredit(k, usd, { ...opts, pay, sleep, journalFile: homeFile('inference-purchase.json') })
+      p = await buyCredit(k, usd, { ...opts, pay, sentCount, sleep, journalFile: homeFile('inference-purchase.json') })
     } catch (e) {
       return fail(`Top-up could not complete; check the invoice outcome before retrying: ${(e as Error).message.slice(0, 300)}`)
     }

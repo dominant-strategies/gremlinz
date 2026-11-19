@@ -85,6 +85,7 @@ export interface MonitorDeps {
     fetch?: typeof fetch
     base?: string
     pay?: (to: string, amountWei: bigint) => Promise<string>
+    sentCount?: () => Promise<number>
     sleep?: (ms: number) => Promise<void>
   }
   wallet?: () => Promise<WalletSnapshot>
@@ -201,7 +202,10 @@ export class HealthMonitor {
     let bought = 0
     if (plan.usd > 0 && key) {
       try {
-        const p = await buyCredit(key, plan.usd, { ...this.hf(), pay: this.d.hashference?.pay ?? (await import('../tools/hashference.js')).payQuai, now: this.d.now, journalFile: homeFile('inference-purchase.json') })
+        const tools = this.d.hashference?.pay ? undefined : await import('../tools/hashference.js')
+        const pay = this.d.hashference?.pay ?? tools!.payQuai
+        const sentCount = this.d.hashference?.sentCount ?? tools?.quaiSentCount
+        const p = await buyCredit(key, plan.usd, { ...this.hf(), pay, sentCount, now: this.d.now, journalFile: homeFile('inference-purchase.json') })
         const paidUsd = p.usd ?? plan.usd
         bought = p.status === 'paid' ? paidUsd : 0
         if (!readActions().some(a => a.kind === 'topup' && a.invoiceId === p.invoiceId))
