@@ -153,7 +153,9 @@ function update() {
     const problems = draftProblems(d)
     const p = lendingProvider(d.providerId)!
     const lines = grantSummary({ provider: { id: p.id, label: d.label ?? p.name, baseUrl: d.baseUrl ?? p.baseUrl ?? 'https://example.invalid/v1', models: d.models, inputPerM: d.inputPerM, outputPerM: d.outputPerM, budgetApi: p.budgetApi }, policy: d.policy, repay: d.repay, wishes: d.wishes, expiresAt: d.expiresAt }, gremlinName)
-    out.innerHTML = `<ul>${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>${problems.length ? `<p class="lend-problems">Before you can lend: ${problems.map(esc).join('; ')}.</p>` : ''}`
+    // An empty key field isn't a mistake (it's also how the form looks right after lending): the button just waits.
+    const shown = problems.filter((x) => x !== 'paste the API key')
+    out.innerHTML = `<ul>${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>${shown.length ? `<p class="lend-problems">Before you can lend: ${shown.map(esc).join('; ')}.</p>` : ''}`
     btn.disabled = problems.length > 0
   } catch (e) {
     out.innerHTML = `<p class="lend-problems">${esc((e as Error).message)}</p>`
@@ -178,7 +180,7 @@ async function lend() {
   status.textContent = 'Sealing your key to the gremlin and asking your wallet to sign…'
   try {
     const signed = await signBoardMessage((address) => buildGrant({ ...draft(), lender: address, gremlinPublicKey: gremlinPub }))
-    const r = await fetch('/api/grants', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(signed) })
+    const r = await fetch('/api/grants', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...signed, public: $<HTMLInputElement>('lend-public').checked }) })
     const j = (await r.json().catch(() => ({}))) as { error?: string }
     if (!r.ok) throw new Error(j.error ?? `the board said ${r.status}`)
     rememberLender(signed.message.address)
