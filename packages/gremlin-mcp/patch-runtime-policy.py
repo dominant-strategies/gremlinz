@@ -1,4 +1,4 @@
-"""Authorize only the maintenance calls needed by the two egg-installed jobs."""
+"""Apply the egg's cron policy when building with an older runtime pin."""
 from pathlib import Path
 import sys
 
@@ -19,4 +19,6 @@ policy = '''    if task_id.startswith("cron:a0a0a0a0a0a2:"):
             return None
         return {"action": "block", "message": "Optional maintenance can only read the board and record local issues."}
 '''
+if policy + anchor in source:
+    sys.exit(0)  # Current runtime commits already ship this policy.
 path.write_text(source.replace(anchor, policy + anchor))

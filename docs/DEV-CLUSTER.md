@@ -12,11 +12,11 @@ monitoring. The following instrumentation commit adds metadata-only diagnostics 
 Neither a local commit nor a website restart updates the pinned image used by a hosted gremlin.
 
 The Dockerfile defaults to Gremlin Runtime commit
-`14dec65a4549c8fd1484c83f0bc867dadafcdb2e`. Release builds require an explicit reviewed full SHA. Source and runtime
+`f4a630917fef53af9a8076f73eb06c2bb1854141`. Release builds require an explicit reviewed full SHA. Source and runtime
 commits are embedded as environment metadata and OCI labels. The build must use a clean committed working tree and builds from a Git archive of that exact commit.
 
 ```sh
-export HERMES_RUNTIME_REF=14dec65a4549c8fd1484c83f0bc867dadafcdb2e
+export HERMES_RUNTIME_REF=f4a630917fef53af9a8076f73eb06c2bb1854141
 scripts/build-release.sh linux/amd64 gremlins/egg:dev-cluster-$(git rev-parse --short HEAD)
 node scripts/test-reliability-docker.mjs gremlins/egg:dev-cluster-$(git rev-parse --short HEAD)
 ```

@@ -154,7 +154,7 @@ For the full image test on Linux with Docker and enough free disk/memory:
 nvm use
 npm run build
 docker build -f egg.Dockerfile \
-  --build-arg HERMES_RUNTIME_REF=14dec65a4549c8fd1484c83f0bc867dadafcdb2e \
+  --build-arg HERMES_RUNTIME_REF=f4a630917fef53af9a8076f73eb06c2bb1854141 \
   -t gremlins/egg:reliability-dev .
 node scripts/test-reliability-docker.mjs gremlins/egg:reliability-dev
 ```
