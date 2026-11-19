@@ -30,6 +30,7 @@ export function createHealthService(monitor: HealthMonitor, token: string, opts:
       if (req.url === '/check' && req.method === 'POST') return res.end(JSON.stringify(await check(true)))
       if (req.url === '/mining/on' && req.method === 'POST') monitor.miner.enable('strategy', 'requested by the gremlin')
       else if (req.url === '/mining/off' && req.method === 'POST') monitor.miner.disable('strategy', 'requested by the gremlin')
+      else if ((req.url === '/mining/donate/credits' || req.url === '/mining/donate/crypto') && req.method === 'POST') monitor.miner.setDonate(req.url.endsWith('credits') ? 'credits' : 'crypto')
       else { res.statusCode = 404; return res.end() }
       const health = await check()
       res.end(JSON.stringify({ health, state: monitor.miner.state() }))

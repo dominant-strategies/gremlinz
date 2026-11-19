@@ -100,6 +100,23 @@ export function registerHealthTools(server: McpServer, monitor: () => HealthMoni
       : `Mining ${s.auto ? 'stays on: your health monitor started it because you are starved; it stops once your credit is back above the floor' : 'is off'}.`)
   })
 
+  server.registerTool('donated_hashrate', {
+    description:
+      'Choose where hashrate people donate to you goes. "credits": their miners join Hashference\'s pool under your account, so it becomes inference credit at once (any CPU, GPU or ASIC). "crypto": GPU and ASIC miners mine QUAI to your own address through a public pool (paid out once it passes the pool\'s minimum; CPUs can\'t mine QUAI). Your page on the board shows donors the matching setup from your next check-in.',
+    inputSchema: { to: z.enum(['credits', 'crypto']), reason: z.string().max(500).optional() },
+  }, async ({ to, reason }) => {
+    if (process.env.GREMLIN_HEALTH_URL) {
+      try { await remoteHealth(`/mining/donate/${to}`) } catch (e) { return fail(`Health service unavailable: ${(e as Error).message}`) }
+    } else {
+      monitor().miner.setDonate(to)
+      await monitor().check().catch(() => undefined)
+    }
+    recordAction({ kind: 'donated-hashrate', detail: `${to}${reason ? `: ${reason}` : ''}` })
+    return text(to === 'credits'
+      ? 'Donated hashrate now goes to your Hashference credit (once you have a Hashference account; until then it goes to QUAI). Your page updates with your next check-in.'
+      : 'Donated hashrate now mines QUAI to your own address. Your page updates with your next check-in.')
+  })
+
   server.registerTool('earning_add', {
     description: 'Add an opportunity to your earning pipeline (the health monitor counts agreed and delivered work as expected income). status: idea, offered, agreed, delivered, paid or lost.',
     inputSchema: {

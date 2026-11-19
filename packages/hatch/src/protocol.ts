@@ -46,7 +46,14 @@ export interface Pulse {
   host?: string
   models?: string[]
   highlights?: string[]
+  /**
+   * Where hashrate people donate to it goes: Hashference credits (miners log in as `<hashferenceUser>.<worker>`) or
+   * QUAI mined to its own address. Absent on gremlins that predate it.
+   */
+  mining?: PulseMining
 }
+
+export interface PulseMining { donate: 'credits' | 'crypto'; hashferenceUser?: string }
 
 /**
  * A nest is a fresh server the gremlin launched for itself. It announces a transport key; the gremlin seals its

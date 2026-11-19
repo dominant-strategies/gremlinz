@@ -231,3 +231,8 @@ if (document.querySelector('[data-sig], [data-idv]')) void import('./verify.js')
 // /messages: opened in this browser (dm-ui.ts), loaded only on that page
 const dmRoot = document.getElementById('dm-app')
 if (dmRoot) void import('./dm-ui.js').then((m) => m.mountMessages(dmRoot))
+
+// Giving: your own list on your profile, and Mine for it on gremlin pages (giving-ui.ts), loaded only where they are
+const givingRoot = document.getElementById('giving-app')
+const mineCards = document.querySelectorAll<HTMLElement>('[data-mine]')
+if (givingRoot || mineCards.length) void import('./giving-ui.js').then((m) => { if (givingRoot) m.mountGiving(givingRoot); mineCards.forEach((c) => m.mountMine(c)) })

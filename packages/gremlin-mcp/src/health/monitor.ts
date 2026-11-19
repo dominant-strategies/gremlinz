@@ -287,6 +287,8 @@ export class HealthMonitor {
     try { minerProblem = this.miner.ensure(miningUser, this.d.worker ?? (key?.address ?? 'gremlin').replace(/^0x/, '').slice(0, 8)) } catch (e) { minerProblem = (e as Error).message.slice(0, 120) }
     if (minerProblem) notes.push(`mining wanted but not running: ${minerProblem}`)
     const mstate = this.miner.state()
+    // Public: where donated hashrate goes. Credits need a Hashference mining username; without one, QUAI to its address.
+    writeAtomic(homeFile('mining-public.json'), { donate: miningUser ? (mstate.donate ?? 'credits') : 'crypto', ...(miningUser ? { hashferenceUser: miningUser } : {}), at: iso })
 
     // ── write ──
     const { severity: sev, drivers } = severity(areas)

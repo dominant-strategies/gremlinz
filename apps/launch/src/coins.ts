@@ -1,5 +1,7 @@
 /** The coins and chains a gremlin can be fed with (no browser code here, so tests can load it). */
 export interface DonateTarget {
+  /** The gremlin's address (its gifts are recorded under it). */
+  gremlin?: string
   name: string
   quai?: string
   evm?: string

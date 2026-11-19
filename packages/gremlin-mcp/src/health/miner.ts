@@ -26,6 +26,8 @@ export interface MiningState {
   reason?: string
   since?: string
   lastStop?: { at: string; why: string }
+  /** Where hashrate people donate goes (published with each pulse): Hashference credits, or QUAI to its address. */
+  donate?: 'credits' | 'crypto'
 }
 
 export interface ChildLike { pid?: number; exitCode: number | null; signalCode?: NodeJS.Signals | null; kill(sig?: NodeJS.Signals): boolean; on(ev: 'exit', f: (code: number | null) => void): unknown }
@@ -106,6 +108,9 @@ export class Miner {
   }
 
   /** Turn on: strategy (the gremlin) or auto (the monitor). */
+  /** The gremlin's choice for donated hashrate; it reaches the board with the next pulse. */
+  setDonate(to: 'credits' | 'crypto') { this.save({ ...this.state(), donate: to }) }
+
   enable(by: 'strategy' | 'auto', reason?: string) {
     const s = this.state()
     this.save({ ...s, [by]: true, reason: reason ?? s.reason, since: s.since ?? new Date(this.d.now()).toISOString() })

@@ -208,7 +208,7 @@ export async function signedPost(path: string, body: unknown, signal?: AbortSign
 interface StoredSiteKey { address: string; pk: string; version: number; keyAddress: string }
 const SITE_KEY_STORE = 'gremlins.sitekey'
 /** Where the site key may sign (the board allows the same set; anything else is signed by the wallet). */
-const SITE_KEY_PATHS = /^\/api\/(c\/[^/]+\/posts|posts\/\d+\/comments|vote|communities|profile|forge\/|gremlins\/0x[0-9a-fA-F]{40}\/(design|look)$|dm\/(send|inbox))/
+const SITE_KEY_PATHS = /^\/api\/(c\/[^/]+\/posts|posts\/\d+\/comments|vote|communities|profile|forge\/|gremlins\/0x[0-9a-fA-F]{40}\/(design|look)$|dm\/(send|inbox)|giving(\/visibility)?$|gifts\/hashrate$)/
 
 export function storedSiteKey(): StoredSiteKey | undefined {
   try {

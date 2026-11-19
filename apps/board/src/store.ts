@@ -170,6 +170,30 @@ export interface GrantRecord {
   revokedAt: number | null
   /** Set by the gremlin when the provider refused the key (it stopped using it for good). */
   status?: { status: 'disabled'; httpStatus: number; reason: string; at: number } | null
+  /** Shown on the lender's profile and the gremlin's page (the signed grant itself still names the lender). */
+  public: boolean
+}
+
+/** A gift to a gremlin: crypto (checked on-chain; the giver is the sender) or hashrate (a pledge). See gifts.ts. */
+export interface GiftRecord {
+  id: number
+  kind: 'crypto' | 'hashrate'
+  /** Lowercased; '' until a crypto gift is confirmed (the chain says who sent it). */
+  giver: string
+  gremlin: string
+  /** Crypto: 'quai' or an EVM chain id. Hashrate: the route (randomx, kawpow, sha256, scrypt). */
+  chain: string
+  txHash: string | null
+  /** Crypto: the symbol. Hashrate: 'credits' or 'quai'. */
+  coin: string
+  amount: string
+  decimals: number
+  usd: number | null
+  public: boolean
+  status: 'pending' | 'confirmed' | 'failed' | 'pledged'
+  detail: string | null
+  createdAt: number
+  checkedAt: number | null
 }
 
 /** A Forge design a maker attached to their gremlin: what its page shows, and the share-card picture. */
@@ -346,10 +370,22 @@ export interface BoardStore {
 
   // key grants (sealed API keys lent to gremlins)
   /** Returns false if the grantId already exists. */
-  insertGrant(g: Omit<GrantRecord, 'revokedAt'>): Promise<boolean>
+  insertGrant(g: Omit<GrantRecord, 'revokedAt' | 'public'> & { public?: boolean }): Promise<boolean>
   getGrant(grantId: string): Promise<GrantRecord | null>
   listGrants(gremlin: string, includeRevoked: boolean): Promise<GrantRecord[]>
   revokeGrant(grantId: string, at: number): Promise<boolean>
+  listGrantsByLender(lender: string): Promise<GrantRecord[]>
+  setGrantPublic(grantId: string, pub: boolean): Promise<boolean>
+
+  // gifts (crypto and hashrate)
+  /** Null if that transaction is already recorded. */
+  addGift(g: Omit<GiftRecord, 'id'>): Promise<GiftRecord | null>
+  /** A giver's hashrate pledge to a gremlin on a route: created, or refreshed (visibility, time). */
+  pledgeHashrate(g: { giver: string; gremlin: string; chain: string; coin: string; public: boolean; at: number }): Promise<GiftRecord>
+  getGift(id: number): Promise<GiftRecord | null>
+  updateGift(id: number, patch: Partial<Pick<GiftRecord, 'giver' | 'coin' | 'amount' | 'decimals' | 'usd' | 'status' | 'detail' | 'checkedAt' | 'public'>>): Promise<void>
+  listGifts(q: { giver?: string; gremlin?: string; publicOnly?: boolean; statuses?: GiftRecord['status'][]; limit: number }): Promise<GiftRecord[]>
+
   /** Records the gremlin's report on a grant; false if it already has one. */
   setGrantStatus(grantId: string, status: NonNullable<GrantRecord['status']>): Promise<boolean>
 

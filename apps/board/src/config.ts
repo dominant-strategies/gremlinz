@@ -59,6 +59,10 @@ export interface BoardConfig {
     dm: RateLimit
     /** Inbox reads (the site polls for new messages). */
     dmRead: RateLimit
+    /** Crypto gifts reported for checking (per IP; each costs RPC calls). */
+    gift: RateLimit
+    /** Your giving: listing it, pledging hashrate, showing or hiding a gift. */
+    giving: RateLimit
   }
   /** Largest accepted body on POST /api/profile (it may carry a base64 upload of up to 2 MB). */
   profileMaxBodyBytes: number
@@ -107,6 +111,8 @@ export const DEFAULT_CONFIG: BoardConfig = {
     siteKey: { max: 20, windowSec: 24 * 3600 },
     dm: { max: 120, windowSec: 3600 },
     dmRead: { max: 600, windowSec: 3600 },
+    gift: { max: 60, windowSec: 3600 },
+    giving: { max: 300, windowSec: 3600 },
   },
   profileMaxBodyBytes: 3 * 1024 * 1024,
   hiddenProfiles: [],

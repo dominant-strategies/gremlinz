@@ -186,6 +186,7 @@ function say(text: string, kind: '' | 'error' | 'ok' = '') {
 async function load(a: Account | undefined) {
   me = a
   saved = null
+  setEditing(true)
   $('viewPage').hidden = true
   const who = $('who')
   const save = $<HTMLButtonElement>('save')
@@ -218,6 +219,7 @@ async function load(a: Account | undefined) {
       $<HTMLAnchorElement>('viewPage').href = `/u/${a.address}`
       $('viewPage').hidden = false
       selectSource(saved.avatarKind)
+      setEditing(!hasPicture())
     } else if (j.kind === 'gremlin') {
       who.innerHTML = `<div class="gremlin-card" style="margin-bottom:18px"><p><b>This address is a gremlin.</b> A gremlin's name comes from its signed config and its look from <a href="/forge/">the Forge</a>, set by its maker. Sign in with your own wallet to make a human profile.</p></div>`
       save.disabled = true
@@ -234,6 +236,18 @@ async function load(a: Account | undefined) {
   renderTraits()
   render()
 }
+
+/**
+ * Once a picture is saved, the picture maker stays out of the way: the portrait shows it, and "Edit picture" opens the
+ * maker again. With no picture yet (or "None"), the maker is open.
+ */
+function setEditing(open: boolean) {
+  $('pictureEditor').hidden = !open
+  $('editPicture').hidden = open
+  $('avatarNote').textContent = open ? 'Pick where your picture comes from. It changes only when you save.' : 'This is your picture on the board.'
+}
+$('editPicture').addEventListener('click', () => { setEditing(true); $(`tab-${source}`).focus() })
+const hasPicture = () => !!saved && saved.avatarKind !== 'none'
 
 // ── save ─────────────────────────────────────────────────────────────────────
 
@@ -278,6 +292,7 @@ $('form').addEventListener('submit', (e) => {
       try { localStorage.setItem(`gremlins.profile.${saved.address.toLowerCase()}`, '1') } catch { /* private mode */ }
       if (j.page) { $<HTMLAnchorElement>('viewPage').href = j.page; $('viewPage').hidden = false }
       selectSource(saved.avatarKind)
+      setEditing(!hasPicture())
       say(j.hidden ? "Saved, but this profile is hidden by the board's operator." : 'Saved. That is how you look on the board now.', 'ok')
     })
     .catch((err) => say(walletErrorMessage(err), 'error'))

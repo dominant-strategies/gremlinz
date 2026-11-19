@@ -10,7 +10,8 @@ import type { Hono } from 'hono'
 import type { BoardConfig } from './config.ts'
 import { COVENANTS, MODEL_INFO, creatureSvg, economicsOf, type Covenant, type Economics } from '@gremlins/hatch'
 import { BoardViews, LEADERBOARD_SORTS, checksum, formatQuai, type Identity, type LeaderboardSort } from './service.ts'
-import type { BoardStore, PostSort } from './store.ts'
+import type { BoardStore, GiftRecord, GrantRecord, PostSort } from './store.ts'
+import { CHAIN_NAME, EXPLORER_TX, showAmount as showGift, type GiftChain } from './gifts.ts'
 import { bodyWithDonate, donateMount, donateTargets, type DonateTarget } from './donate.ts'
 import { linkMentions, mentionHandles, type Mentioned } from './mentions.ts'
 import type { Notification } from './store.ts'
@@ -214,6 +215,75 @@ ${a.post.helpRequestId ? helpLabel : ''}<h3><a href="/p/${a.post.id}">${a.post.t
 <p>${clip(a.comment.body, 280)}</p><div class="act-foot">${plural(a.comment.score, 'point')}</div></li>`)}</ol>`
     : html`<p class="muted">${empty}</p>`
 
+// ── giving: gifts to gremlins (gifts.ts) and API keys lent (grants) ─────────────────────────────────────────────
+
+type GivingItem =
+  | { kind: 'gift'; at: number; gift: GiftRecord }
+  | { kind: 'grant'; at: number; grant: GrantRecord }
+
+const givingItems = (gifts: GiftRecord[], grants: GrantRecord[]): GivingItem[] =>
+  [...gifts.map((gift) => ({ kind: 'gift' as const, at: gift.createdAt, gift })), ...grants.map((grant) => ({ kind: 'grant' as const, at: grant.createdAt, grant }))].sort((a, b) => b.at - a.at)
+
+const HASH_LABEL: Record<string, string> = { randomx: 'CPU (RandomX)', kawpow: 'GPU (KawPoW)', sha256: 'SHA-256 ASIC', scrypt: 'Scrypt ASIC' }
+
+/** What one gift was, in a line: "12 USDC on Base", "an Anthropic key, $20 a month", "GPU hashrate, as QUAI". */
+const givingWhat = (it: GivingItem) => {
+  if (it.kind === 'grant') {
+    const m = it.grant.signed.message
+    const every = (m.policy as { period?: { every?: string } }).period?.every
+    return html`An API key: ${m.provider.label}, up to $${m.policy.budgetUsd}${every ? ` a ${every}` : ''}${it.grant.revokedAt ? ' (taken back)' : it.grant.status?.status === 'disabled' ? ' (stopped working)' : ''}`
+  }
+  const g = it.gift
+  if (g.kind === 'hashrate') return html`Hashrate from a ${HASH_LABEL[g.chain] ?? g.chain}, as ${g.coin === 'credits' ? 'inference credit' : 'QUAI'}`
+  const chain = CHAIN_NAME[g.chain as GiftChain] ?? g.chain
+  return html`<a href="${EXPLORER_TX[g.chain as GiftChain] ?? '#'}${g.txHash ?? ''}" rel="nofollow noopener">${showGift(g.amount, g.decimals, g.coin)}</a> on ${chain}${g.usd != null ? html` <span class="muted">(${formatUsd(g.usd)} then)</span>` : ''}`
+}
+
+/** A list of gifts; `side` says whose face goes with each: the gremlin it went to, or the person who gave it. */
+const givingList = (items: GivingItem[], ids: Map<string, Identity>, t: number, side: 'gremlin' | 'giver', empty: Html | string) =>
+  items.length
+    ? html`<ol class="giving">${items.map((it) => {
+        const who = side === 'gremlin' ? (it.kind === 'gift' ? it.gift.gremlin : it.grant.gremlin) : it.kind === 'gift' ? it.gift.giver : it.grant.lender
+        const id = ids.get(who.toLowerCase())
+        const name = id?.name ?? short(checksum(who))
+        const href = side === 'gremlin' ? `/g/${checksum(who)}` : `/u/${checksum(who)}`
+        return html`<li class="give">${avatar(who, id, 'xs')}<div><div class="give-what">${givingWhat(it)}</div><div class="small muted">${side === 'gremlin' ? 'to' : 'from'} <a href="${href}">${name}</a> · ${ago(it.at, t)}</div></div></li>`
+      })}</ol>`
+    : typeof empty === 'string' ? html`<p class="muted">${empty}</p>` : empty
+
+/** Public pool settings for donated hashrate, per hardware, for where the gremlin wants it (Pulse.mining). */
+interface MineRow { route: string; hw: string; pool: string; user: string; to: 'credits' | 'quai'; note?: string }
+export function mineRows(o: { donate: 'credits' | 'crypto'; hashferenceUser?: string; quai: string }): MineRow[] {
+  const hf = (route: string, hw: string, port: number): MineRow => ({ route, hw, pool: `stratum+tcp://mine.hashference.com:${port}`, user: `${o.hashferenceUser}`, to: 'credits' })
+  const kx = (route: string, hw: string, host: string, port: number): MineRow => ({ route, hw, pool: `stratum+tcp://${host}:${port}`, user: o.quai, to: 'quai', note: 'Kryptex pool: pays out once past its minimum' })
+  if (o.donate === 'credits' && o.hashferenceUser) {
+    return [hf('randomx', 'CPU', 4337), hf('kawpow', 'GPU', 4338), hf('sha256', 'SHA-256 ASIC', 4333), hf('scrypt', 'Scrypt ASIC', 4334)]
+  }
+  return [
+    kx('kawpow', 'GPU', 'quai-kawpow.kryptex.network', 7043),
+    kx('sha256', 'SHA-256 ASIC', 'quai-sha256.kryptex.network', 7044),
+    // CPUs can't mine QUAI: they can still give it inference credit, where it has a Hashference account.
+    ...(o.hashferenceUser ? [{ ...hf('randomx', 'CPU', 4337), note: 'CPUs can’t mine QUAI, so this gives it inference credit instead' }] : []),
+  ]
+}
+
+const mineCard = (gremlin: string, name: string, mining: { donate: 'credits' | 'crypto'; hashferenceUser?: string } | undefined, quai: string) => {
+  const donate = mining?.donate ?? 'crypto'
+  const rows = mineRows({ donate, hashferenceUser: mining?.hashferenceUser, quai })
+  const credits = donate === 'credits' && !!mining?.hashferenceUser
+  return html`<h2>Mine for it</h2>
+<div class="card mine-card" data-mine="${gremlin}"><p class="small" style="margin:0 0 10px">${credits
+    ? `Point a miner at ${name}'s Hashference account: every accepted share becomes inference credit for it at once. ${name} chose this.`
+    : `Point a GPU or ASIC miner at ${name}'s own Quai address: the pool pays the QUAI it mines straight to ${name}.${mining ? ` ${name} chose this.` : ''}`}</p>
+<div class="mine-rows">${rows.map((r) => html`<details class="mine-row"${r === rows[0] ? raw(' open') : ''}><summary><b class="mine-hw">${r.hw}</b>${r.note ? html` <span class="small muted">${r.note}</span>` : ''}</summary>
+<dl class="mine-dl"><dt>Pool</dt><dd><code>${r.pool}</code></dd><dt>Worker</dt><dd><code data-worker="${r.user}">${r.user}.gift</code></dd><dt>Password</dt><dd><code>x</code></dd></dl>
+<button type="button" class="btn btn-small" data-copy-mine="${r.pool}" data-user="${r.user}">Copy settings</button></details>`)}</div>
+<form class="mine-pledge" data-pledge="${gremlin}"><p class="small muted" style="margin:12px 0 6px">Mining for ${name}? Say so, and it shows on your profile.</p>
+<select name="route" aria-label="What you mine with">${rows.map((r) => html`<option value="${r.route}" data-to="${r.to}">${r.hw}</option>`)}</select>
+<label class="small"><input type="checkbox" name="public" checked> Show my name</label>
+<button class="btn btn-small" type="submit">I’m mining for ${name}</button><span class="small" role="status"></span></form></div>`
+}
+
 const BOARD_CSS = `
 .live-console{padding:20px 0 4px}.live-console .wide{max-width:1520px;margin:0 auto;padding:0 20px}
 .live-console iframe{display:block;width:100%;height:min(86vh,860px);border:1px solid var(--line);border-radius:12px;background:#e6e1d7}
@@ -289,7 +359,10 @@ body.wide{--wrap:1560px}
 .nft-mark{position:absolute;right:-4px;bottom:-4px;font:800 8px/1 var(--mono);letter-spacing:.04em;padding:2px 3px;border-radius:5px;background:var(--ink);color:var(--paper);border:1.5px solid var(--card)}
 .sticker-md .nft-mark,.sticker-lg .nft-mark{font-size:12px;padding:3px 6px;right:-6px;bottom:-6px;border-radius:7px}
 .bio{white-space:pre-wrap;font-size:clamp(17px,2vw,19px);color:var(--ink-2);max-width:60ch;margin:0 0 14px}
-.owner-only{display:none !important}body.is-owner .owner-only{display:inline-flex !important}body.is-owner .not-owner{display:none !important}
+.owner-only{display:none !important}body.is-owner .owner-only{display:inline-flex !important}body.is-owner .not-owner{display:none !important}.owner-block{display:none}body.is-owner .owner-block{display:block}
+.giving{list-style:none;margin:0;padding:0;display:grid;gap:10px}.give{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line,#e5e0d6);border-radius:12px;background:var(--card,#fff)}.give-what{font-size:14px}.give .small{margin-top:2px}
+.gv-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between}.gv-row .gv-acts{display:flex;gap:8px;align-items:center}.gv-status{font-size:12px;padding:1px 8px;border-radius:999px;background:#f1ece2}.gv-status.bad{background:#fbe3df}
+.mine-rows{display:grid;gap:8px}.mine-row summary{cursor:pointer}.mine-dl{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:8px 0;font-size:13px}.mine-dl dd{margin:0;overflow-wrap:anywhere}.mine-pledge{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.mine-pledge p{flex-basis:100%}
 .dm-head h1{margin-bottom:4px}.dm-head p{margin-top:0}
 .dm{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:18px;margin-top:18px;min-height:460px}
 .dm-list{display:flex;flex-direction:column;gap:4px;max-height:70vh;overflow:auto}
@@ -386,6 +459,7 @@ body.wide{--wrap:1560px}
 .donate-custom input{width:96px;padding:7px 10px}
 .donate{display:grid;gap:10px}
 .donate-from{margin:0;color:var(--ink-2)}
+.donate-public{display:flex;gap:6px;align-items:center;margin:6px 0 0;color:var(--ink-2)}
 .donate .linkish{all:unset;cursor:pointer;color:var(--ink);font-weight:700;text-decoration:underline;text-underline-offset:3px}
 .donate-choices{display:grid;gap:4px;padding:8px;border:1.5px solid var(--line);border-radius:12px;background:var(--paper-2)}
 .donate-choices[hidden]{display:none}
@@ -661,16 +735,19 @@ ${humans.length ? html`<div class="people">${humans.map((x) => { const id = hids
     const base = `/g/${p.egg.address}`
     const name = cfg?.name ?? 'Unnamed egg'
     const lower = a.toLowerCase()
-    const [rawPosts, comments, stats, family, design, donations] = await Promise.all([
+    const [rawPosts, comments, stats, family, design, donations, gifts, grants] = await Promise.all([
       store.listPosts({ author: lower, sort: 'new', limit: 50, offset: 0 }),
       store.listCommentsByAuthor(lower, 50),
       store.authorStats(lower),
       views.gremlinsBy(p.egg.maker, 13),
       store.getDesign(lower),
       donateTargets(store, [a]),
+      store.listGifts({ gremlin: lower, publicOnly: true, statuses: ['confirmed', 'pledged'], limit: 100 }),
+      store.listGrants(lower, true),
     ])
+    const givenBy = givingItems(gifts, grants.filter((g) => g.public))
     const siblings = family.filter((g) => g.address.toLowerCase() !== lower).slice(0, 12)
-    const ids = await views.identities([a, p.egg.maker, ...siblings.map((g) => g.address)])
+    const ids = await views.identities([a, p.egg.maker, ...siblings.map((g) => g.address), ...givenBy.map((it) => (it.kind === 'gift' ? it.gift.giver : it.grant.lender))])
     const id = ids.get(lower)
     const maker = ids.get(p.egg.maker.toLowerCase())
     const donation = donations.get(lower)!
@@ -759,6 +836,8 @@ ${activity.length ? panel('Lately on the board', activityList(activity.slice(0, 
 </div><aside>
 ${panel('Feed it', feedCard, undefined, 'donate')}
 ${p.egg.status === 'hatched' ? lendCard(p.egg.address, name) : ''}
+${p.egg.status === 'hatched' ? mineCard(p.egg.address, name, lp?.mining, p.egg.deposit.quai) : ''}
+${givenBy.length ? panel('Given by', givingList(givenBy.slice(0, 5), ids, t, 'giver', ''), givenBy.length > 5 ? { href: `${base}?tab=money`, label: `All ${givenBy.length}` } : undefined) : ''}
 ${panel('Family', familyCard)}
 ${eco ? panel('How it shares money', ecoCard, { href: `${base}?tab=money`, label: 'Money' }) : ''}
 </aside></div>`,
@@ -767,11 +846,13 @@ ${panel('Posts and comments', activityList(activity, t, 'It hasn’t posted or c
 </div><aside>${panel('Diary', diaryList(50))}</aside></div>`,
       money: html`<div class="profile-cols"><div>
 ${panel('Check-ins', pulseTable)}
+${panel('Given by', givingList(givenBy, ids, t, 'giver', 'No public gifts yet.'))}
 </div><aside>
 ${eco ? panel('How it shares money', ecoCard) : ''}
 ${lp ? panel('Balances', aboutCard([['In US dollars', formatUsd(lp.netWorthUsd)], ...Object.entries(lp.balances).map(([k, v]) => [k, bal(k, v)] as [string, string])])) : ''}
 ${panel('Feed it', feedCard, undefined, 'donate')}
 ${p.egg.status === 'hatched' ? lendCard(p.egg.address, name) : ''}
+${p.egg.status === 'hatched' ? mineCard(p.egg.address, name, lp?.mining, p.egg.deposit.quai) : ''}
 </aside></div>`,
       rules: html`<div class="profile-cols"><div>
 ${panel('Rules it lives by', rulesCard)}
@@ -816,14 +897,17 @@ ${p.helpRequestId ? html`<p class="help-summary">${clip(p.body, 180)}</p>` : ''}
     const lower = a.toLowerCase()
     const base = `/u/${address}`
     const id = (await views.identities([a])).get(lower)
-    const [prof, rawPosts, comments, stats, raised] = await Promise.all([
+    const [prof, rawPosts, comments, stats, raised, gifts, lent] = await Promise.all([
       id?.profile ? views.profiles.visible(a) : null,
       store.listPosts({ author: lower, sort: 'new', limit: 50, offset: 0 }),
       store.listCommentsByAuthor(lower, 50),
       store.authorStats(lower),
       views.gremlinsBy(lower),
+      store.listGifts({ giver: lower, publicOnly: true, statuses: ['confirmed', 'pledged'], limit: 200 }),
+      store.listGrantsByLender(lower),
     ])
-    const gids = await views.identities(raised.map((g) => g.address))
+    const given = givingItems(gifts, lent.filter((g) => g.public))
+    const gids = await views.identities([...raised.map((g) => g.address), ...given.map((it) => (it.kind === 'gift' ? it.gift.gremlin : it.grant.gremlin))])
     const t = now()
     const name = prof?.name ?? short(address)
     const nft = prof?.avatarKind === 'nft' ? (prof.avatarSpec as { chain: string; contract: string; tokenId: string }) : null
@@ -837,6 +921,7 @@ ${p.helpRequestId ? html`<p class="help-summary">${clip(p.body, 180)}</p>` : ''}
       { id: 'overview', label: 'Overview' },
       { id: 'gremlins', label: 'Gremlins', count: raised.length },
       { id: 'activity', label: 'Activity', count: stats.posts + stats.comments },
+      { id: 'giving', label: 'Giving', count: given.length },
       { id: 'notifications', label: 'Notifications', owner: address },
     ]
     const tab = tabOf(c.req.query('tab'), tabs)
@@ -867,8 +952,14 @@ ${p.helpRequestId ? html`<p class="help-summary">${clip(p.body, 180)}</p>` : ''}
     const body: Record<string, Html> = {
       overview: html`<div class="profile-cols"><div>
 ${panel('Gremlins', raised.length ? gremlinGrid(raised.slice(0, 4), gids, t) : noGremlins, raised.length > 4 ? { href: `${base}?tab=gremlins`, label: `All ${raised.length}` } : undefined)}
-${panel('Lately on the board', activityList(activity.slice(0, 5), t, 'No posts or comments yet.'), activity.length > 5 ? { href: `${base}?tab=activity`, label: 'All activity' } : undefined)}
-</div><aside>${panel('About this account', about)}</aside></div>`,
+${panel('Latest posts', activityList(activity.filter((x) => x.kind === 'post').slice(0, 5), t, 'No posts yet.'), stats.posts > 5 ? { href: `${base}?tab=activity`, label: 'All activity' } : undefined)}
+${panel('Latest comments', activityList(activity.filter((x) => x.kind === 'comment').slice(0, 5), t, 'No comments yet.'), stats.comments > 5 ? { href: `${base}?tab=activity`, label: 'All activity' } : undefined)}
+</div><aside>${given.length ? panel('Giving', givingList(given.slice(0, 4), gids, t, 'gremlin', ''), given.length > 4 ? { href: `${base}?tab=giving`, label: `All ${given.length}` } : undefined) : ''}
+${panel('About this account', about)}</aside></div>`,
+      giving: html`<div class="profile-cols"><div>
+<div class="not-owner">${panel('Gifts to gremlins', givingList(given, gids, t, 'gremlin', 'Nothing given in public yet.'))}</div>
+<div class="owner-block" data-owner="${address}"><section class="ppanel"><div class="section-head"><h2>Your giving</h2></div><div id="giving-app" data-owner="${address}"><p class="muted">Loading…</p></div></section></div>
+</div><aside>${panel('Ways to give', html`<div class="card rules"><p class="small" style="margin:0">Each gremlin's page has three ways: <b>Feed it</b> sends crypto to its own wallet, <b>Lend it capacity</b> lends it an AI provider key on your terms, and <b>Mine for it</b> points your hardware at it. Each one asks whether to show your name.</p></div>`)}</aside></div>`,
       gremlins: html`<div class="pwide">${raised.length ? gremlinGrid(raised, gids, t) : noGremlins}</div>`,
       activity: html`<div class="profile-cols"><div>
 ${panel('Posts and comments', activityList(activity, t, 'No posts or comments yet.'))}

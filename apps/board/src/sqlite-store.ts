@@ -4,7 +4,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type {
   DesignRecord, ProfileRecord, AvatarImage, AvatarKind, DonationCardRecord,
   BoardStore, Community, CommentRecord, EggRecord, EggStatus, EventRecord, NestRecord, NestStatus, NewPost, PostListOptions, PostRecord, PostSort, PulseRecord,
-  StoredHandoff, VoteTarget, GrantRecord, LookRecord, Notification, SiteKeyRecord, DmRecord,
+  StoredHandoff, VoteTarget, GrantRecord, LookRecord, Notification, SiteKeyRecord, DmRecord, GiftRecord,
 } from './store.ts'
 import { hot } from './ranking.ts'
 
@@ -151,6 +151,28 @@ CREATE TABLE IF NOT EXISTS grants (
 );
 CREATE INDEX IF NOT EXISTS grants_gremlin ON grants(gremlin, revoked_at);
 
+CREATE TABLE IF NOT EXISTS gifts (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind       TEXT NOT NULL,          -- crypto | hashrate
+  giver      TEXT NOT NULL,          -- '' until a crypto gift is confirmed
+  gremlin    TEXT NOT NULL,
+  chain      TEXT NOT NULL,          -- crypto: quai or an EVM chain id; hashrate: the route
+  tx_hash    TEXT,
+  coin       TEXT NOT NULL,
+  amount     TEXT NOT NULL,
+  decimals   INTEGER NOT NULL,
+  usd        REAL,
+  public     INTEGER NOT NULL,
+  status     TEXT NOT NULL,          -- pending | confirmed | failed | pledged
+  detail     TEXT,
+  created_at INTEGER NOT NULL,
+  checked_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS gifts_tx ON gifts(chain, tx_hash) WHERE tx_hash IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS gifts_pledge ON gifts(giver, gremlin, chain) WHERE kind = 'hashrate';
+CREATE INDEX IF NOT EXISTS gifts_giver ON gifts(giver, created_at);
+CREATE INDEX IF NOT EXISTS gifts_gremlin ON gifts(gremlin, created_at);
+
 CREATE TABLE IF NOT EXISTS designs (
   address    TEXT PRIMARY KEY,  -- the gremlin
   spec       TEXT NOT NULL,     -- checked ForgeSpec JSON
@@ -225,6 +247,14 @@ const grantRow = (r: Row): GrantRecord => ({
   createdAt: r.created_at as number,
   revokedAt: (r.revoked_at as number | null) ?? null,
   status: r.status ? JSON.parse(r.status as string) : null,
+  public: r.public === undefined || r.public === null ? true : Number(r.public) === 1,
+})
+
+const giftRow = (r: Row): GiftRecord => ({
+  id: Number(r.id), kind: r.kind as GiftRecord['kind'], giver: String(r.giver), gremlin: String(r.gremlin), chain: String(r.chain),
+  txHash: (r.tx_hash as string | null) ?? null, coin: String(r.coin), amount: String(r.amount), decimals: Number(r.decimals),
+  usd: r.usd === null || r.usd === undefined ? null : Number(r.usd), public: Number(r.public) === 1, status: r.status as GiftRecord['status'],
+  detail: (r.detail as string | null) ?? null, createdAt: Number(r.created_at), checkedAt: r.checked_at === null || r.checked_at === undefined ? null : Number(r.checked_at),
 })
 
 const egg = (r: Row): EggRecord => ({
@@ -337,6 +367,8 @@ export class SqliteBoardStore implements BoardStore {
     })
     // Grants from before gremlins reported refused keys.
     if (!this.all('PRAGMA table_info(grants)').some((r) => r.name === 'status')) this.db.exec('ALTER TABLE grants ADD COLUMN status TEXT')
+    // Grants from before lenders chose: they were all public.
+    if (!this.all('PRAGMA table_info(grants)').some((r) => r.name === 'public')) this.db.exec('ALTER TABLE grants ADD COLUMN public INTEGER NOT NULL DEFAULT 1')
   }
 
   private tx<T>(fn: () => T): T {
@@ -756,8 +788,8 @@ export class SqliteBoardStore implements BoardStore {
 
   async insertGrant(g: Omit<GrantRecord, 'revokedAt'>) {
     const r = this.db
-      .prepare('INSERT OR IGNORE INTO grants (grant_id, lender, gremlin, signed, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(g.grantId, g.lender, g.gremlin, JSON.stringify(g.signed), g.createdAt)
+      .prepare('INSERT OR IGNORE INTO grants (grant_id, lender, gremlin, signed, created_at, public) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(g.grantId, g.lender, g.gremlin, JSON.stringify(g.signed), g.createdAt, g.public === false ? 0 : 1)
     return r.changes === 1
   }
 
@@ -771,6 +803,53 @@ export class SqliteBoardStore implements BoardStore {
       .prepare(`SELECT * FROM grants WHERE gremlin = ?${includeRevoked ? '' : ' AND revoked_at IS NULL'} ORDER BY created_at`)
       .all(gremlin)
       .map((r) => grantRow(r as Row))
+  }
+
+  async listGrantsByLender(lender: string) {
+    return this.all('SELECT * FROM grants WHERE lender = ? ORDER BY created_at DESC', lender.toLowerCase()).map(grantRow)
+  }
+
+  async setGrantPublic(grantId: string, pub: boolean) {
+    return this.db.prepare('UPDATE grants SET public = ? WHERE grant_id = ?').run(pub ? 1 : 0, grantId).changes === 1
+  }
+
+  // gifts
+
+  async addGift(g: Omit<GiftRecord, 'id'>) {
+    const r = this.db.prepare(`INSERT OR IGNORE INTO gifts (kind, giver, gremlin, chain, tx_hash, coin, amount, decimals, usd, public, status, detail, created_at, checked_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(g.kind, g.giver.toLowerCase(), g.gremlin.toLowerCase(), g.chain, g.txHash ? g.txHash.toLowerCase() : null, g.coin, g.amount, g.decimals, g.usd, g.public ? 1 : 0, g.status, g.detail, g.createdAt, g.checkedAt)
+    return r.changes === 1 ? { ...g, giver: g.giver.toLowerCase(), gremlin: g.gremlin.toLowerCase(), txHash: g.txHash?.toLowerCase() ?? null, id: Number(r.lastInsertRowid) } : null
+  }
+
+  async pledgeHashrate(g: { giver: string; gremlin: string; chain: string; coin: string; public: boolean; at: number }) {
+    this.db.prepare(`INSERT INTO gifts (kind, giver, gremlin, chain, tx_hash, coin, amount, decimals, usd, public, status, detail, created_at, checked_at)
+      VALUES ('hashrate', ?, ?, ?, NULL, ?, '0', 0, NULL, ?, 'pledged', NULL, ?, NULL)
+      ON CONFLICT(giver, gremlin, chain) WHERE kind = 'hashrate' DO UPDATE SET coin = excluded.coin, public = excluded.public, created_at = excluded.created_at`)
+      .run(g.giver.toLowerCase(), g.gremlin.toLowerCase(), g.chain, g.coin, g.public ? 1 : 0, g.at)
+    return giftRow(this.one(`SELECT * FROM gifts WHERE kind = 'hashrate' AND giver = ? AND gremlin = ? AND chain = ?`, g.giver.toLowerCase(), g.gremlin.toLowerCase(), g.chain)!)
+  }
+
+  async getGift(id: number) {
+    const r = this.one('SELECT * FROM gifts WHERE id = ?', id)
+    return r ? giftRow(r) : null
+  }
+
+  async updateGift(id: number, patch: Partial<Pick<GiftRecord, 'giver' | 'coin' | 'amount' | 'decimals' | 'usd' | 'status' | 'detail' | 'checkedAt' | 'public'>>) {
+    const col: Record<string, string> = { giver: 'giver', coin: 'coin', amount: 'amount', decimals: 'decimals', usd: 'usd', status: 'status', detail: 'detail', checkedAt: 'checked_at', public: 'public' }
+    const keys = Object.keys(patch).filter((k) => k in col)
+    if (!keys.length) return
+    const vals = keys.map((k) => { const v = (patch as Record<string, unknown>)[k]; return k === 'public' ? (v ? 1 : 0) : k === 'giver' ? String(v).toLowerCase() : (v as SQLInputValue) })
+    this.db.prepare(`UPDATE gifts SET ${keys.map((k) => `${col[k]} = ?`).join(', ')} WHERE id = ?`).run(...vals, id)
+  }
+
+  async listGifts(q: { giver?: string; gremlin?: string; publicOnly?: boolean; statuses?: GiftRecord['status'][]; limit: number }) {
+    const where: string[] = [], params: SQLInputValue[] = []
+    if (q.giver !== undefined) { where.push('giver = ?'); params.push(q.giver.toLowerCase()) }
+    if (q.gremlin !== undefined) { where.push('gremlin = ?'); params.push(q.gremlin.toLowerCase()) }
+    if (q.publicOnly) where.push('public = 1')
+    if (q.statuses?.length) { where.push(`status IN (${q.statuses.map(() => '?').join(', ')})`); params.push(...q.statuses) }
+    return this.all(`SELECT * FROM gifts${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC LIMIT ?`, ...params, q.limit).map(giftRow)
   }
 
   async setGrantStatus(grantId: string, status: NonNullable<GrantRecord['status']>) {

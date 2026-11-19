@@ -44,6 +44,7 @@ export const PulseSchema = z.looseObject({
   host: z.string().max(200).optional(),
   models: z.array(z.string().max(100)).max(10).optional(),
   highlights: z.array(z.string().max(500)).max(10).optional(),
+  mining: z.object({ donate: z.enum(['credits', 'crypto']), hashferenceUser: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional() }).optional(),
 })
 
 /** A gremlin's donation card; hatch donationCardProblem checks the address formats and limits in detail. */

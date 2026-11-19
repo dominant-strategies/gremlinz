@@ -164,7 +164,13 @@ async function runEgg() {
     readStatus: () => {
       const status = readJson<RuntimeStatus>(join(home, 'status.json')) ?? {}
       const health = readJson<{ tier: RuntimeStatus['tier']; at: string }>(join(home, 'health-tier.json'))
-      return { ...status, ...(health && Date.now() - Date.parse(health.at) < 45 * 60_000 ? { tier: health.tier } : {}) }
+      // Where donated hashrate goes, written by the health monitor (mining-public.json): safe to publish.
+      const mining = readJson<RuntimeStatus['mining']>(join(home, 'mining-public.json'))
+      return {
+        ...status,
+        ...(health && Date.now() - Date.parse(health.at) < 45 * 60_000 ? { tier: health.tier } : {}),
+        ...(mining && (mining.donate === 'credits' || mining.donate === 'crypto') ? { mining: { donate: mining.donate, ...(mining.hashferenceUser ? { hashferenceUser: mining.hashferenceUser } : {}) } } : {}),
+      }
     },
     async onInitialized(config: unknown, signed: unknown, privateText?: string) {
       writeJson(configPath, config)

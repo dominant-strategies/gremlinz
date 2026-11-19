@@ -40,6 +40,8 @@
     .tabs button:focus-visible { outline: 3px solid var(--spark); outline-offset: 2px; }
     .pane { display: grid; gap: 14px; }
     .pane[hidden] { display: none; }
+    .picture-editor { display: grid; gap: 14px; }
+    .picture-editor[hidden] { display: none; }
 
     .traits { display: flex; flex-wrap: wrap; gap: 6px; }
     .traits button { all: unset; cursor: pointer; font: 600 13px var(--body); padding: 5px 11px; border-radius: 999px; border: 1.5px solid var(--line); color: var(--ink-2); }
@@ -114,7 +116,9 @@
         <div>
           <h2>Picture</h2>
           <p class="note" id="avatarNote">Pick where your picture comes from. It changes only when you save.</p>
+          <button type="button" class="btn btn-small" id="editPicture" hidden>Edit picture</button>
         </div>
+        <div id="pictureEditor" class="picture-editor">
         <div class="tabs" role="tablist" aria-label="Picture source">
           <button type="button" role="tab" id="tab-illustrated" aria-controls="pane-illustrated" aria-selected="true">Illustrated</button>
           <button type="button" role="tab" id="tab-nft" aria-controls="pane-nft" aria-selected="false">NFT I own</button>
@@ -162,6 +166,7 @@
 
         <div class="pane" role="tabpanel" id="pane-none" aria-labelledby="tab-none" hidden>
           <p class="note">No picture: you show as a plain person tile in your address's colour.</p>
+        </div>
         </div>
 
         <div class="row">

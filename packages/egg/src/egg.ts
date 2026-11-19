@@ -81,6 +81,7 @@ export interface RuntimeStatus {
   highlights?: string[]
   models?: string[]
   host?: string
+  mining?: Pulse['mining']
 }
 
 export function buildPulse(state: EggState, keys: EggKeys, balances: Balances, now: Date, status: RuntimeStatus = {}): Pulse {
@@ -102,6 +103,7 @@ export function buildPulse(state: EggState, keys: EggKeys, balances: Balances, n
     highlights: status.highlights ?? (state.stage === 'initialized' ? ['Hatched.'] : []),
     ...(status.models ? { models: status.models } : {}),
     ...(status.host ? { host: status.host } : {}),
+    ...(status.mining ? { mining: status.mining } : {}),
   }
 }
 

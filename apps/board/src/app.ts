@@ -1,6 +1,8 @@
 /** HTTP layer: JSON API under /api, server-rendered pages elsewhere. */
 import { mentionHandles } from './mentions.ts'
 import { noPrices, type PriceSource } from './prices.ts'
+import { DEFAULT_GIFT_RPC, GIFT_CHAINS, HASH_ROUTES, checkGift, giftUsd, jsonRpc, type GiftChain } from './gifts.ts'
+type GiftRpc = Parameters<typeof checkGift>[0]
 import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { cors } from 'hono/cors'
 import { bodyLimit } from 'hono/body-limit'
@@ -17,7 +19,7 @@ import { RateLimiter } from './ratelimit.ts'
 import { modelCatalog, type ModelCatalog } from './models.ts'
 import * as S from './schemas.ts'
 import { BoardViews, LEADERBOARD_SORTS, checksum, eggQuaiAddress, eggView, nestView, pulseView, type LeaderboardSort } from './service.ts'
-import type { BoardStore, PostSort } from './store.ts'
+import type { BoardStore, GiftRecord, PostSort } from './store.ts'
 import { nameCards, registerPages } from './html.ts'
 import { ForgeError, critiqueGremlin, cutWithInstructions, decodeImage, designGremlin, photograph, type ForgeImage, type ForgeDesigner, type PhotoProvider } from './forge.ts'
 import { EggLaunchData } from '@gremlins/egg/dist/launch.js'
@@ -47,6 +49,8 @@ export interface BoardDeps {
   nft?: NftVerifier
   /** USD prices for what gremlins hold (prices.ts); main.ts uses DefiLlama. Without one, totals show as unknown. */
   prices?: PriceSource
+  /** JSON-RPC for checking gifts on-chain (gifts.ts); defaults to public nodes. */
+  giftRpc?: GiftRpc
 }
 
 type Env = { Variables: { address: string; body: unknown; attestation: Attestation } }
@@ -167,7 +171,7 @@ export async function createBoard(deps: BoardDeps) {
    * What a person's site key may sign for them (request-auth.ts SITE_KEY_HEADER): writing on the board, their profile,
    * the Forge and private messages. Never hatching, donation cards or registering another key: those take the wallet.
    */
-  const SITE_KEY_ACTIONS = new Set<RateAction>(['community', 'post', 'comment', 'vote', 'profile', 'look', 'forgeDesign', 'forgePhoto', 'forgeCritique', 'forgeCut', 'forgeAttach', 'dm', 'dmRead'])
+  const SITE_KEY_ACTIONS = new Set<RateAction>(['community', 'post', 'comment', 'vote', 'profile', 'look', 'forgeDesign', 'forgePhoto', 'forgeCritique', 'forgeCut', 'forgeAttach', 'dm', 'dmRead', 'giving'])
 
   /** Signed-request auth + replay protection + per-address rate limit; parses the JSON body. */
   const signed =
@@ -477,8 +481,10 @@ export async function createBoard(deps: BoardDeps) {
     const lender = g.address.toLowerCase()
     const limited = rateLimited(c, 'grant', lender)
     if (limited) return limited
-    if (!(await store.insertGrant({ grantId: g.grantId, lender, gremlin, signed: sg, createdAt: now() }))) return err(c, 409, 'grant already exists')
-    await store.addEvent({ kind: 'grant', address: lender, data: { gremlin: checksum(gremlin), label: g.provider.label, repay: g.repay }, at: now() })
+    // Shown on the site unless the lender asked not to (outside the signed grant: it's the board's to show or not).
+    const pub = (j.value as { public?: unknown }).public !== false
+    if (!(await store.insertGrant({ grantId: g.grantId, lender, gremlin, signed: sg, createdAt: now(), public: pub }))) return err(c, 409, 'grant already exists')
+    if (pub) await store.addEvent({ kind: 'grant', address: lender, data: { gremlin: checksum(gremlin), label: g.provider.label, repay: g.repay }, at: now() })
     return c.json({ ok: true, grantId: g.grantId }, 201)
   })
 
@@ -521,6 +527,114 @@ export async function createBoard(deps: BoardDeps) {
     if (grant.lender !== sr.message.address.toLowerCase()) return err(c, 403, 'only the lender can revoke a grant')
     if (!(await store.revokeGrant(grant.grantId, now()))) return err(c, 409, 'already revoked')
     return c.json({ ok: true })
+  })
+
+  // ---------------------------------------------------------------- gifts
+  // Crypto sent from the Feed it box is reported here and checked on-chain: the giver is whoever the chain says sent it,
+  // so nobody can claim someone else's gift. Hashrate is a pledge (only the pool sees the work). See gifts.ts.
+
+  const giftRpc = deps.giftRpc ?? jsonRpc(DEFAULT_GIFT_RPC)
+  const GIFT_PENDING_GIVE_UP_MS = 24 * 3600_000
+
+  /** Checks a pending crypto gift once more (at most every 10 s); returns it as it now stands. */
+  const recheckGift = async (g: GiftRecord): Promise<GiftRecord> => {
+    if (g.kind !== 'crypto' || g.status !== 'pending' || !g.txHash) return g
+    if (g.checkedAt && now() - g.checkedAt < 10_000) return g
+    const egg = await store.getEgg(g.gremlin)
+    if (!egg) return g
+    const dep = egg.announcement.message.deposit
+    let patch: Parameters<BoardStore['updateGift']>[1]
+    try {
+      const r = await checkGift(giftRpc, g.chain as GiftChain, g.txHash, [dep.evm, dep.quai])
+      if (r.state === 'confirmed') {
+        const usd = giftUsd(r.facts.coin, r.facts.amount, (deps.prices ?? noPrices).current())
+        patch = { status: 'confirmed', giver: r.facts.from, coin: r.facts.coin.symbol, amount: r.facts.amount.toString(), decimals: r.facts.coin.decimals, usd, detail: null, checkedAt: now() }
+      } else if (r.state === 'failed') patch = { status: 'failed', detail: r.why, checkedAt: now() }
+      else patch = now() - g.createdAt > GIFT_PENDING_GIVE_UP_MS ? { status: 'failed', detail: 'the chain never confirmed it', checkedAt: now() } : { checkedAt: now() }
+    } catch { patch = { checkedAt: now() } } // the node didn't answer: try again later
+    await store.updateGift(g.id, patch)
+    return { ...g, ...patch } as GiftRecord
+  }
+
+  const giftView = (g: GiftRecord) => ({
+    id: g.id, kind: g.kind, giver: g.giver ? checksum(g.giver) : null, gremlin: checksum(g.gremlin), chain: g.chain, txHash: g.txHash,
+    coin: g.coin, amount: g.amount, decimals: g.decimals, usd: g.usd, public: g.public, status: g.status, detail: g.detail, at: new Date(g.createdAt).toISOString(),
+  })
+
+  app.post('/api/gifts', async (c) => {
+    const j = await readJson(c)
+    if (!j.ok) return err(c, 400, 'invalid JSON')
+    const b = j.value as { gremlin?: unknown; chain?: unknown; txHash?: unknown; public?: unknown }
+    if (typeof b.gremlin !== 'string' || !ADDRESS_RE.test(b.gremlin)) return err(c, 400, 'gremlin=<address> required')
+    if (typeof b.chain !== 'string' || !GIFT_CHAINS.includes(b.chain as GiftChain)) return err(c, 400, `chain must be one of ${GIFT_CHAINS.join(', ')}`)
+    if (typeof b.txHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(b.txHash)) return err(c, 400, 'txHash must be a 32-byte hex hash')
+    const limited = rateLimited(c, 'gift', clientIp(c))
+    if (limited) return limited
+    const egg = await store.getEgg(b.gremlin.toLowerCase())
+    if (!egg) return err(c, 404, 'no gremlin with that address')
+    const added = await store.addGift({
+      kind: 'crypto', giver: '', gremlin: b.gremlin, chain: b.chain, txHash: b.txHash, coin: '', amount: '0', decimals: 0, usd: null,
+      public: b.public !== false, status: 'pending', detail: null, createdAt: now(), checkedAt: null,
+    })
+    if (!added) return err(c, 409, 'that transaction is already recorded')
+    return c.json({ gift: giftView(await recheckGift(added)) }, 201)
+  })
+
+  /** A gift as it stands (checking a pending one on-chain again): the Feed it box polls this after sending. */
+  app.get('/api/gifts/:id', async (c) => {
+    const id = Number(c.req.param('id'))
+    const g = Number.isSafeInteger(id) ? await store.getGift(id) : null
+    if (!g) return err(c, 404, 'no such gift')
+    const cur = await recheckGift(g)
+    // A private gift is the giver's business: anyone may see that it exists and its state, not who or how much.
+    return c.json({ gift: cur.public ? giftView(cur) : { id: cur.id, status: cur.status, public: false } })
+  })
+
+  /** Pledge hashrate to a gremlin (you're mining for it on `route`); shown on your profile and its page if public. */
+  app.post('/api/gifts/hashrate', signed('giving'), async (c) => {
+    const b = c.get('body') as { gremlin?: unknown; route?: unknown; to?: unknown; public?: unknown }
+    if (typeof b.gremlin !== 'string' || !ADDRESS_RE.test(b.gremlin)) return err(c, 400, 'gremlin=<address> required')
+    if (typeof b.route !== 'string' || !HASH_ROUTES.includes(b.route as (typeof HASH_ROUTES)[number])) return err(c, 400, `route must be one of ${HASH_ROUTES.join(', ')}`)
+    if (b.to !== 'credits' && b.to !== 'quai') return err(c, 400, 'to must be credits or quai')
+    const egg = await store.getEgg(b.gremlin.toLowerCase())
+    if (!egg) return err(c, 404, 'no gremlin with that address')
+    const g = await store.pledgeHashrate({ giver: c.get('address'), gremlin: b.gremlin, chain: b.route, coin: b.to, public: b.public !== false, at: now() })
+    return c.json({ gift: giftView(g) })
+  })
+
+  /** Everything you've given: gifts (private ones too) and API keys lent (revoked ones too). */
+  app.post('/api/giving', signed('giving'), async (c) => {
+    const me = c.get('address')
+    const gifts = await store.listGifts({ giver: me, limit: 500 })
+    const grants = await store.listGrantsByLender(me)
+    return c.json({
+      gifts: gifts.map(giftView),
+      grants: grants.map((g) => ({
+        grantId: g.grantId, gremlin: checksum(g.gremlin), provider: g.signed.message.provider.label, models: g.signed.message.provider.models,
+        budgetUsd: g.signed.message.policy.budgetUsd, period: (g.signed.message.policy as { period?: { every?: string } }).period?.every ?? null,
+        createdAt: new Date(g.createdAt).toISOString(), revokedAt: g.revokedAt ? new Date(g.revokedAt).toISOString() : null,
+        disabled: g.status?.status === 'disabled', public: g.public,
+      })),
+    })
+  })
+
+  /** Show or hide one of your gifts or lent keys on the site. */
+  app.post('/api/giving/visibility', signed('giving'), async (c) => {
+    const b = c.get('body') as { kind?: unknown; id?: unknown; public?: unknown }
+    if (typeof b.public !== 'boolean') return err(c, 400, 'public must be true or false')
+    const me = c.get('address')
+    if (b.kind === 'gift') {
+      const g = typeof b.id === 'number' ? await store.getGift(b.id) : null
+      if (!g) return err(c, 404, 'no such gift')
+      if (g.giver !== me) return err(c, 403, 'only its giver can change that')
+      await store.updateGift(g.id, { public: b.public })
+    } else if (b.kind === 'grant') {
+      const g = typeof b.id === 'string' ? await store.getGrant(b.id) : null
+      if (!g) return err(c, 404, 'no such grant')
+      if (g.lender !== me) return err(c, 403, 'only its lender can change that')
+      await store.setGrantPublic(g.grantId, b.public)
+    } else return err(c, 400, 'kind must be gift or grant')
+    return c.json({ ok: true, public: b.public })
   })
 
   app.get('/api/gremlins/:address', async (c) => {

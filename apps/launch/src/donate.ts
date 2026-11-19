@@ -75,6 +75,29 @@ async function sendSolana(coin: Coin, to: string, amount: bigint): Promise<strin
   return wallet.signAndSend(bytes)
 }
 
+// ── recording the gift ──────────────────────────────────────────────────────
+
+/**
+ * Tells the board about the gift so it shows under Giving on your profile (and the gremlin's page, if public). The board
+ * checks the transaction on-chain and credits whoever sent it; this waits for that, a few minutes at most. Solana gifts
+ * aren't recorded yet.
+ */
+async function recordGift(target: DonateTarget, c: Coin, hash: string, pub: boolean, note: HTMLElement) {
+  if (!target.gremlin || c.family === 'solana') return
+  const chain = c.family === 'quai' ? 'quai' : String(c.chainId)
+  try {
+    const r = await fetch('/api/gifts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ gremlin: target.gremlin, chain, txHash: hash, public: pub }) })
+    if (!r.ok) return
+    let gift = ((await r.json()) as { gift: { id: number; status: string } }).gift
+    note.textContent = 'Recording it on your profile…'
+    for (let i = 0; i < 30 && gift.status === 'pending'; i++) {
+      await new Promise((ok) => setTimeout(ok, 10_000))
+      gift = ((await (await fetch(`/api/gifts/${gift.id}`)).json()) as { gift: typeof gift }).gift
+    }
+    note.textContent = gift.status === 'confirmed' ? `It's on your profile${pub ? '' : ' (only you see it)'}.` : gift.status === 'pending' ? 'Still waiting for the chain: it shows on your profile once confirmed.' : ''
+  } catch { note.textContent = '' }
+}
+
 // ── UI ───────────────────────────────────────────────────────────────────────
 
 const h = (tag: string, attrs: Record<string, string> = {}, text = '') => {
@@ -170,6 +193,12 @@ export function mountDonate(root: HTMLElement, target: DonateTarget) {
   choices.hidden = true
   const status = h('p', { class: 'donate-status small', role: 'status', 'aria-live': 'polite' })
   const manual = h('div')
+  // Public or private: whether the gift shows on your profile and the gremlin's page (the chain shows it either way).
+  const showName = h('input', { type: 'checkbox' }) as HTMLInputElement
+  showName.checked = localStorage.getItem('gremlins.gift.public') !== '0'
+  showName.onchange = () => { try { localStorage.setItem('gremlins.gift.public', showName.checked ? '1' : '0') } catch { /* private mode */ } }
+  const showLabel = h('label', { class: 'donate-public small' })
+  showLabel.append(showName, document.createTextNode(' Show my name on this gift'))
 
   let held: Holding[] = []
   let chosen: Coin | undefined
@@ -250,10 +279,12 @@ export function mountDonate(root: HTMLElement, target: DonateTarget) {
       status.textContent = `Sending ${showAmount(amount, c.decimals)} ${c.symbol} (about ${money(usd)}) to ${target.name} at ${shortAddr(to)}${published(c)}. Confirm in ${wallet}…`
       const hash = c.family === 'quai' ? await sendQuai(to, amount) : c.family === 'solana' ? await sendSolana(c, to, amount) : await sendEvm(c, to, amount)
       const explorer = EXPLORER[c.family === 'solana' ? 'solana' : String(c.chainId)]
+      const note = h('span', { class: 'muted' })
       status.replaceChildren(
         document.createTextNode(`Thank you! You sent ${showAmount(amount, c.decimals)} ${c.symbol} to ${target.name}; it will see it shortly. `),
-        h('a', { href: explorer + hash, target: '_blank', rel: 'noopener' }, 'View transaction'),
+        h('a', { href: explorer + hash, target: '_blank', rel: 'noopener' }, 'View transaction'), document.createTextNode(' '), note,
       )
+      void recordGift(target, c, hash, showName.checked, note)
       void read()
     } catch (e) {
       const msg = (e as { shortMessage?: string; message?: string }).shortMessage ?? (e as Error).message ?? String(e)
@@ -263,7 +294,7 @@ export function mountDonate(root: HTMLElement, target: DonateTarget) {
     }
   }
 
-  root.append(amounts, go, from, choices, status, manual)
+  root.append(amounts, go, from, showLabel, choices, status, manual)
   sync()
   void read()
 }
@@ -296,7 +327,7 @@ export function targetOf(el: HTMLElement): DonateTarget {
   const d = el.dataset
   const suggested = (d.suggested ?? '').split(',').map(Number).filter((v) => v > 0)
   return {
-    name: d.name || 'this gremlin', quai: d.quai, evm: d.evm, qi: d.qi, solana: d.solana, bitcoin: d.bitcoin, litecoin: d.litecoin,
+    gremlin: d.gremlin, name: d.name || 'this gremlin', quai: d.quai, evm: d.evm, qi: d.qi, solana: d.solana, bitcoin: d.bitcoin, litecoin: d.litecoin,
     note: d.note, suggestedUsd: suggested.length ? suggested : undefined, source: d.source === 'card' ? 'card' : 'announced',
   }
 }
