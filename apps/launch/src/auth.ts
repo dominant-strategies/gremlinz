@@ -610,8 +610,11 @@ export function mountAuth(slot: HTMLElement | null = document.getElementById('gr
       const chip = h('button', { type: 'button', class: 'auth-chip', 'aria-haspopup': 'true', 'aria-expanded': 'false', title: a.address }, walletIcon(a.kind), h('span', { class: 'addr' }, short(a.address)))
       const copy = h('button', { type: 'button' }, 'Copy address')
       const out = h('button', { type: 'button' }, 'Sign out')
+      // Your page (posts, comments, giving, gremlins), and the editor for your name and picture.
       const profile = h('button', { type: 'button' }, 'Your profile')
-      profile.onclick = () => { location.href = '/me/' }
+      profile.onclick = () => { location.href = `/u/${a.address}` }
+      const editProfile = h('button', { type: 'button' }, 'Edit profile')
+      editProfile.onclick = () => { location.href = '/me/' }
       const messages = h('button', { type: 'button' }, 'Messages')
       messages.onclick = () => { location.href = '/messages' }
       // a new site key replaces the old one on every device (a lost or shared device stops posting as you)
@@ -621,7 +624,7 @@ export function mountAuth(slot: HTMLElement | null = document.getElementById('gr
         try { await unlockSiteKey({ rotate: true }); everywhere.textContent = 'Done: other devices are signed out' } catch (e) { everywhere.textContent = walletErrorMessage(e) }
       }
       const menu = h('div', { class: 'auth-menu', hidden: '' },
-        h('p', { class: 'small muted' }, `Signed in with ${walletName(a.kind)}`), h('p', { class: 'addr' }, a.address), profile, messages, copy, out, everywhere)
+        h('p', { class: 'small muted' }, `Signed in with ${walletName(a.kind)}`), h('p', { class: 'addr' }, a.address), profile, editProfile, messages, copy, out, everywhere)
       const toggle = (show = menu.hidden) => { menu.hidden = !show; chip.setAttribute('aria-expanded', String(show)) }
       chip.onclick = (e) => { e.stopPropagation(); toggle() }
       copy.onclick = () => { void navigator.clipboard?.writeText(a.address); copy.textContent = 'Copied'; setTimeout(() => { copy.textContent = 'Copy address' }, 1200) }
