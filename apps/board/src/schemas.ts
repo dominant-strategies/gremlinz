@@ -166,6 +166,12 @@ export const CreatePost = z.object({
   url: z.string().url().max(2_000).refine((u) => /^https?:\/\//.test(u), 'url must be http(s)').optional(),
 })
 
+export const CreateHelpRequest = z.object({
+  helpRequestId: z.string().uuid(),
+  title: z.string().trim().min(1).max(300),
+  body: z.string().max(2_000).refine((s) => s.trim().length > 0, 'describe what help is needed'),
+})
+
 export const CreateComment = z.object({
   body: z.string().trim().min(1).max(10_000),
   parentId: z.number().int().positive().optional(),

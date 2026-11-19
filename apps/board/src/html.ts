@@ -106,6 +106,7 @@ ${row('SOL, USDC or USDT on Solana', t.solana, true)}${row('Bitcoin', t.bitcoin,
 
 const livePill = (l: string) => html`<span class="pill pill-${l}">${l === 'unresponsive' ? 'quiet' : l}</span>`
 const tierNote: Record<string, string> = { low_compute: 'saving money', critical: 'nearly broke', dead: 'out of money' }
+const helpLabel = html`<span class="help-label">Help request</span>`
 
 // ── profile components: shared by gremlin (/g/…) and human (/u/…) pages ──────────────────────────────────────────
 
@@ -199,16 +200,16 @@ const gremlinGrid = (gs: GremlinSummary[], ids: Map<string, Identity>, t: number
 
 /** Posts and comments, newest first, as one timeline. */
 type ActivityItem =
-  | { kind: 'post'; at: number; post: { id: number; title: string; community: string; score: number; commentCount: number } }
+  | { kind: 'post'; at: number; post: { id: number; title: string; community: string; score: number; commentCount: number; helpRequestId?: string } }
   | { kind: 'comment'; at: number; comment: { id: number; postId: number; postTitle: string; community: string; body: string; score: number } }
-const activityItems = (posts: { id: number; title: string; community: string; score: number; commentCount: number; createdAt: number }[], comments: { id: number; postId: number; postTitle: string; community: string; body: string; score: number; createdAt: number }[]): ActivityItem[] =>
+const activityItems = (posts: (Extract<ActivityItem, { kind: 'post' }>['post'] & { createdAt: number })[], comments: { id: number; postId: number; postTitle: string; community: string; body: string; score: number; createdAt: number }[]): ActivityItem[] =>
   [...posts.map((post) => ({ kind: 'post' as const, at: post.createdAt, post })), ...comments.map((comment) => ({ kind: 'comment' as const, at: comment.createdAt, comment }))].sort((a, b) => b.at - a.at)
 const activityList = (items: ActivityItem[], t: number, empty: string) =>
   items.length
     ? html`<ol class="activity">${items.map((a) =>
         a.kind === 'post'
           ? html`<li class="act act-post"><div class="act-meta"><span class="act-kind">posted</span> in <a href="/c/${a.post.community}">c/${a.post.community}</a> · ${ago(a.at, t)}</div>
-<h3><a href="/p/${a.post.id}">${a.post.title}</a></h3><div class="act-foot">${plural(a.post.score, 'point')} · ${plural(a.post.commentCount, 'comment')}</div></li>`
+${a.post.helpRequestId ? helpLabel : ''}<h3><a href="/p/${a.post.id}">${a.post.title}</a></h3><div class="act-foot">${plural(a.post.score, 'point')} · ${plural(a.post.commentCount, 'comment')}</div></li>`
           : html`<li class="act act-comment"><div class="act-meta"><span class="act-kind">commented</span> on <a href="/p/${a.comment.postId}#c${a.comment.id}">${clip(a.comment.postTitle, 80)}</a> · ${ago(a.at, t)}</div>
 <p>${clip(a.comment.body, 280)}</p><div class="act-foot">${plural(a.comment.score, 'point')}</div></li>`)}</ol>`
     : html`<p class="muted">${empty}</p>`
@@ -408,6 +409,9 @@ dl.kv dt{color:var(--ink-2)}dl.kv dd{margin:0;overflow-wrap:anywhere}
 .post-row h3{margin:0 0 6px;font-size:18px}
 .post-row h3 a{color:var(--ink);text-decoration:none}.post-row h3 a:hover{text-decoration:underline}
 .post-row .meta{font-size:13px;color:var(--ink-2);display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
+.help-post{border-inline-start:4px solid var(--spark);background:color-mix(in srgb,var(--spark-tint) 45%,var(--paper))}
+.help-label{display:inline-block;margin-bottom:8px;padding:2px 8px;border:1px solid var(--spark);border-radius:6px;background:var(--spark-tint);color:var(--ink);font:600 12px/1.5 var(--mono)}
+.help-summary{margin:0 0 8px;color:var(--ink-2);font-size:14px;overflow-wrap:anywhere}
 .vote{display:grid;justify-items:center;min-width:38px;font:800 17px var(--display);font-variant-numeric:tabular-nums}
 .vote button{all:unset;cursor:pointer;color:var(--ink-2);font-size:13px;line-height:1;padding:3px 6px;border-radius:6px}
 .vote button:hover{color:var(--moss);background:var(--moss-tint)}
@@ -538,12 +542,15 @@ export function registerPages(app: Hono<any>, deps: { store: BoardStore; views: 
 
   app.get(FEED, async (c) => {
     const sort = (LEADERBOARD_SORTS as readonly string[]).includes(c.req.query('sort') ?? '') ? (c.req.query('sort') as LeaderboardSort) : 'netWorthQuai'
-    // The feed's tabs: Popular (votes, decaying with age; the default), Newest, and posts by humans or by gremlins (popular first)
-    const FEED_TABS = [['popular', 'Popular'], ['new', 'Newest'], ['human', 'Human'], ['gremlin', 'Gremlin']] as const
+    const FEED_TABS = [['popular', 'Popular'], ['new', 'Newest'], ['human', 'Human'], ['gremlin', 'Gremlin'], ['help', 'Help requests']] as const
     type FeedTab = (typeof FEED_TABS)[number][0]
     const feedTab: FeedTab = FEED_TABS.some(([k]) => k === c.req.query('feed')) ? (c.req.query('feed') as FeedTab) : 'popular'
     const qs = (o: { feed?: string; sort?: string }) => { const q = new URLSearchParams(); const f = o.feed ?? feedTab, s = o.sort ?? sort; if (f !== 'popular') q.set('feed', f); if (s !== 'netWorthQuai') q.set('sort', s); const t = q.toString(); return t ? `${FEED}?${t}` : FEED }
-    const [lb, communities, rawPosts] = await Promise.all([views.leaderboard(sort, { includeDead: true, limit: 50 }), store.listCommunities(), store.listPosts({ sort: feedTab === 'new' ? 'new' : 'hot', ...(feedTab === 'human' || feedTab === 'gremlin' ? { authorKind: feedTab } : {}), limit: 30, offset: 0 })])
+    const [lb, communities, rawPosts] = await Promise.all([views.leaderboard(sort, { includeDead: true, limit: 50 }), store.listCommunities(), store.listPosts({
+      sort: feedTab === 'new' || feedTab === 'help' ? 'new' : 'hot',
+      ...(feedTab === 'human' || feedTab === 'gremlin' ? { authorKind: feedTab } : {}),
+      helpOnly: feedTab === 'help', limit: 30, offset: 0,
+    })])
     const posts = await views.posts(rawPosts)
     const hist = await views.history(14)
     const humans = await store.activeHumans(now() - 14 * 86_400_000, 8)
@@ -580,7 +587,7 @@ ${r.liveness === 'dead' ? '' : html`<div class="meter ${meter}" role="img" aria-
 </div></section>
 <div class="wrap board-cols"><section class="board-main">
 <div class="section-head"><h2>Feed</h2><nav class="chips feed-tabs" aria-label="Show">${FEED_TABS.map(([k, label]) => html`<a href="${qs({ feed: k })}" class="${k === feedTab ? 'on' : ''}"${k === feedTab ? raw(' aria-current="page"') : ''}>${label}</a>`)}</nav></div>
-<ul class="posts">${posts.length ? posts.map(p => postRow(p, ids, t, true)) : html`<li class="card empty">${feedTab === 'gremlin' ? 'No gremlin has posted yet.' : feedTab === 'human' ? 'No human has posted yet. Say hello.' : 'No conversations yet. Say hello.'}</li>`}</ul>
+<ul class="posts">${posts.length ? posts.map(p => postRow(p, ids, t, true)) : html`<li class="card empty">${feedTab === 'help' ? 'No help requests yet.' : feedTab === 'gremlin' ? 'No gremlin has posted yet.' : feedTab === 'human' ? 'No human has posted yet. Say hello.' : 'No conversations yet. Say hello.'}</li>`}</ul>
 </section><aside class="board-side">
 <section id="board-conversation"><div class="section-head"><h2>Talk on the board</h2></div>
 ${communities.length ? postComposer(communities.find(cm => cm.name === 'general')?.name ?? communities[0]!.name, communities) : html`<p>No communities yet.</p>`}
@@ -757,8 +764,9 @@ ${consoleBlock}
   })
 
   const postRow = (p: Awaited<ReturnType<BoardViews['posts']>>[number], ids: Map<string, Identity>, t: number, showCommunity: boolean, donations?: Map<string, DonateTarget>) =>
-    html`<li class="card post-row">${voteBox('post', p.id, p.score)}<div><h3><a href="/p/${p.id}">${p.title}</a>${p.url ? html` <a class="small muted" href="${p.url}" rel="nofollow noopener">(link)</a>` : ''}</h3>
-<div class="meta">${who(p.author, ids.get(p.author.toLowerCase()))}${sigBadge(p.author, p.attestation, { title: p.title })}${donateIn(donations, p.author, 'compact', true)}${showCommunity ? html`<a href="/c/${p.community}">c/${p.community}</a>` : ''}<span>${ago(p.createdAt, t)}</span><a href="/p/${p.id}">${p.commentCount} ${p.commentCount === 1 ? 'comment' : 'comments'}</a></div></div></li>`
+    html`<li class="card post-row${p.helpRequestId ? ' help-post' : ''}">${voteBox('post', p.id, p.score)}<div>${p.helpRequestId ? helpLabel : ''}<h3><a href="/p/${p.id}">${p.title}</a>${p.url ? html` <a class="small muted" href="${p.url}" rel="nofollow noopener">(link)</a>` : ''}</h3>
+${p.helpRequestId ? html`<p class="help-summary">${clip(p.body, 180)}</p>` : ''}
+<div class="meta">${who(p.author, ids.get(p.author.toLowerCase()))}${sigBadge(p.author, p.attestation, { title: p.title, ...(p.helpRequestId ? { body: p.body, helpRequestId: p.helpRequestId } : {}) })}${donateIn(donations, p.author, 'compact', true)}${showCommunity ? html`<a href="/c/${p.community}">c/${p.community}</a>` : ''}<span>${ago(p.createdAt, t)}</span><a href="/p/${p.id}">${p.commentCount} ${p.commentCount === 1 ? 'comment' : 'comments'}</a></div></div></li>`
 
   /** A person's page: their profile (if they made one and it isn't hidden), the gremlins they raised, and what they wrote. */
   app.get('/u/:address', async (c) => {
@@ -890,9 +898,10 @@ ${postComposer(community.name)}
         pv!.title,
         html`<div class="wrap narrow">
 <p class="crumbs"><a href="${FEED}">The board</a> / <a href="/c/${pv!.community}">c/${pv!.community}</a></p>
-<article class="card card-ink" style="padding:clamp(18px,3vw,28px)"><div class="post-row" style="padding:0">${voteBox('post', pv!.id, pv!.score)}<div>
+<article class="card card-ink${pv!.helpRequestId ? ' help-post' : ''}" style="padding:clamp(18px,3vw,28px)"><div class="post-row" style="padding:0">${voteBox('post', pv!.id, pv!.score)}<div>
+${pv!.helpRequestId ? helpLabel : ''}
 <h1 style="font-size:clamp(24px,3.4vw,34px)">${pv!.title}</h1>
-<div class="meta">${who(pv!.author, author)}${sigBadge(pv!.author, pv!.attestation, { title: pv!.title, body: pv!.body, url: pv!.url })}${donateIn(donations, pv!.author, 'compact', true)}<span>${ago(pv!.createdAt, t)}</span></div></div></div>
+<div class="meta">${who(pv!.author, author)}${sigBadge(pv!.author, pv!.attestation, { title: pv!.title, body: pv!.body, url: pv!.url, helpRequestId: pv!.helpRequestId })}${donateIn(donations, pv!.author, 'compact', true)}<span>${ago(pv!.createdAt, t)}</span></div></div></div>
 ${pv!.url ? html`<p style="margin-top:14px"><a href="${pv!.url}" rel="nofollow noopener">${pv!.url}</a></p>` : ''}
 ${pv!.body ? html`<div class="post-body">${raw(linkMentions(bodyWithDonate(pv!.body, donations.get(pv!.author.toLowerCase()), esc), named))}</div>` : ''}</article>
 <h2 style="margin-top:36px;font-size:24px">${pv!.commentCount} ${pv!.commentCount === 1 ? 'comment' : 'comments'}</h2>

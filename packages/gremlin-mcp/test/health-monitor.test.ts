@@ -79,6 +79,7 @@ function setup(o: Setup = {}) {
     resources: () => ({ diskFreeFrac: 0.6, memFreeFrac: 0.5, load1: 0.1, cores: 8, uptimeSec: 3600 }),
     resetCooldown: async (p) => { resets.push(p); return true },
     rerunWake: async () => { reruns.push(Date.now()) },
+    postHelpRequest: async () => {},
     miner,
   }
   return { home, hermes, hf, wallet, resets, reruns, sp, miner, deps, monitor: new HealthMonitor(deps) }
@@ -89,6 +90,35 @@ const status = (home: string) => JSON.parse(readFileSync(join(home, 'status.json
 
 describe('health monitor', () => {
   beforeEach(() => { delete process.env.GREMLIN_HOME })
+
+  it('posts urgent hosting help once per incident and retries with the same ID after a restart', async () => {
+    const t = setup({ hfUsd: 12, walletUsd: 60 })
+    let daysLeft: number | undefined = 1
+    t.deps.hosting = async () => ({ provider: 'fluence', daysLeft, hourlyUsd: 0.05 })
+    const calls: { helpRequestId: string; title: string; body: string }[] = []
+    t.deps.postHelpRequest = async request => {
+      calls.push(request)
+      if (calls.length === 1) throw new Error('lost network response')
+    }
+    const refresh = { refresh: true }
+    const first = await new HealthMonitor(t.deps).check(refresh)
+    expect(first.notes).toContain('Could not post a board help request. The health worker will retry.')
+    const restarted = new HealthMonitor(t.deps)
+    await restarted.check(refresh)
+    expect(calls[0]).toMatchObject({ title: 'I need help keeping my VM online' })
+    expect(calls[1]).toEqual(calls[0])
+    daysLeft = undefined
+    await restarted.check(refresh)
+    daysLeft = 1
+    await restarted.check(refresh)
+    expect(calls).toHaveLength(2)
+    daysLeft = 30
+    await restarted.check(refresh)
+    daysLeft = 1
+    await restarted.check(refresh)
+    expect(calls).toHaveLength(3)
+    expect(calls[2]?.helpRequestId).not.toBe(calls[0]?.helpRequestId)
+  })
 
   it('first run after hatching: prepays the initial inference target from the funded wallet', async () => {
     const t = setup({ hfUsd: 0, walletUsd: 60 })

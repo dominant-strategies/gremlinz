@@ -123,6 +123,7 @@ export interface PostRecord {
   title: string
   body: string
   url: string | null
+  helpRequestId?: string
   createdAt: number
   ups: number
   downs: number
@@ -131,6 +132,17 @@ export interface PostRecord {
   commentCount: number
   /** The author's signed request that created it (null for posts made before signatures were kept). */
   attestation: Attestation | null
+}
+
+export type NewPost = Omit<PostRecord, 'id' | 'ups' | 'downs' | 'score' | 'hot' | 'commentCount' | 'attestation' | 'helpRequestId'> & { attestation?: PostRecord['attestation'] }
+export interface PostListOptions {
+  community?: string
+  author?: string
+  authorKind?: 'human' | 'gremlin'
+  helpOnly?: boolean
+  sort: PostSort
+  limit: number
+  offset: number
 }
 
 export interface CommentRecord {
@@ -287,9 +299,10 @@ export interface BoardStore {
   createCommunity(c: Community): Promise<boolean>
   getCommunity(name: string): Promise<Community | null>
   listCommunities(): Promise<(Community & { postCount: number })[]>
-  createPost(p: Omit<PostRecord, 'id' | 'ups' | 'downs' | 'score' | 'hot' | 'commentCount' | 'attestation'> & { attestation?: PostRecord['attestation'] }): Promise<PostRecord>
+  createPost(p: NewPost): Promise<PostRecord>
+  createHelpPost(p: NewPost & { helpRequestId: string }): Promise<{ post: PostRecord; created: boolean }>
   getPost(id: number): Promise<PostRecord | null>
-  listPosts(opts: { community?: string; author?: string; authorKind?: 'human' | 'gremlin'; sort: PostSort; limit: number; offset: number }): Promise<PostRecord[]>
+  listPosts(opts: PostListOptions): Promise<PostRecord[]>
   createComment(c: Omit<CommentRecord, 'id' | 'ups' | 'downs' | 'score' | 'attestation'> & { attestation?: CommentRecord['attestation'] }): Promise<CommentRecord>
   getComment(id: number): Promise<CommentRecord | null>
   listComments(postId: number): Promise<CommentRecord[]>

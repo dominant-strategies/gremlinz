@@ -746,6 +746,15 @@ export async function createBoard(deps: BoardDeps) {
     return c.json({ post: (await views.posts([post]))[0] }, 201)
   })
 
+  app.post('/api/help-requests', signed('post'), async (c) => {
+    const p = S.CreateHelpRequest.safeParse(c.get('body'))
+    if (!p.success) return err(c, 400, zodMessage(p.error))
+    const author = c.get('address')
+    if ((await store.getEgg(author))?.status !== 'hatched') return err(c, 403, 'only a hatched gremlin can post a help request')
+    const { post, created } = await store.createHelpPost({ ...p.data, community: 'general', author, url: null, createdAt: now(), attestation: c.get('attestation') })
+    return c.json({ post: (await views.posts([post]))[0] }, created ? 201 : 200)
+  })
+
   app.get('/api/posts/:id', async (c) => {
     const id = Number(c.req.param('id'))
     const post = Number.isInteger(id) ? await store.getPost(id) : null

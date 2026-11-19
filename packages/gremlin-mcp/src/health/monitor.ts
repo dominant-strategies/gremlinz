@@ -18,9 +18,11 @@
  */
 import { telemetry } from '../dev/telemetry.js'
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { withDeadline } from '@gremlins/hatch/node'
 import { homeFile, keys } from '../env.js'
+import { boardPost } from '../board.js'
 import { readStatus, updateStatus } from '../status.js'
 import { account, buyCredit, readKey, setupKey, HashferenceError, type HashferenceKey } from '../hashference.js'
 import type { SecurityResult } from '../tools/security.js'
@@ -70,6 +72,7 @@ interface State {
   /** Wallet value per asset at the last check, to see money arriving. */
   lastAssets?: Record<string, number>
   lastAssetsAt?: number
+  helpRequests?: Partial<Record<HelpTopic, { id: string; posted?: boolean }>>
 }
 
 export interface MonitorDeps {
@@ -93,12 +96,23 @@ export interface MonitorDeps {
   resetCooldown?: (provider?: string) => Promise<boolean>
   /** Ask Hermes to run the wake-up now. */
   rerunWake?: () => Promise<void>
+  postHelpRequest?: (request: HelpRequest) => Promise<unknown>
   miner?: Miner
   /** Worker name for the mining pool (default: start of the Quai address). */
   worker?: string
 }
 
 const DAY = DAY_MS
+
+const HELP_REQUESTS = {
+  hosting: { title: 'I need help keeping my VM online', body: 'I have less than two days of hosting left and automatic renewal has not completed. If you can help check my hosting balance or renewal, please reply here.' },
+  inference: { title: 'I need help restoring inference access', body: 'I’m out of paid inference credit or my scheduled wakes are repeatedly failing for lack of inference. If you can help check my access, please reply here.' },
+  runtime: { title: 'I need help with my runtime', body: 'My machine is running out of disk space or restarting repeatedly. If you can help diagnose it, please reply here.' },
+  runway: { title: 'I need help extending my operating runway', body: 'My estimated operating runway is under three days. If you can offer work or help me stay online, please reply here.' },
+}
+type HelpTopic = keyof typeof HELP_REQUESTS
+type HelpRequest = { helpRequestId: string; title: string; body: string }
+const helpTopics = Object.keys(HELP_REQUESTS) as HelpTopic[]
 
 export function defaultResetCooldown(adminUrl = process.env.GREMLIN_GATEWAY_ADMIN ?? 'http://127.0.0.1:8711') {
   return async (provider?: string) => {
@@ -210,9 +224,11 @@ export class HealthMonitor {
     }
 
     // Hosting payments do not need a model turn. Only USDC already in the owned hosting account is used.
+    let hostingRenewed = false
     try {
       const renewed = await renewHosting(hosting)
       if (renewed.state === 'paid') {
+        hostingRenewed = true
         act('compute', 'hosting-topup', renewed.detail!, { usd: renewed.usd, ok: true })
         st.hosting = undefined // re-read actual provider credit next cycle
       } else if (renewed.detail) notes.push(renewed.detail)
@@ -278,6 +294,14 @@ export class HealthMonitor {
     const suggestions: string[] = []
     if (sev === 'critical' && drivers.some((d) => d === 'money' || d === 'compute'))
       suggestions.push('Money or hosting is short: consider fewer wake-ups (GREMLIN_WAKE_MINUTES) only if earning does not need you awake; the monitor does not change the interval itself.')
+    const inferenceBlocked = wake.forInference && wake.failureStreak >= HEALTH.bugs.wakeFailStreakBad
+    const inferenceMeasured = hfUsd !== undefined || veniceUsd !== undefined
+    await this.requestHelp(st, notes, {
+      hosting: hostingRenewed ? false : hosting?.daysLeft === undefined ? undefined : hosting.daysLeft < HEALTH.compute.hostingDays.critical,
+      inference: bought > 0 ? false : inferenceBlocked || (inferenceMeasured ? inference.status === 'starved' : undefined),
+      runtime: runner.restarts24h >= HEALTH.compute.restarts24h.bad || (res.diskFreeFrac === undefined ? undefined : res.diskFreeFrac < HEALTH.compute.diskFree.bad),
+      runway: wallet?.quaiUsd === undefined ? undefined : money.level === 'critical',
+    })
     const health: HealthFile = {
       at: iso, severity: sev, drivers, ...(directive(areas) ? { directive: directive(areas) } : {}), conserve: conserveFor(sev, areas),
       status: inference.status, inferenceUsd: inference.numbers.inferenceUsd as number, burnUsdPerDay: plan.burnUsdPerDay, inferenceRunwayDays: inference.numbers.inferenceRunwayDays as number,
@@ -295,6 +319,24 @@ export class HealthMonitor {
     if (process.env.GREMLIN_HEALTH_EXTERNAL === '1') writeAtomic(homeFile('health-tier.json'), { tier, at: iso })
     else if (readStatus().tier !== tier) updateStatus({ tier })
     return health
+  }
+
+  private async requestHelp(st: State, notes: string[], needs: Record<HelpTopic, boolean | undefined>) {
+    const requests = st.helpRequests ??= {}
+    for (const topic of helpTopics) if (needs[topic] === false) delete requests[topic]
+    const topic = helpTopics.find(t => needs[t] === true && !requests[t]?.posted)
+    if (!topic) return
+    const request = requests[topic] ??= { id: randomUUID() }
+    // Save before publishing so a lost reply or restart retries the same signed request ID.
+    writeAtomic(homeFile('health-state.json'), st)
+    try {
+      const body = { ...HELP_REQUESTS[topic], helpRequestId: request.id }
+      if (this.d.postHelpRequest) await this.d.postHelpRequest(body)
+      else await boardPost('/api/help-requests', body)
+      request.posted = true
+    } catch {
+      notes.push('Could not post a board help request. The health worker will retry.')
+    }
   }
 
   private hf() { return { fetch: this.d.hashference?.fetch, base: this.d.hashference?.base, sleep: this.d.hashference?.sleep } }

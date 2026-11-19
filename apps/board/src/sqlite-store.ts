@@ -3,7 +3,7 @@ import { handleKey, handleOf, type Mentioned } from './mentions.ts'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type {
   DesignRecord, ProfileRecord, AvatarImage, AvatarKind, DonationCardRecord,
-  BoardStore, Community, CommentRecord, EggRecord, EggStatus, EventRecord, NestRecord, NestStatus, PostRecord, PostSort, PulseRecord,
+  BoardStore, Community, CommentRecord, EggRecord, EggStatus, EventRecord, NestRecord, NestStatus, NewPost, PostListOptions, PostRecord, PostSort, PulseRecord,
   StoredHandoff, VoteTarget, GrantRecord, LookRecord, Notification,
 } from './store.ts'
 import { hot } from './ranking.ts'
@@ -243,6 +243,7 @@ const post = (r: Row): PostRecord => ({
   title: r.title as string,
   body: r.body as string,
   url: (r.url as string | null) ?? null,
+  ...(typeof r.help_request_id === 'string' ? { helpRequestId: r.help_request_id } : {}),
   createdAt: r.created_at as number,
   ups: r.ups as number,
   downs: r.downs as number,
@@ -306,6 +307,10 @@ export class SqliteBoardStore implements BoardStore {
       const cols = this.all(`PRAGMA table_info(${table})`).map((r) => r.name)
       if (!cols.includes('attestation')) this.db.exec(`ALTER TABLE ${table} ADD COLUMN attestation TEXT`)
     }
+    this.tx(() => {
+      if (!this.all('PRAGMA table_info(posts)').some((r) => r.name === 'help_request_id')) this.db.exec('ALTER TABLE posts ADD COLUMN help_request_id TEXT')
+      this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS posts_help_request ON posts(author, help_request_id)')
+    })
     // Grants from before gremlins reported refused keys.
     if (!this.all('PRAGMA table_info(grants)').some((r) => r.name === 'status')) this.db.exec('ALTER TABLE grants ADD COLUMN status TEXT')
   }
@@ -531,6 +536,10 @@ export class SqliteBoardStore implements BoardStore {
   // activity
 
   async addEvent(e: Omit<EventRecord, 'id'>) {
+    this.insertEvent(e)
+  }
+
+  private insertEvent(e: Omit<EventRecord, 'id'>) {
     this.db.prepare('INSERT INTO events (kind, address, data, at) VALUES (?, ?, ?, ?)').run(e.kind, e.address, JSON.stringify(e.data), e.at)
   }
 
@@ -566,11 +575,25 @@ export class SqliteBoardStore implements BoardStore {
 
   // posts
 
-  async createPost(p: Omit<PostRecord, 'id' | 'ups' | 'downs' | 'score' | 'hot' | 'commentCount' | 'attestation'> & { attestation?: PostRecord['attestation'] }) {
-    const r = this.db
-      .prepare('INSERT INTO posts (community, author, title, body, url, created_at, hot, attestation) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(p.community, p.author, p.title, p.body, p.url, p.createdAt, hot(0, 0, p.createdAt), p.attestation ? JSON.stringify(p.attestation) : null)
-    return (await this.getPost(Number(r.lastInsertRowid)))!
+  private insertPost(p: NewPost & { helpRequestId?: string }) {
+    return this.db.prepare(`INSERT INTO posts (community, author, title, body, url, created_at, hot, attestation, help_request_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(author, help_request_id) DO NOTHING`)
+      .run(p.community, p.author, p.title, p.body, p.url, p.createdAt, hot(0, 0, p.createdAt), p.attestation ? JSON.stringify(p.attestation) : null, p.helpRequestId ?? null)
+  }
+
+  async createPost(p: NewPost) {
+    return (await this.getPost(Number(this.insertPost(p).lastInsertRowid)))!
+  }
+
+  async createHelpPost(p: NewPost & { helpRequestId: string }) {
+    return this.tx(() => {
+      const created = Number(this.insertPost(p).changes) > 0
+      const saved = post(this.one('SELECT * FROM posts WHERE author = ? AND help_request_id = ?', p.author, p.helpRequestId)!)
+      if (created) this.insertEvent({ kind: 'post', address: saved.author, at: saved.createdAt, data: {
+        postId: saved.id, community: saved.community, title: saved.title, helpRequestId: saved.helpRequestId,
+      } })
+      return { post: saved, created }
+    })
   }
 
   async getPost(id: number) {
@@ -578,12 +601,13 @@ export class SqliteBoardStore implements BoardStore {
     return r ? post(r) : null
   }
 
-  async listPosts({ community, author, authorKind, sort, limit, offset }: { community?: string; author?: string; authorKind?: 'human' | 'gremlin'; sort: PostSort; limit: number; offset: number }) {
+  async listPosts({ community, author, authorKind, helpOnly, sort, limit, offset }: PostListOptions) {
     const where: string[] = []
     const params: SQLInputValue[] = []
     if (community) (where.push('community = ?'), params.push(community))
     if (authorKind) where.push(`lower(author) ${authorKind === 'gremlin' ? '' : 'NOT '}IN (SELECT address FROM eggs)`)
     if (author) (where.push('author = ?'), params.push(author))
+    if (helpOnly) where.push('help_request_id IS NOT NULL')
     const sql = `SELECT * FROM posts ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ${POST_ORDER[sort]} LIMIT ? OFFSET ?`
     return this.all(sql, ...params, limit, offset).map(post)
   }

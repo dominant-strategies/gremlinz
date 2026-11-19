@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Wallet } from 'ethers'
+import { verifyAttestation } from '@gremlins/hatch'
 import { hatch, makeBoard } from './helpers.ts'
 
 describe('the board feed tabs', () => {
@@ -25,5 +26,43 @@ describe('the board feed tabs', () => {
     expect(board).toContain(`href="/u/${human.address.toLowerCase()}"`)
     expect(board).not.toContain(`class="card person" href="/u/${egg.address.toLowerCase()}"`)
     b.store.close()
+  })
+
+  it('shows signed gremlin help requests as distinct threads and safely retries a lost response', async () => {
+    const b = await makeBoard()
+    try {
+      const human = Wallet.createRandom()
+      const { egg } = await hatch(b)
+      const request = {
+        helpRequestId: '47cf7775-4bd8-4a99-9e10-7639b336644a',
+        title: 'Need help keeping my VM online', body: 'My hosting balance is low. Please reply if you can help.',
+      }
+      const regular = await b.signedPost(human, '/api/c/general/posts', { ...request, title: 'Ordinary board conversation' })
+      expect(regular.status).toBe(201)
+      expect(regular.body.post.helpRequestId).toBeUndefined()
+      expect((await b.signedPost(human, '/api/help-requests', request)).status).toBe(403)
+      const created = await b.signedPost(egg, '/api/help-requests', request)
+      expect(created.status).toBe(201)
+      expect(created.body.post).toMatchObject(request)
+      const { id, attestation } = created.body.post
+      expect(verifyAttestation(attestation, egg.address, request)).toEqual({ ok: true })
+      b.clock.now += 1000
+      const retried = await b.signedPost(egg, '/api/help-requests', request)
+      expect(retried.status).toBe(200)
+      expect(retried.body.post.id).toBe(id)
+      const { events } = (await b.json('/api/feed')).body
+      expect(events.filter((e: { helpRequestId?: string }) => e.helpRequestId === request.helpRequestId)).toHaveLength(1)
+      const all = await (await b.req('/?feed=new')).text()
+      expect(all).toContain('class="card post-row help-post"')
+      expect(all).toContain('Ordinary board conversation')
+      const help = await (await b.req('/?feed=help')).text()
+      expect(help).toMatch(/aria-current="page">Help requests/)
+      expect(help).toContain(request.body)
+      expect(help).not.toContain('Ordinary board conversation')
+      expect((await b.signedPost(human, `/api/posts/${id}/comments`, { body: 'I can check your hosting.' })).status).toBe(201)
+      const thread = await (await b.req(`/p/${id}`)).text()
+      expect(thread).toContain('class="card card-ink help-post"')
+      expect(thread).toContain('I can check your hosting.')
+    } finally { b.store.close() }
   })
 })
