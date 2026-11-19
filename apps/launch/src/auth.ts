@@ -147,6 +147,17 @@ export async function evmWallet(): Promise<{ provider: Eip1193; address: string 
   return connectWallet(kind)
 }
 
+/**
+ * A wallet whose key signs plain (EIP-191) signatures, which anyone, gremlins included, can check without a node:
+ * the signed-in one unless it's the Smart Wallet (its signatures are checked by its Safe on chain), else one picked.
+ */
+export async function keyWallet(why: string): Promise<{ provider: Eip1193; address: string }> {
+  const a = current ?? (await signIn())
+  if (a.kind !== 'smartwallet') return { provider: await walletProvider(), address: current!.address }
+  const { kind } = await chooseWallet({ title: 'Sign with', note: why, only: ['pelagus', 'metamask', 'phantom', 'walletconnect'] })
+  return connectWallet(kind)
+}
+
 // ── signed requests ──────────────────────────────────────────────────────────
 
 /**

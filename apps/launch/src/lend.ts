@@ -10,7 +10,7 @@ import {
   buildGrant, draftProblems, grantSummary, lendingProvider, messageDigest, publicKeyFromSigned,
   type EggAnnouncement, type GrantWishes, type KeyGrant, type KeyRevoke, type Signed,
 } from '@gremlins/hatch'
-import { account, evmWallet, mountAuth, onAccountChange, walletErrorMessage } from './auth.js'
+import { account, keyWallet, mountAuth, onAccountChange, walletErrorMessage } from './auth.js'
 import { DEFAULT_BUDGET, formPolicy, providerOptions, type BudgetForm, type Every } from './lend-form.js'
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T
@@ -163,9 +163,9 @@ function update() {
 
 // ── sign and send ─────────────────────────────────────────────────────────
 
-/** Signs a board message with an EVM wallet (EIP-191 over the message digest, as the board verifies). */
+/** Signs a board message with the signed-in wallet (EIP-191 over the message digest, as the board and gremlin verify). */
 async function signBoardMessage<T extends KeyGrant | KeyRevoke>(build: (address: string) => T | Promise<T>): Promise<Signed<T>> {
-  const { provider, address } = await evmWallet()
+  const { provider, address } = await keyWallet('The gremlin checks who lent a key by itself, and it can\'t check a Quai Smart Wallet signature yet. Sign this one with a wallet app; nothing is paid.')
   const message = await build(address)
   const signature = (await provider.request({ method: 'personal_sign', params: [messageDigest(message), address] })) as string
   return { message, signature }
