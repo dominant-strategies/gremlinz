@@ -1,13 +1,17 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import { WAKE_JOB_ID, ACCESS_JOB_ID, cronJobs, hermesConfig, refreshCronJobs, workspaceGuide } from '../src/bootstrap/hermes.js'
 
 describe('Hermes config', () => {
-  const cfg = parse(hermesConfig({
+  const setup = {
     gatewayUrl: 'http://127.0.0.1:8711/v1',
     mcp: { command: '/usr/bin/node', args: ['/opt/gremlin-mcp/dist/main.js'], env: { GREMLIN_HOME: '/var/lib/gremlin' } },
     skillsDir: '/opt/gremlin/skills',
-  }))
+  }
+  const cfg = parse(hermesConfig(setup))
 
   it('uses only the gateway, above the minimum context, with auxiliary work on the free route', () => {
     expect(cfg.model).toEqual({ provider: 'custom:gremlin', default: 'gremlin-auto', context_length: 64000 })
@@ -19,6 +23,26 @@ describe('Hermes config', () => {
 
   it('launches gremlin-mcp with only the env it needs', () => {
     expect(cfg.mcp_servers.gremlin).toMatchObject({ command: '/usr/bin/node', env: { GREMLIN_HOME: '/var/lib/gremlin' } })
+  })
+
+  it('registers the packaged social skill alongside the runtime skills', () => {
+    const [runtimeDir, sharedDir] = cfg.skills.external_dirs
+    expect(runtimeDir).toBe(setup.skillsDir)
+    expect(readFileSync(join(sharedDir, 'social-media', 'SKILL.md'), 'utf8')).toMatch(/^---\nname: social-media\n/)
+  })
+
+  it('exposes the upstream content calendar when present in the runtime', () => {
+    const runtime = mkdtempSync(join(tmpdir(), 'hermes-runtime-'))
+    try {
+      const skillsDir = join(runtime, 'gremlin', 'skills')
+      const calendarDir = join(runtime, 'optional-skills', 'creative', 'social-media-content-calendar')
+      mkdirSync(calendarDir, { recursive: true })
+      expect(parse(hermesConfig({ ...setup, skillsDir })).skills.external_dirs).toEqual([skillsDir, cfg.skills.external_dirs[1]])
+      writeFileSync(join(calendarDir, 'SKILL.md'), '---\nname: social-media-content-calendar\n---\n')
+      expect(parse(hermesConfig({ ...setup, skillsDir })).skills.external_dirs).toEqual([skillsDir, cfg.skills.external_dirs[1], calendarDir])
+    } finally {
+      rmSync(runtime, { recursive: true, force: true })
+    }
   })
 
   it('gives the main agent full control (no approvals, deny rules or floors), and keeps the toolset small', () => {
@@ -42,6 +66,7 @@ describe('wake-up job', () => {
     expect(jobs[0].context_from).toEqual(['self'])
     expect(jobs[0].deliver).toBe('local')
     expect(jobs[0].skills).toContain('board-citizen')
+    expect(jobs[0].prompt).toContain('load the social-media skill')
     expect(jobs[0].prompt).toMatch(/^Wake up\..*\n1\. health_status first: fix what it says\. If money, inference or compute is low/)
   })
 })

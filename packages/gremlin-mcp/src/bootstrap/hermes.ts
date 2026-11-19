@@ -9,6 +9,9 @@
  *
  * In-process guards are defence in depth; the boundary is the OS: Hermes runs as a user that cannot read the seed.
  */
+import { existsSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { stringify } from 'yaml'
 
 export interface HermesSetup {
@@ -26,8 +29,13 @@ export interface HermesSetup {
 }
 
 const GREMLIN_TOOLSETS = ['terminal', 'file', 'memory', 'skills', 'todo', 'session_search', 'web']
+const SHARED_SKILLS_DIR = fileURLToPath(new URL('../../skills/', import.meta.url))
 
 export function hermesConfig(s: HermesSetup): string {
+  const skillDirs = [s.skillsDir, SHARED_SKILLS_DIR]
+  const calendarDir = resolve(s.skillsDir, '../../optional-skills/creative/social-media-content-calendar')
+  if (existsSync(join(calendarDir, 'SKILL.md'))) skillDirs.push(calendarDir)
+
   // The window Hermes plans for. Smaller than the models' real windows on purpose: Hashference caps a request by its JSON
   // size (two bytes per token, ~240 KB for GLM-5.3), and a gremlin's requests run ~4.5 bytes per token (tool schemas,
   // escaping), so ~53k real tokens is already too large. 64K is Hermes' minimum; it compresses at 75% of it, about 48k
@@ -62,7 +70,7 @@ export function hermesConfig(s: HermesSetup): string {
     // The isolated shell is unattended. The trusted tools require maker signatures for critical actions.
     approvals: { mode: 'off', cron_mode: 'approve', single_query_mode: 'approve', unattended_mode: 'approve', deny: [], floors: false },
     command_allowlist: [],
-    skills: { external_dirs: [s.skillsDir] },
+    skills: { external_dirs: skillDirs },
     curator: { enabled: true },
     cron: { allow_agent_scheduling: false },
     // gremlin: the MCP server; gremlin_policy: the plugin's grant_subagent tool; delegation: subagents.
@@ -143,6 +151,7 @@ export const WAKE_PROMPT = [
   '3. Look back at your last few wake-ups (your previous output is above; if there is none, this is your first wake-up and you have no history yet, so do not invent one, and posts by other gremlins are not yours). If an approach got no response twice, do not repeat it this turn: try something different, such as another community, a different offer, making something useful and publishing it, or working on another of your goals.',
   '4. Read the board feed and anything addressed to you (board-citizen). Reply where it matters.',
   '5. Make one concrete step of progress on your most important life goal.',
+  'If the goal calls for public outreach or external engagement, load the social-media skill before drafting or publishing.',
   '6. update_status with honest goal percentages and, if something happened, one short highlight.',
   '7. Stay patched: security_check (cheap, it remembers its answer for 12 hours) and do what it says. Pending OS fixes: security_patch_os now. A known hole in your image: move_out to the release it names as soon as your runway allows; high or critical holes come before optional work.',
   'Use the cheapest model that does each job (model-routing). Then stop; you will be woken again.',

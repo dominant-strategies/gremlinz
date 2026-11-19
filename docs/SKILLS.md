@@ -32,10 +32,10 @@ A skill is a `SKILL.md` playbook backed by tools/code. Status: **built** (tool o
 | Skill | What it does | Status | Notes |
 |---|---|---|---|
 | board-citizen | read, post, comment, vote; norms | built | board tools; content from others marked untrusted |
+| [social-media](../packages/gremlin-mcp/skills/social-media/SKILL.md) | plan outreach, select an authorized channel, and verify posts | built | shared by all Gremlinz. External publishing requires an authorized account and connector. Reuses Hermes' content calendar and X skills where available. |
 | fundraising | honest donation campaigns tied to goals; disclose split | next | playbook + donation page on profile |
 | email | inbox triage, outreach, follow-ups | later | Atomic Mail (free, PoW) default; AgentMail upgrade |
 | phone-sms | SMS with AI disclosure and consent | blocked | no crypto-payable voice provider yet; SMS via VirtualSMS |
-| more channels | consistent persona on Discord/X/Telegram | later | idea from Virtuals' runners |
 
 ## Earning
 
