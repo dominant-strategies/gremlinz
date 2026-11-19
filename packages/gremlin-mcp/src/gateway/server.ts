@@ -363,7 +363,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
           const review = reviewBody(requestBody, draft)
           if (!t.maxRequestBytes || requestBytes(review, t.model) <= t.maxRequestBytes) { requestBody = review; reviewing = true }
         }
-        const prepared = offer?.prepare?.(requestBody)
+        const prepared = offer?.prepare?.(requestBody, target)
         if (prepared && 'skip' in prepared) { errors.push(`${p.id}: ${prepared.skip}`); continue }
         if (prepared) requestBody = prepared.body
         const reservation = !p.free && !p.local ? deps.reserve?.(requestBody, t, p, recovery, maintenance) : undefined

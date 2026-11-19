@@ -12,7 +12,10 @@
  * from estimates; lenders should still lend a dedicated key with a hard limit set at the provider.
  */
 import { createHash } from 'node:crypto'
-import { grantProblem, lentKeyNote, lentLimits, openApiKey, providerOf, signMessage, verifyMessage, type GrantStatus, type KeyGrant, type Signed } from '@gremlins/hatch'
+import {
+  ModelChoice, grantProblem, hashferenceCatalog, legacyChoice, lentKeyNote, lentLimits, openApiKey, openaiCatalog, priceOf, providerOf, rankModels, signMessage, veniceCatalog, verifyMessage,
+  type CatalogModel, type GrantStatus, type KeyGrant, type Signed,
+} from '@gremlins/hatch'
 import type { HDNodeWallet } from 'ethers'
 import type { ProviderConfig, RouteTarget } from './config.js'
 import type { UpstreamFetch } from './providers.js'
@@ -28,8 +31,8 @@ export interface LentOffer {
   targets: RouteTarget[]
   /** Detect the borrowed credential in a draft without exposing it to the gateway. */
   containsCredential?: (text: string) => boolean
-  /** The upstream body for this key (wishes, end-user id, per-call cap), or a reason to skip the key this time. */
-  prepare?: (body: Record<string, unknown>) => { body: Record<string, unknown> } | { skip: string }
+  /** The upstream body for this key and model (wishes, end-user id, per-call cap), or a reason to skip it this time. */
+  prepare?: (body: Record<string, unknown>, target?: { model: string; inputPerM?: number; outputPerM?: number }) => { body: Record<string, unknown> } | { skip: string }
   /** A slot under the key's rate limits for a call of about `tokens`, or a reason to skip it. */
   admit?: (tokens: number) => { release: (actualTokens?: number) => void } | { skip: string }
   /** Every answer from the provider on this key (Retry-After, refused keys). */
@@ -88,6 +91,59 @@ export async function remainingUsd(g: OpenGrant, fetchImpl: typeof fetch = fetch
   return undefined
 }
 
+/**
+ * The models a lent key serves (GET {baseUrl}/models), classified and priced where the provider says. Lenders don't
+ * name models; the gremlin reads them here and moves on when one is retired.
+ */
+export async function grantCatalog(g: OpenGrant, fetchImpl: typeof fetch = fetch): Promise<CatalogModel[]> {
+  const reg = providerOf(g.grant.provider)
+  const base = g.grant.provider.baseUrl.replace(/\/$/, '')
+  // Anthropic's own /models wants x-api-key and a version; everyone else reads the bearer token.
+  const headers: Record<string, string> = { ...(reg?.headers ?? {}), authorization: `Bearer ${g.apiKey}`, ...(reg?.id === 'anthropic' ? { 'x-api-key': g.apiKey, 'anthropic-version': '2023-06-01' } : {}) }
+  const res = await fetchImpl(`${base}/models`, { headers, signal: AbortSignal.timeout(10_000) })
+  if (!res.ok) throw new Error(`models list: ${res.status}`)
+  const body = await res.json()
+  const id = reg?.id ?? 'custom'
+  return id === 'venice' ? veniceCatalog(body) : id === 'hashference' ? hashferenceCatalog(body) : openaiCatalog(id, body)
+}
+
+/** What the lender chose: the grant's model choice, or (older grants) its model list read as preferences then families. */
+export function grantChoice(grant: KeyGrant): ModelChoice {
+  const c = grant.modelChoice ? ModelChoice.parse(grant.modelChoice) : legacyChoice(grant.provider.models)
+  const preferred = grant.wishes?.preferredModels ?? []
+  return preferred.length && !c.only ? { ...c, models: [...preferred, ...c.models.filter((m) => !preferred.includes(m))] } : c
+}
+
+export interface PricedModel { model: string; inputPerM: number; outputPerM: number }
+/**
+ * A model at its real price: the key's catalogue, else the price table. Only when neither knows it does an older
+ * grant's stated price stand in (the lender's own valuation); a newer grant, which states none, gets the worst case.
+ */
+function priced(grant: KeyGrant, model: string, cat?: CatalogModel): PricedModel {
+  const p = priceOf(model, cat)
+  const stated = !grant.modelChoice && (grant.provider.inputPerM > 0 || grant.provider.outputPerM > 0)
+  if (p.source === 'estimate' && stated) return { model, inputPerM: grant.provider.inputPerM, outputPerM: grant.provider.outputPerM }
+  return { model, inputPerM: p.inputPerM, outputPerM: p.outputPerM }
+}
+
+/**
+ * The models to try on a lent key, best first, each at its real price. From the key's catalogue when the gremlin has
+ * read it; before that, the grant's own list (still priced from the table, never below what the grant says).
+ */
+export function grantModels(grant: KeyGrant, catalog?: CatalogModel[]): PricedModel[] {
+  const choice = grantChoice(grant)
+  if (catalog?.length) {
+    const ranked = rankModels(catalog, choice)
+    if (ranked.length) return ranked.slice(0, 8).map((m) => priced(grant, m.id, m))
+  }
+  const list = [...choice.models.filter((m) => grant.provider.models.includes(m)), ...grant.provider.models.filter((m) => !choice.models.includes(m))]
+  // Never below what an older grant states: it was the lender's own valuation.
+  return list.map((m) => { const p = priced(grant, m); return { model: m, inputPerM: Math.max(p.inputPerM, grant.provider.inputPerM), outputPerM: Math.max(p.outputPerM, grant.provider.outputPerM) } })
+}
+
+/** A provider's answer meaning "that model isn't served here (any more)". */
+export const modelGone = (status: number, text: string) => (status === 400 || status === 404) && /not_found_error.{0,80}"model: |unsupported model|model not found|no such model|unknown model|model .{0,40} (?:does not exist|is not available)/i.test(text)
+
 /** A stable, anonymous id for this gremlin, for providers that ask for an end-user id. */
 export const endUserId = (gremlin: string) => `gremlin-${createHash('sha256').update(gremlin.toLowerCase()).digest('hex').slice(0, 32)}`
 
@@ -115,9 +171,9 @@ function withNote(body: Record<string, unknown>, note: string): Record<string, u
  * Per-call cap: the lender's maxPerCallUsd and what is left of the allowance. Lowers max_tokens so the worst case fits,
  * or says why the call can't fit at all.
  */
-export function capCall(body: Record<string, unknown>, g: KeyGrant, allowedUsd: number): { body: Record<string, unknown> } | { skip: string } {
+export function capCall(body: Record<string, unknown>, g: KeyGrant, allowedUsd: number, price: { inputPerM: number; outputPerM: number } = g.provider): { body: Record<string, unknown> } | { skip: string } {
   const cap = Math.min(g.policy.maxPerCallUsd ?? Infinity, allowedUsd)
-  const { inputPerM, outputPerM } = g.provider
+  const { inputPerM, outputPerM } = price
   const inUsd = (promptTokens(body) * inputPerM) / 1e6
   if (inUsd >= cap) return { skip: `the prompt alone (~$${inUsd.toFixed(4)}) is over the $${cap.toFixed(4)} this key allows for one call` }
   if (!outputPerM || cap === Infinity) return { body }
@@ -149,6 +205,8 @@ export class LentKeys {
   grants: OpenGrant[] = []
   private limiters = new Map<string, KeyLimiter>()
   private remaining = new Map<string, number | undefined>()
+  /** Each key's model list, read from the provider; `at` 0 means read it again (a model was retired). */
+  private catalogs = new Map<string, { at: number; models: CatalogModel[] }>()
   private gremlin: string
   private used: (grantId: string, sinceMs: number) => number
   private onDisabled: (g: KeyGrant, status: number, reason: string) => void
@@ -168,6 +226,15 @@ export class LentKeys {
   }
 
   setRemaining(grantId: string, usd: number | undefined) { this.remaining.set(grantId, usd) }
+
+  setCatalog(grantId: string, models: CatalogModel[]) { this.catalogs.set(grantId, { at: this.now(), models }) }
+
+  /** Does this key's model list need reading (never read, a day old, or a model was retired since)? */
+  catalogDue(grantId: string, maxAgeMs = 24 * 3_600_000): boolean {
+    const c = this.catalogs.get(grantId)
+    // An empty list means it couldn't be read: try again within the hour.
+    return !c || c.at === 0 || this.now() - c.at > (c.models.length ? maxAgeMs : 3_600_000)
+  }
 
   limiter(grantId: string) { return this.limiters.get(grantId) }
 
@@ -193,15 +260,15 @@ export class LentKeys {
     const reg = providerOf(grant.provider)
     const id = `grant-${grant.grantId.slice(2)}`
     const note = lentKeyNote(grant)
-    const preferred = grant.wishes?.preferredModels ?? []
-    const models = [...preferred.filter((m) => grant.provider.models.includes(m)), ...grant.provider.models.filter((m) => !preferred.includes(m))]
+    const models = grantModels(grant, this.catalogs.get(grant.grantId)?.models)
+    const priceFor = (model?: string) => models.find((m) => m.model === model) ?? models[0] ?? grant.provider
     return {
       provider: { id, kind: 'openai', baseUrl: grant.provider.baseUrl, timeoutMs: 600_000, firstByteMs: 120_000, free: false, minIntervalMs: 0 },
       fetch: keyFetch(g.apiKey, reg?.headers),
       containsCredential: text => text.includes(g.apiKey),
-      targets: models.map((m) => ({ provider: id, model: m, inputPerM: grant.provider.inputPerM, outputPerM: grant.provider.outputPerM, grantId: grant.grantId })),
-      prepare: (body) => {
-        const capped = capCall(body, grant, allow.allowedUsd)
+      targets: models.map((m) => ({ provider: id, model: m.model, inputPerM: m.inputPerM, outputPerM: m.outputPerM, grantId: grant.grantId })),
+      prepare: (body, target) => {
+        const capped = capCall(body, grant, allow.allowedUsd, priceFor(target?.model))
         if ('skip' in capped) return capped
         let b = withNote(capped.body, note)
         if (reg?.endUserField) b = { ...b, [reg.endUserField]: endUserId(this.gremlin) }
@@ -209,6 +276,8 @@ export class LentKeys {
       },
       admit: (tokens) => lim ? lim.admit(tokens) : { release: () => {} },
       observe: (status, headers, text) => {
+        // A retired model: read the key's model list again before the next pick.
+        if (modelGone(status, text)) { const c = this.catalogs.get(grant.grantId); if (c) c.at = 0 }
         if (lim?.observe(status, headers, text) === 'disabled') this.onDisabled(grant, status, lim.disabled!.reason)
       },
     }
@@ -223,7 +292,7 @@ export class LentKeys {
         grantId: g.grant.grantId,
         lender: g.grant.address,
         provider: { id: reg?.id ?? 'custom', name: reg?.name ?? g.grant.provider.label, stance: reg?.stance ?? 'allowed', conditions: reg?.conditions ?? [], obligations: reg?.obligations ?? [] },
-        models: g.grant.provider.models,
+        models: grantModels(g.grant, this.catalogs.get(g.grant.grantId)?.models).map((m) => m.model),
         policy: g.grant.policy,
         wishes: g.grant.wishes ?? null,
         repay: g.grant.repay,

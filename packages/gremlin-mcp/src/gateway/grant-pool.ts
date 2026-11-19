@@ -2,7 +2,7 @@
 import { grantProblem, type KeyGrant } from '@gremlins/hatch'
 import type { HDNodeWallet } from 'ethers'
 import { fingerprint } from './credentials.js'
-import { allowance, fetchGrants, LentKeys, period, remainingUsd, reportDisabled, type OpenGrant } from './grants.js'
+import { allowance, fetchGrants, grantCatalog, LentKeys, period, remainingUsd, reportDisabled, type OpenGrant } from './grants.js'
 import type { SpendingScope } from './reservations.js'
 
 export class GrantPool {
@@ -16,6 +16,8 @@ export class GrantPool {
     load: () => Promise<OpenGrant[]>
     used: (accountId: string, since: number) => number
     remaining?: typeof remainingUsd
+    /** Reads a key's model list (GET /models); tests replace it. */
+    catalog?: typeof grantCatalog
     now?: () => number
     log?: (...args: unknown[]) => void
     refreshMs?: number
@@ -71,6 +73,11 @@ export class GrantPool {
   async offers(force = false) {
     await this.refresh(force)
     await Promise.all(this.grants.filter(g => this.live(g)).map(async g => {
+      if (this.lentKeys.catalogDue(g.grant.grantId)) {
+        // Unreadable now (some keys can't list models): keep the last list, or the grant's own, and try again later.
+        try { this.lentKeys.setCatalog(g.grant.grantId, await (this.opts.catalog ?? grantCatalog)(g)) }
+        catch (e) { this.opts.log?.(`model list for lent key ${g.grant.grantId.slice(0, 10)} unavailable: ${(e as Error).message}`); this.lentKeys.setCatalog(g.grant.grantId, []) }
+      }
       const now = this.now(), { start } = period(g.grant.policy.period, now)
       const previous = this.balances.get(g.grant.grantId)
       if (previous && previous.start === start && now - previous.at < 120_000) return

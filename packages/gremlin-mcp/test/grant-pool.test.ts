@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { OpenGrant } from '../src/gateway/grants.js'
 import { GrantPool } from '../src/gateway/grant-pool.js'
 import { fingerprint } from '../src/gateway/credentials.js'
+import { ModelChoice, openaiCatalog } from '@gremlins/hatch'
 
 const grant = (id: string, overrides = {}): OpenGrant => ({ apiKey: 'lent-secret', grant: {
   kind: 'key-grant', address: '0x01', gremlin: '0x02', grantId: `0x${id.repeat(32)}`,
@@ -90,5 +91,58 @@ describe('bounded grant pool', () => {
     const pool = new GrantPool({ load: async () => { calls++; await Promise.resolve(); return [grant('a')] }, used: () => 0 })
     await Promise.all([pool.offers(), pool.offers(), pool.offers()])
     expect(calls).toBe(1)
+  })
+})
+
+describe('lent keys pick from the models the key actually serves', () => {
+  const anthropicList = [
+    { id: 'claude-opus-5-5' }, { id: 'claude-sonnet-5-5' }, { id: 'claude-haiku-5-5' },
+  ]
+  const catalogOf = (list: { id: string }[]) => async () => openaiCatalog('anthropic', { data: list })
+  const ron = () => grant('c', { provider: { id: 'anthropic', label: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', models: ['claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-opus-5-5'], inputPerM: 3, outputPerM: 15, budgetApi: 'none' } })
+  const at = Date.parse('2026-11-13T12:00:00Z')
+
+  it('reads an old grant\'s stale list as preferences, then the same family, each at its real price', async () => {
+    const pool = new GrantPool({ now: () => at, load: async () => [ron()], used: () => 0, catalog: catalogOf(anthropicList) })
+    const [offer] = await pool.offers()
+    // claude-opus-5-5 is the one listed model still served; then current Claude models; never another maker.
+    expect(offer!.targets.map((t) => t.model)).toEqual(['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'])
+    expect(offer!.targets[0]).toMatchObject({ inputPerM: 4, outputPerM: 20 }) // Opus 5.5, not the grant's $3/$15
+  })
+
+  it('a grant with a model choice needs no names: balanced first from the key\'s list', async () => {
+    const g = ron(); g.grant.modelChoice = ModelChoice.parse({})
+    const pool = new GrantPool({ now: () => at, load: async () => [g], used: () => 0, catalog: catalogOf(anthropicList) })
+    const [offer] = await pool.offers()
+    expect(offer!.targets[0]).toMatchObject({ model: 'claude-sonnet-5-5', inputPerM: 2, outputPerM: 10 })
+  })
+
+  it('reads the list again after the provider retires a model, and falls back to the grant\'s list when it can\'t', async () => {
+    let reads = 0, list = anthropicList
+    const g = ron(); g.grant.modelChoice = ModelChoice.parse({})
+    const pool = new GrantPool({ now: () => at, load: async () => [g], used: () => 0, catalog: async () => { reads++; return openaiCatalog('anthropic', { data: list }) } })
+    const [first] = await pool.offers()
+    await pool.offers()
+    expect(reads).toBe(1) // cached
+    list = anthropicList.filter((m) => m.id !== 'claude-sonnet-5-5')
+    first!.observe!(404, new Headers(), '{"type":"error","error":{"type":"not_found_error","message":"model: claude-sonnet-5-5"}}')
+    const [second] = await pool.offers()
+    expect(reads).toBe(2)
+    expect(second!.targets.map((t) => t.model)).not.toContain('claude-sonnet-5-5')
+
+    const offline = new GrantPool({ now: () => at, load: async () => [ron()], used: () => 0, catalog: async () => { throw new Error('403') } })
+    expect((await offline.offers())[0]!.targets.map((t) => t.model)).toEqual(['claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-opus-5-5'])
+  })
+
+  it('caps each call at the price of the model it goes to', async () => {
+    const g = ron(); g.grant.modelChoice = ModelChoice.parse({ tier: 'best' })
+    g.grant.policy.maxPerCallUsd = 0.05
+    const pool = new GrantPool({ now: () => at, load: async () => [g], used: () => 0, catalog: catalogOf(anthropicList) })
+    const [offer] = await pool.offers()
+    const body = { messages: [{ role: 'user', content: 'hi' }], max_tokens: 100_000 }
+    const opus = offer!.prepare!(body, offer!.targets.find((t) => t.model === 'claude-opus-5-5'))
+    const haiku = offer!.prepare!(body, offer!.targets.find((t) => t.model === 'claude-haiku-5-5'))
+    if ('skip' in opus || 'skip' in haiku) throw new Error('skipped')
+    expect(Number(opus.body.max_tokens)).toBeLessThan(Number(haiku.body.max_tokens)) // $20/M output vs $0.50/M
   })
 })
