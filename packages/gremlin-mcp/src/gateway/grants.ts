@@ -26,6 +26,8 @@ export interface LentOffer {
   provider: ProviderConfig
   fetch: UpstreamFetch
   targets: RouteTarget[]
+  /** Detect the borrowed credential in a draft without exposing it to the gateway. */
+  containsCredential?: (text: string) => boolean
   /** The upstream body for this key (wishes, end-user id, per-call cap), or a reason to skip the key this time. */
   prepare?: (body: Record<string, unknown>) => { body: Record<string, unknown> } | { skip: string }
   /** A slot under the key's rate limits for a call of about `tokens`, or a reason to skip it. */
@@ -196,6 +198,7 @@ export class LentKeys {
     return {
       provider: { id, kind: 'openai', baseUrl: grant.provider.baseUrl, timeoutMs: 600_000, firstByteMs: 120_000, free: false, minIntervalMs: 0 },
       fetch: keyFetch(g.apiKey, reg?.headers),
+      containsCredential: text => text.includes(g.apiKey),
       targets: models.map((m) => ({ provider: id, model: m, inputPerM: grant.provider.inputPerM, outputPerM: grant.provider.outputPerM, grantId: grant.grantId })),
       prepare: (body) => {
         const capped = capCall(body, grant, allow.allowedUsd)

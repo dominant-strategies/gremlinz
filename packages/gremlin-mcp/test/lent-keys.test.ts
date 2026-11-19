@@ -146,8 +146,10 @@ describe('lent keys in the gateway', () => {
     const keys = new LentKeys({ gremlin: gremlin.address, used: () => 0, now: () => clock.t })
     keys.set([await openGrant()])
     const { gw, ask } = await gateway(keys, clock)
-    expect((await ask()).choices[0]!.message.content).toContain('/lent/v1')
-    const lentCall = seen.at(-1)!
+    expect((await ask()).choices[0]!.message.content).toContain('/own/v1')
+    const lentCall = seen.at(-2)!
+    expect(JSON.stringify(seen.at(-1)!.body)).toContain('untrusted_draft')
+    expect(JSON.stringify(seen.at(-1)!.body)).not.toContain(WISHES_OPEN)
     expect(lentCall.auth).toBe('Bearer sk-lent')
     const note = lentCall.body.messages[1]!
     expect(note.role).toBe('system')
@@ -180,7 +182,8 @@ describe('lent keys in the gateway', () => {
     expect(lentCalls()).toBe(1) // resting: never hammered
     expect(keys.status()[0]!.limiter.restingBecause).toContain('429')
     clock.t += 91_000
-    expect((await ask()).choices[0]!.message.content).toContain('/lent/v1')
+    expect((await ask()).choices[0]!.message.content).toContain('/own/v1')
+    expect(lentCalls()).toBe(2)
     gw.close()
   })
 

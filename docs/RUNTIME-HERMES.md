@@ -84,6 +84,12 @@ stated reason.
 The host uses systemd to supervise the Docker container, and the runtime restarts each service independently.
 See [single-VM reliability](RELIABILITY.md) for health checks, persistence, payment recovery, limits and fault tests.
 
+The health worker also samples disk and available RAM every 15 seconds and saves its latest sample and cleanup
+cooldown to `GREMLIN_HOME/resource-health.json`. It checks the egg and state filesystems and takes Docker memory
+limits into account. When disk space is low it removes rotated diagnostics and abandoned health snapshots, retaining
+active logs, work and payment state. Low headroom pauses mining and optional maintenance. Critical pressure also
+pauses new inference until measurements recover. The worker can ask for help on the board if pressure persists.
+
 Mining is the last resort: after 6 hours starved (no credit, no funds to top up) the monitor runs xmrig to
 Hashference's RandomX pool, as gremlin-helper at nice 19 on at most half the cores, and stops it once credit is back
 above the floor; the gremlin can also choose mining as strategy (`mining` tool). The egg image ships xmrig 6.26.0
@@ -131,6 +137,12 @@ not cancelled. Provider balances are refreshed every two minutes, and at a polic
 require a fresh reported balance; grants without a balance API use local accounting. Expiring grants are tried
 first. Identical keys share consumption and pending reservations, even if lent more than once. Different keys
 that draw from one provider account still rely on reported balances and provider-side hard limits.
+
+Lent calls produce bounded drafts. The gateway runs a separate review on a configured paid or local provider allowed
+by the maker's model policy and returns only that provider's completion. It labels draft text and tool suggestions as
+untrusted and screens requests for secrets before lending. The reviewer uses the gremlin's ordinary budget. If no
+reviewer is available, the gateway uses normal independent fallback routes. It discards the draft before using any
+free endpoint.
 
 Paid calls reserve an estimated input/output cost before dispatch and cap output to the remaining allowance,
 including a grant's `maxPerCallUsd`. Unpriced paid targets are skipped when an allowance must be enforced. With

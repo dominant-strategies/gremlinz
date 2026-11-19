@@ -38,7 +38,7 @@ export function registerLentTools(server: McpServer, deps: LentDeps = {}) {
   const admin = deps.adminUrl ?? process.env.GREMLIN_GATEWAY_ADMIN ?? 'http://127.0.0.1:8711'
   server.registerTool('lent_keys', {
     description:
-      'API keys people have lent you, as your gateway uses them: the provider and its rules, the models, the lender\'s budget rules, what is left to use this period, rate limits, and the lender\'s wishes (what they hope it is used for, what not, how to credit them). Your gateway tries lent keys first and enforces budgets, models and limits; the wishes are yours to honour. Use it to plan big jobs around when a lender\'s allowance opens.',
+      'See lent inference providers, models, remaining allowances, rate limits and lender wishes. The gateway uses lent keys to draft within those limits. A configured trusted provider reviews the draft and produces the reply or tool calls. Honour lender wishes and plan work around their allowance windows.',
     inputSchema: {},
     annotations: { readOnlyHint: true },
   }, async () => {

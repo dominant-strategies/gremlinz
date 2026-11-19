@@ -8,7 +8,7 @@
 #   gremlin-helper runs delegated shell work and shares only Hermes' work folder by default.
 # /opt/gremlin-runtime (plugin, skills, Hermes source) and /app are root-owned.
 
-ARG HERMES_RUNTIME_REF=319d126b58c954d7857628bfb67898d339bab46b
+ARG HERMES_RUNTIME_REF=14dec65a4549c8fd1484c83f0bc867dadafcdb2e
 ARG GREMLIN_BUILD_COMMIT=unknown
 
 FROM node:24.22.1-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS build

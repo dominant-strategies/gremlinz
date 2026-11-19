@@ -43,6 +43,7 @@ describe('the health directive in every request', () => {
   let up: Server
   let base: string
   const seen: { provider: string; messages: { role: string; content: string }[] }[] = []
+  let resourcePressure: 'critical' | undefined
   let directive: string | undefined = 'Survival mode: money: runway 2.0 days. Until it\'s fixed, every action must serve fixing it; defer everything else.'
   beforeAll(async () => {
     up = createServer((req, res) => {
@@ -55,7 +56,10 @@ describe('the health directive in every request', () => {
       })
     })
     await new Promise<void>((r) => up.listen(0, '127.0.0.1', r))
-    const gw = createGateway(cfg(`http://127.0.0.1:${(up.address() as { port: number }).port}`), { health: () => ({ directive }) })
+    const gw = createGateway(cfg(`http://127.0.0.1:${(up.address() as { port: number }).port}`), {
+      health: () => ({ directive, resourcePressure }),
+      maintenanceReady: () => true,
+    })
     await new Promise<void>((r) => gw.listen(0, '127.0.0.1', r))
     base = `http://127.0.0.1:${(gw.address() as { port: number }).port}/v1`
   })
@@ -76,6 +80,20 @@ describe('the health directive in every request', () => {
     await chat('gremlin-main', [{ role: 'user', content: 'hi' }])
     expect(seen.at(-1)!.messages).toEqual([{ role: 'user', content: 'hi' }])
     expect(withDirective({ model: 'x' }, 'd')).toEqual({ model: 'x' })
+  })
+
+  it('keeps maintenance asleep and rejects new inference until critical pressure recovers', async () => {
+    const upstreamCalls = seen.length
+    resourcePressure = 'critical'
+    try {
+      expect(await (await fetch(`${base}/maintenance-ready`)).json()).toEqual({ ready: false })
+      const response = await chat('gremlin-main', [{ role: 'user', content: 'hi' }])
+      expect(response.status).toBe(503)
+      expect(response.headers.get('retry-after')).toBe('30')
+      expect(await response.json()).toMatchObject({ error: { type: 'resource_pressure' } })
+      expect(seen).toHaveLength(upstreamCalls)
+    } finally { resourcePressure = undefined }
+    expect((await chat('gremlin-main', [{ role: 'user', content: 'hi' }])).status).toBe(200)
   })
 
   it('reads health.json at most every 30 seconds, and ignores a stale one', () => {

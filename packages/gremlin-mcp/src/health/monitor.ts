@@ -29,7 +29,7 @@ import type { SecurityResult } from '../tools/security.js'
 import { WAKE_JOB_ID } from '../bootstrap/hermes.js'
 import {
   HEALTH, bugsArea, computeArea, conserveFor, directive, earningsArea, inferenceArea, moneyArea, planTopUp, severity, tierFor, updatesArea,
-  type AreaName, type Areas, type InferenceStatus, type Level,
+  resourceLevels, type AreaName, type Areas, type InferenceStatus, type Level,
 } from './policy.js'
 import { burnFromLedger, cronIncidents, localResources, reportedBalance, runnerEvents, wakeState, type LocalResources, type WakeState } from './measure.js'
 import {
@@ -38,6 +38,7 @@ import {
 import type { HostingInfo, WalletSnapshot } from './probes.js'
 import { Miner } from './miner.js'
 import { renewHosting } from './hosting.js'
+import { checkResources } from './resources.js'
 
 export interface HealthFile {
   at: string
@@ -108,7 +109,7 @@ const DAY = DAY_MS
 const HELP_REQUESTS = {
   hosting: { title: 'I need help keeping my VM online', body: 'I have less than two days of hosting left and automatic renewal has not completed. If you can help check my hosting balance or renewal, please reply here.' },
   inference: { title: 'I need help restoring inference access', body: 'I’m out of paid inference credit or my scheduled wakes are repeatedly failing for lack of inference. If you can help check my access, please reply here.' },
-  runtime: { title: 'I need help with my runtime', body: 'My machine is running out of disk space or restarting repeatedly. If you can help diagnose it, please reply here.' },
+  runtime: { title: 'I need help with my runtime', body: 'My machine is low on disk space or memory, or it is restarting repeatedly. If you can help diagnose it, please reply here.' },
   runway: { title: 'I need help extending my operating runway', body: 'My estimated operating runway is under three days. If you can offer work or help me stay online, please reply here.' },
 }
 type HelpTopic = keyof typeof HELP_REQUESTS
@@ -145,11 +146,26 @@ export class HealthMonitor {
 
   /** The loop: a check now, then every HEALTH.checkEveryMs. */
   start(): () => void {
+    const stopResources = this.startResourceChecks()
     const tick = () => void this.check().catch((e) => this.d.log('health check failed:', (e as Error).message))
     tick()
     const t = setInterval(tick, HEALTH.checkEveryMs)
     t.unref?.()
-    return () => clearInterval(t)
+    return () => { clearInterval(t); stopResources() }
+  }
+
+  startResourceChecks(): () => void {
+    const tick = () => { try { this.resources() } catch { this.d.log('resource check failed') } }
+    tick()
+    const timer = setInterval(tick, HEALTH.compute.resourceEveryMs)
+    timer.unref()
+    return () => clearInterval(timer)
+  }
+
+  private resources() {
+    const h = checkResources(this.d.resources ?? (() => localResources('/', homeFile(''), this.d.hermesHome, '/tmp')), this.d.now())
+    if (h.pressure) this.miner.pause()
+    return h
   }
 
   /** One check; concurrent callers share the one in flight. `refresh` re-reads the cached probes too. */
@@ -160,6 +176,7 @@ export class HealthMonitor {
 
   private async run({ refresh = false }: { refresh?: boolean }): Promise<HealthFile> {
     const now = this.d.now()
+    this.resources()
     const iso = new Date(now).toISOString()
     const st: State = readJson<State>(homeFile('health-state.json')) ?? {}
     const notes: string[] = []
@@ -265,9 +282,13 @@ export class HealthMonitor {
     for (const c of runner.crashes) noteIssue({ source: 'runner', title: `${c.child ?? 'runtime'} crashed`, message: `${c.child} exited with code ${c.code}${c.signal ? ` (${c.signal})` : ''}`, at: c.at }, now)
 
     // ── judge ──
-    const res = (this.d.resources ?? (() => localResources(homeFile(''))))()
+    const resourceHealth = this.resources()
+    const res = resourceHealth.resources
+    const pressure = resourceLevels(res)
     const inference = inferenceArea(inInput, plan, { boughtUsd: bought, did: did.inference })
-    const compute = computeArea({ hosting, diskFreeFrac: res.diskFreeFrac, memFreeFrac: res.memFreeFrac, load1: res.load1, cores: res.cores, uptimeSec: res.uptimeSec, restarts24h: runner.restarts24h })
+    const compute = computeArea({ hosting, ...res, restarts24h: runner.restarts24h })
+    if (resourceHealth.reclaimedBytes && now - (resourceHealth.lastCleanupAt ?? 0) < HEALTH.checkEveryMs)
+      compute.did.push(`Removed ${Math.round(resourceHealth.reclaimedBytes / 1024)} KiB of rotated diagnostics and abandoned health snapshots.`)
     const hostingUsdPerDay = hosting?.hourlyUsd !== undefined ? hosting.hourlyUsd * 24 : undefined
     const money = moneyArea({ walletUsd: wallet?.totalUsd, inferenceUsd: inference.numbers.inferenceUsd as number, inferenceBurnUsdPerDay: plan.burnUsdPerDay, hostingBalanceUsd: hosting?.balanceUsd, hostingUsdPerDay })
     const runwayDays = (money.numbers.runwayDays as number | null) ?? undefined
@@ -280,7 +301,8 @@ export class HealthMonitor {
     // ── mining: last resort ──
     st.starvedSince = inference.status === 'starved' ? st.starvedSince ?? now : undefined
     const ms = this.miner.state()
-    if (st.starvedSince !== undefined && now - st.starvedSince >= HEALTH.mining.autoAfterStarvedMs && !ms.auto) {
+    const canMine = !resourceHealth.pressure && (this.miner.running() || (res.memAvailableBytes ?? Infinity) >= HEALTH.mining.minStartMemBytes)
+    if (canMine && st.starvedSince !== undefined && now - st.starvedSince >= HEALTH.mining.autoAfterStarvedMs && !ms.auto) {
       this.miner.enable('auto', 'starved for 6 hours: no inference credit and no funds to top up')
       act('inference', 'mining-on', 'started mining to Hashference after 6 hours starved (last resort; stops once credit is back above the floor)')
     } else if (ms.auto && inference.status === 'ok') {
@@ -288,7 +310,11 @@ export class HealthMonitor {
       act('inference', 'mining-off', `stopped mining: credit back above the floor${ms.strategy ? ' (still on: you chose mining as strategy)' : ''}`)
     }
     let minerProblem: string | undefined
-    try { minerProblem = this.miner.ensure(miningUser, this.d.worker ?? (key?.address ?? 'gremlin').replace(/^0x/, '').slice(0, 8)) } catch (e) { minerProblem = (e as Error).message.slice(0, 120) }
+    if (!canMine) {
+      if (this.miner.state().strategy || this.miner.state().auto) notes.push('Mining paused until disk and memory headroom recover.')
+    } else {
+      try { minerProblem = this.miner.ensure(miningUser, this.d.worker ?? (key?.address ?? 'gremlin').replace(/^0x/, '').slice(0, 8), res.memAvailableBytes) } catch (e) { minerProblem = (e as Error).message.slice(0, 120) }
+    }
     if (minerProblem) notes.push(`mining wanted but not running: ${minerProblem}`)
     const mstate = this.miner.state()
     // Public: where donated hashrate goes. Credits need a Hashference mining username; without one, QUAI to its address.
@@ -298,14 +324,15 @@ export class HealthMonitor {
     const { severity: sev, drivers } = severity(areas)
     const lastTop = readActions().filter((a) => a.kind === 'topup' && a.ok).at(-1)
     const suggestions: string[] = []
-    if (sev === 'critical' && drivers.some((d) => d === 'money' || d === 'compute'))
+    if (sev === 'critical' && (drivers.includes('money') || (hosting?.daysLeft ?? Infinity) < HEALTH.compute.hostingDays.critical))
       suggestions.push('Money or hosting is short: consider fewer wake-ups (GREMLIN_WAKE_MINUTES) only if earning does not need you awake; the monitor does not change the interval itself.')
     const inferenceBlocked = wake.forInference && wake.failureStreak >= HEALTH.bugs.wakeFailStreakBad
     const inferenceMeasured = hfUsd !== undefined || veniceUsd !== undefined
     await this.requestHelp(st, notes, {
       hosting: hostingRenewed ? false : hosting?.daysLeft === undefined ? undefined : hosting.daysLeft < HEALTH.compute.hostingDays.critical,
       inference: bought > 0 ? false : inferenceBlocked || (inferenceMeasured ? inference.status === 'starved' : undefined),
-      runtime: runner.restarts24h >= HEALTH.compute.restarts24h.bad || (res.diskFreeFrac === undefined ? undefined : res.diskFreeFrac < HEALTH.compute.diskFree.bad),
+      runtime: runner.restarts24h >= HEALTH.compute.restarts24h.bad || ['bad', 'critical'].includes(pressure.disk) ||
+        ['bad', 'critical'].includes(pressure.memory) || (res.diskFreeFrac === undefined ? undefined : false),
       runway: wallet?.quaiUsd === undefined ? undefined : money.level === 'critical',
     })
     const health: HealthFile = {

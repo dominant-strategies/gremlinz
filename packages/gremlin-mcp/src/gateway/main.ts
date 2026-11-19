@@ -97,7 +97,7 @@ delete providerEnv.GREMLIN_MCP_TOKEN
 const checkDocumentation = () => documentation.check(targets()).then(docs => { diagnostics.emit('documentation', { pendingReviews: docs.filter(d => d.status === 'needs-review').length, unreachableDocuments: docs.filter(d => d.status === 'unreachable').length }) }).catch(() => log('documentation check failed; maintenance should inspect official URLs'))
 void checkDocumentation()
 setInterval(() => void checkDocumentation(), 3_600_000).unref()
-// The health monitor's directive goes into every request (re-read every 30 s; none when health.json is stale).
+// The gateway uses the latest health directive and sheds new work when local resources are critical.
 createGateway(cfg, {
   adminToken: process.env.GREMLIN_SERVICE_TOKEN, env: providerEnv,
   maintenanceReady: () => {

@@ -8,6 +8,7 @@ import { Miner, POOL, type ChildLike } from '../src/health/miner.js'
 import { HEALTH } from '../src/health/policy.js'
 import { createGateway } from '../src/gateway/server.js'
 import { GatewayConfig } from '../src/gateway/config.js'
+import { healthReader } from '../src/health/gate.js'
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const H = 3_600_000
@@ -90,6 +91,51 @@ const status = (home: string) => JSON.parse(readFileSync(join(home, 'status.json
 
 describe('health monitor', () => {
   beforeEach(() => { delete process.env.GREMLIN_HOME })
+
+  it('retains the cleanup cooldown across restart and pauses mining until resource pressure clears', async () => {
+    let now = Date.now()
+    const t = setup({ hfUsd: 12, now: () => now })
+    let diskFreeFrac = 0.6
+    let memFreeFrac = 0.5
+    t.deps.resources = () => ({ diskFreeFrac, memFreeFrac, load1: 0.1, cores: 8, uptimeSec: 3600 })
+    const telemetry = join(t.home, 'dev-telemetry')
+    mkdirSync(telemetry)
+    const rotated = join(telemetry, 'health.jsonl.1')
+    const active = join(telemetry, 'health.jsonl')
+    writeFileSync(rotated, 'old result')
+    writeFileSync(active, 'live result')
+    t.miner.enable('strategy')
+    await new HealthMonitor(t.deps).check()
+    expect(t.miner.running()).toBe(true)
+
+    diskFreeFrac = 0.1
+    memFreeFrac = 0.04
+    const pressured = await new HealthMonitor(t.deps).check()
+    const readHealth = healthReader(0, () => now)
+    expect(pressured.areas.compute.level).toBe('critical')
+    expect(readHealth()).toMatchObject({ resourcePressure: 'critical', conserve: true })
+    expect(t.miner.running()).toBe(false)
+    expect(t.miner.state().strategy).toBe(true)
+    expect(existsSync(rotated)).toBe(false)
+    expect(readFileSync(active, 'utf8')).toBe('live result')
+    expect(existsSync(join(t.home, 'hashference.json'))).toBe(true)
+
+    writeFileSync(rotated, 'new rotation')
+    now += HEALTH.compute.resourceEveryMs
+    const restarted = new HealthMonitor(t.deps)
+    await restarted.check()
+    expect(existsSync(rotated)).toBe(true)
+    now += HEALTH.compute.cleanupEveryMs
+    await restarted.check()
+    expect(existsSync(rotated)).toBe(false)
+
+    diskFreeFrac = 0.6
+    memFreeFrac = 0.5
+    now += HEALTH.compute.resourceEveryMs
+    await restarted.check()
+    expect(readHealth()?.resourcePressure).toBeUndefined()
+    expect(t.miner.running()).toBe(true)
+  })
 
   it('posts urgent hosting help once per incident and retries with the same ID after a restart', async () => {
     const t = setup({ hfUsd: 12, walletUsd: 60 })

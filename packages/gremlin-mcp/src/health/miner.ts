@@ -65,7 +65,7 @@ export class Miner {
     this.d = {
       spawn: (cmd, args) => nodeSpawn(cmd, args, { stdio: 'ignore' }),
       cores: () => cpus().length || 1,
-      memBytes: totalmem,
+      memBytes: () => Math.min(totalmem(), process.constrainedMemory() || Infinity),
       fetch,
       xmrig: process.env.GREMLIN_XMRIG ?? '/usr/local/bin/xmrig',
       helperUser: process.env.GREMLIN_HELPER_USER ?? 'gremlin-helper',
@@ -87,14 +87,21 @@ export class Miner {
   /** Stop this process without forgetting the gremlin's chosen strategy across a service restart. */
   stop(): void { this.child?.kill('SIGTERM'); this.child = undefined }
 
+  /** Also stop a process inherited from a health worker that exited abruptly. */
+  pause(): void {
+    if (this.running()) this.stop()
+    else this.stopLeftover()
+  }
+
   /** Wanted on (by strategy or the monitor) but not running: start it. Needs the pool login. */
-  ensure(user: string | undefined, worker: string): string | undefined {
+  ensure(user: string | undefined, worker: string, availableMemBytes = Infinity): string | undefined {
     const s = this.state()
     if (!(s.strategy || s.auto) || this.running()) return undefined
     if (!user) return 'no Hashference mining username yet (needs a Hashference account)'
     if (!existsSync(this.d.xmrig) && this.d.xmrig.startsWith('/')) return `xmrig not installed at ${this.d.xmrig}`
     this.stopLeftover()
-    const [cmd, args] = minerCommand({ user, worker, threads: minerThreads(this.d.cores()), light: this.d.memBytes() < 4 * 2 ** 30, xmrig: this.d.xmrig, helperUser: this.d.helperUser })
+    const light = this.d.memBytes() < 4 * 2 ** 30 || availableMemBytes < 3 * 2 ** 30
+    const [cmd, args] = minerCommand({ user, worker, threads: minerThreads(this.d.cores()), light, xmrig: this.d.xmrig, helperUser: this.d.helperUser })
     const c = this.d.spawn(cmd, args)
     this.child = c
     mkdirSync(dirname(this.d.pidFile), { recursive: true })

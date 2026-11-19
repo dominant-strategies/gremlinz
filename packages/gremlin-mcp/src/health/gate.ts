@@ -10,6 +10,7 @@ import { homeFile } from '../env.js'
 import { HEALTH, type Level } from './policy.js'
 import { readJson, recordAction } from './stores.js'
 import type { HealthFile } from './monitor.js'
+import { readResourcePressure } from './resources.js'
 
 export function readHealth(now = Date.now()): HealthFile | undefined {
   const h = readJson<HealthFile>(homeFile('health.json'))
@@ -17,12 +18,13 @@ export function readHealth(now = Date.now()): HealthFile | undefined {
 }
 
 /** For the gateway: the directive and whether to conserve, re-read at most every `ttlMs`. */
-export function healthReader(ttlMs = 30_000, now: () => number = Date.now) {
-  let cache: { at: number; v?: { directive?: string; conserve?: boolean } } | undefined
+export function healthReader(ttlMs = 5_000, now: () => number = Date.now) {
+  let cache: { at: number; v?: { directive?: string; conserve?: boolean; resourcePressure?: 'low' | 'critical' } } | undefined
   return () => {
     if (!cache || now() - cache.at > ttlMs) {
       const h = readHealth(now())
-      cache = { at: now(), v: h ? { directive: h.directive, conserve: h.conserve } : undefined }
+      const resourcePressure = readResourcePressure(now())
+      cache = { at: now(), v: h || resourcePressure ? { directive: h?.directive, conserve: h?.conserve || !!resourcePressure, ...(resourcePressure ? { resourcePressure } : {}) } : undefined }
     }
     return cache.v
   }

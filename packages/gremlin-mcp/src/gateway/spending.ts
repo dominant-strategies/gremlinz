@@ -27,7 +27,7 @@ export function spending(cfg: GatewayConfig, ledger: Ledger, grants: Pick<GrantP
     },
     refuse: recovery => {
       const limit = cap(recovery)
-      return limit !== undefined && ledger.spent() + reservations.pending(dailyScope()) >= limit ? 'inference daily allowance is spent; free/local and lent routes remain available' : undefined
+      return limit !== undefined && ledger.spent() + reservations.pending(dailyScope()) >= limit ? 'inference daily allowance is spent. Local and eligible free routes remain available.' : undefined
     },
     reserve: (body, target, provider, recovery, maintenance) => {
       const { start, until } = day()

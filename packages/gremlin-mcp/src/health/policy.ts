@@ -60,12 +60,18 @@ export const HEALTH = {
     autoAfterStarvedMs: 6 * HOUR,
     /** At most this share of the cores. */
     maxCoreShare: 0.5,
+    /** Light RandomX needs about 256 MiB. Keep headroom for the worker and inference services. */
+    minStartMemBytes: 384 * 2 ** 20,
   },
 
   compute: {
     hostingDays: { critical: 2, bad: 7, low: 14 },
-    diskFree: { bad: 0.05, low: 0.15 },
-    memFreeLow: 0.05,
+    diskFree: { critical: 0.02, bad: 0.05, low: 0.15 },
+    diskBytes: { critical: 128 * 2 ** 20, low: 512 * 2 ** 20 },
+    memFree: { critical: 0.05, bad: 0.10, low: 0.18 },
+    memBytes: { critical: 96 * 2 ** 20, low: 192 * 2 ** 20 },
+    resourceEveryMs: 15_000,
+    cleanupEveryMs: 10 * MIN,
     loadPerCoreLow: 2,
     restarts24h: { low: 3, bad: 10 },
   },
@@ -112,8 +118,8 @@ export interface Area {
 const r2 = (n: number) => Math.round(n * 100) / 100
 const usd = (n: number) => `$${n.toFixed(2)}`
 const days = (n: number) => (n >= 100 ? `${Math.round(n)} days` : `${n.toFixed(1)} days`)
-const tier = (v: number | undefined, t: { critical?: number; bad: number; low: number }): Level =>
-  v === undefined ? 'ok' : t.critical !== undefined && v < t.critical ? 'critical' : v < t.bad ? 'bad' : v < t.low ? 'low' : 'ok'
+const tier = (v: number | undefined, t: { critical?: number; bad?: number; low: number }): Level =>
+  v === undefined ? 'ok' : t.critical !== undefined && v < t.critical ? 'critical' : t.bad !== undefined && v < t.bad ? 'bad' : v < t.low ? 'low' : 'ok'
 
 // ── inference ────────────────────────────────────────────────────────────────
 
@@ -202,36 +208,50 @@ export function inferenceArea(i: InferenceInput, plan: TopUpPlan, after: { bough
 export interface ComputeInput {
   hosting?: { provider: string; daysLeft?: number; balanceUsd?: number; hourlyUsd?: number; error?: string }
   diskFreeFrac?: number
+  diskAvailableBytes?: number
   memFreeFrac?: number
+  memAvailableBytes?: number
   load1?: number
   cores: number
   uptimeSec?: number
   restarts24h: number
 }
 
+export function resourceLevels(c: Pick<ComputeInput, 'diskFreeFrac' | 'diskAvailableBytes' | 'memFreeFrac' | 'memAvailableBytes'>) {
+  const T = HEALTH.compute
+  return {
+    disk: worst(tier(c.diskFreeFrac, T.diskFree), tier(c.diskAvailableBytes, T.diskBytes)),
+    memory: worst(tier(c.memFreeFrac, T.memFree), tier(c.memAvailableBytes, T.memBytes)),
+  }
+}
+
 export function computeArea(c: ComputeInput): Area {
   const T = HEALTH.compute
   const hostDays = c.hosting?.daysLeft
+  const resources = resourceLevels(c)
   const levels: Level[] = [
     tier(hostDays, T.hostingDays),
-    tier(c.diskFreeFrac, T.diskFree),
-    c.memFreeFrac !== undefined && c.memFreeFrac < T.memFreeLow ? 'low' : 'ok',
+    resources.disk,
+    resources.memory,
     c.load1 !== undefined && c.load1 > T.loadPerCoreLow * c.cores ? 'low' : 'ok',
     c.restarts24h >= T.restarts24h.bad ? 'bad' : c.restarts24h >= T.restarts24h.low ? 'low' : 'ok',
   ]
   const next: string[] = []
   if (hostDays !== undefined && hostDays < T.hostingDays.low)
     next.push(`Renew hosting within ${Math.max(0, Math.floor(hostDays))} days (${c.hosting!.provider}${c.hosting!.hourlyUsd ? `, ${usd(c.hosting!.hourlyUsd * 24)}/day` : ''}); if you cannot, earn first.`)
-  if (c.diskFreeFrac !== undefined && c.diskFreeFrac < T.diskFree.low) next.push('Free disk space: prune old files in your work folder, logs and caches.')
+  if (resources.disk !== 'ok') next.push('Disk space is low. Review large files and ask your maker before removing work or state.')
+  if (resources.memory !== 'ok') next.push('Memory headroom is low. Defer builds and other optional memory-intensive work.')
   if (c.restarts24h >= T.restarts24h.low) next.push('Your runtime keeps restarting: check health_status bugs and report_issue with what you see.')
   const hostPart = c.hosting ? (hostDays !== undefined ? `hosting ${days(hostDays)} left (${c.hosting.provider})` : `hosting runway unknown (${c.hosting.error ?? c.hosting.provider})`) : 'hosting runway unknown (no hosting account on file)'
   const disk = c.diskFreeFrac !== undefined ? `, disk ${Math.round(c.diskFreeFrac * 100)}% free` : ''
+  const memory = c.memFreeFrac !== undefined ? `, RAM ${Math.round(c.memFreeFrac * 100)}% available` : ''
   return {
     level: worst(...levels),
-    headline: `${hostPart}${disk}${c.restarts24h ? `, ${c.restarts24h} restarts in 24h` : ''}`,
+    headline: `${hostPart}${disk}${memory}${c.restarts24h ? `, ${c.restarts24h} restarts in 24h` : ''}`,
     numbers: {
       hostingProvider: c.hosting?.provider ?? null, hostingDaysLeft: hostDays === undefined ? null : r2(hostDays), hostingBalanceUsd: c.hosting?.balanceUsd ?? null,
       hostingUsdPerDay: c.hosting?.hourlyUsd === undefined ? null : r2(c.hosting.hourlyUsd * 24), diskFreePct: c.diskFreeFrac === undefined ? null : Math.round(c.diskFreeFrac * 100),
+      diskAvailableBytes: c.diskAvailableBytes ?? null, memAvailableBytes: c.memAvailableBytes ?? null,
       memFreePct: c.memFreeFrac === undefined ? null : Math.round(c.memFreeFrac * 100), load1: c.load1 ?? null, cores: c.cores, uptimeHours: c.uptimeSec === undefined ? null : r2(c.uptimeSec / 3600), restarts24h: c.restarts24h,
     },
     did: [],

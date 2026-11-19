@@ -124,12 +124,50 @@ export function runnerEvents(file: string, now: number): { restarts24h: number; 
   }
 }
 
-export interface LocalResources { diskFreeFrac?: number; memFreeFrac: number; load1: number; cores: number; uptimeSec: number }
+export interface LocalResources {
+  diskFreeFrac?: number
+  diskAvailableBytes?: number
+  memFreeFrac: number
+  memAvailableBytes?: number
+  load1: number
+  cores: number
+  uptimeSec: number
+}
 
-export function localResources(path: string): LocalResources {
-  let diskFreeFrac: number | undefined
-  try { const s = statfsSync(path); diskFreeFrac = s.bavail / s.blocks } catch { /* unknown */ }
-  return { diskFreeFrac, memFreeFrac: freemem() / totalmem(), load1: loadavg()[0]!, cores: cpus().length || 1, uptimeSec: uptime() }
+export function localResources(...paths: string[]): LocalResources {
+  const disks = [...new Set(paths)].flatMap(path => {
+    try {
+      const s = statfsSync(path)
+      return s.blocks > 0 ? [{ fraction: s.bavail / s.blocks, bytes: s.bavail * s.bsize }] : []
+    } catch { return [] }
+  })
+  const disk = disks.length ? {
+    diskFreeFrac: Math.min(...disks.map(d => d.fraction)),
+    diskAvailableBytes: Math.min(...disks.map(d => d.bytes)),
+  } : {}
+  let memAvailableBytes = freemem()
+  const total = totalmem()
+  try {
+    const available = /^MemAvailable:\s+(\d+) kB$/m.exec(readFileSync('/proc/meminfo', 'utf8'))
+    if (available) memAvailableBytes = Number(available[1]) * 1024
+  } catch { /* non-Linux */ }
+  let memFreeFrac = memAvailableBytes / total
+  // The VM can have plenty of RAM while the egg is near its container limit.
+  for (const [limit, usage, stats, cache] of [
+    ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory.current', '/sys/fs/cgroup/memory.stat', 'inactive_file'],
+    ['/sys/fs/cgroup/memory/memory.limit_in_bytes', '/sys/fs/cgroup/memory/memory.usage_in_bytes', '/sys/fs/cgroup/memory/memory.stat', 'total_inactive_file'],
+  ] as const) {
+    try {
+      const cap = Number(readFileSync(limit, 'utf8'))
+      const used = Number(readFileSync(usage, 'utf8'))
+      if (!Number.isSafeInteger(cap) || cap <= 0 || !Number.isFinite(used)) continue
+      const reclaimable = Number(new RegExp(`^${cache} (\\d+)$`, 'm').exec(readFileSync(stats, 'utf8'))?.[1] ?? 0)
+      const remaining = Math.max(0, cap - Math.max(0, used - reclaimable))
+      memAvailableBytes = Math.min(memAvailableBytes, remaining)
+      memFreeFrac = Math.min(memFreeFrac, remaining / cap)
+    } catch { /* cgroup unavailable */ }
+  }
+  return { ...disk, memFreeFrac, memAvailableBytes, load1: loadavg()[0]!, cores: cpus().length || 1, uptimeSec: uptime() }
 }
 
 /** Last reported balance of a gateway provider (balance-<id>.json, written by the gateway). */
