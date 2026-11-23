@@ -13,7 +13,7 @@
  */
 import { createHash } from 'node:crypto'
 import {
-  ModelChoice, grantProblem, hashferenceCatalog, legacyChoice, lentKeyNote, lentLimits, openApiKey, openaiCatalog, priceOf, providerOf, rankModels, signMessage, veniceCatalog, verifyMessage,
+  ModelChoice, choiceAllows, classifyModel, grantProblem, hashferenceCatalog, legacyChoice, lentKeyNote, lentLimits, openApiKey, openaiCatalog, priceOf, providerOf, rankModels, signMessage, veniceCatalog, verifyMessage,
   type CatalogModel, type GrantStatus, type KeyGrant, type Signed,
 } from '@gremlins/hatch'
 import type { HDNodeWallet } from 'ethers'
@@ -21,12 +21,15 @@ import type { ProviderConfig, RouteTarget } from './config.js'
 import type { UpstreamFetch } from './providers.js'
 import { allowance, period, type Allowance } from './grant-policy.js'
 import { KeyLimiter } from './lent-limits.js'
+import { CREDITS_PER_USD } from '../hashference.js'
 
 export interface OpenGrant { grant: KeyGrant; apiKey: string }
 
 /** A lent key as the gateway sees it for one request. */
 export interface LentOffer {
   provider: ProviderConfig
+  /** Registry identity used only to check the maker's model policy. */
+  modelProvider?: string
   fetch: UpstreamFetch
   targets: RouteTarget[]
   /** Detect the borrowed credential in a draft without exposing it to the gateway. */
@@ -83,7 +86,9 @@ export async function remainingUsd(g: OpenGrant, fetchImpl: typeof fetch = fetch
       // The workspace balance the key spends (its own monthly budget, if any, is not reported to the key).
       const r = await fetchImpl(`${base}/account`, auth)
       if (!r.ok) return undefined
-      const d = (await r.json()) as { availableMicrousd?: number; balance?: { availableMicrousd?: number } }
+      const d = (await r.json()) as { account?: { balance?: { availableCredits?: number } }; availableMicrousd?: number; balance?: { availableMicrousd?: number } }
+      const credits = d.account?.balance?.availableCredits
+      if (typeof credits === 'number') return credits / CREDITS_PER_USD
       const micro = d.availableMicrousd ?? d.balance?.availableMicrousd
       return typeof micro === 'number' ? micro / 1_000_000 : undefined
     }
@@ -134,11 +139,12 @@ export function grantModels(grant: KeyGrant, catalog?: CatalogModel[]): PricedMo
   const choice = grantChoice(grant)
   if (catalog?.length) {
     const ranked = rankModels(catalog, choice)
-    if (ranked.length) return ranked.slice(0, 8).map((m) => priced(grant, m.id, m))
+    return ranked.slice(0, 8).map((m) => priced(grant, m.id, m))
   }
   const list = [...choice.models.filter((m) => grant.provider.models.includes(m)), ...grant.provider.models.filter((m) => !choice.models.includes(m))]
   // Never below what an older grant states: it was the lender's own valuation.
-  return list.map((m) => { const p = priced(grant, m); return { model: m, inputPerM: Math.max(p.inputPerM, grant.provider.inputPerM), outputPerM: Math.max(p.outputPerM, grant.provider.outputPerM) } })
+  return list.filter(m => !grant.modelChoice || choiceAllows(choice, { id: m, ...classifyModel(m) }))
+    .map((m) => { const p = priced(grant, m); return { model: m, inputPerM: Math.max(p.inputPerM, grant.provider.inputPerM), outputPerM: Math.max(p.outputPerM, grant.provider.outputPerM) } })
 }
 
 /** A provider's answer meaning "that model isn't served here (any more)". */
@@ -264,6 +270,7 @@ export class LentKeys {
     const priceFor = (model?: string) => models.find((m) => m.model === model) ?? models[0] ?? grant.provider
     return {
       provider: { id, kind: 'openai', baseUrl: grant.provider.baseUrl, timeoutMs: 600_000, firstByteMs: 120_000, free: false, minIntervalMs: 0 },
+      modelProvider: providerOf({ baseUrl: grant.provider.baseUrl })?.id,
       fetch: keyFetch(g.apiKey, reg?.headers),
       containsCredential: text => text.includes(g.apiKey),
       targets: models.map((m) => ({ provider: id, model: m.model, inputPerM: m.inputPerM, outputPerM: m.outputPerM, grantId: grant.grantId })),

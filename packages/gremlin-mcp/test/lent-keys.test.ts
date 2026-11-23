@@ -1,12 +1,16 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type Server } from 'node:http'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Wallet } from 'ethers'
-import { WISHES_CLOSE, WISHES_OPEN, newGrantId, sealApiKey, verifyMessage, type GrantStatus, type KeyGrant, type Signed } from '@gremlins/hatch'
+import { WISHES_CLOSE, WISHES_OPEN, newGrantId, openaiCatalog, sealApiKey, verifyMessage, type GrantStatus, type KeyGrant, type Signed } from '@gremlins/hatch'
 import { GatewayConfig } from '../src/gateway/config.js'
 import { createGateway } from '../src/gateway/server.js'
-import { LentKeys, capCall, endUserId, reportDisabled, type OpenGrant } from '../src/gateway/grants.js'
+import { LentKeys, capCall, endUserId, remainingUsd, reportDisabled, type OpenGrant } from '../src/gateway/grants.js'
 import { KeyLimiter, TokenBucket, retryAfterMs } from '../src/gateway/lent-limits.js'
 import { allowance } from '../src/gateway/grant-policy.js'
+import { registerLentTools } from '../src/tools/lent.js'
 
 const T0 = Date.parse('2026-11-16T12:00:00Z')
 
@@ -97,7 +101,7 @@ const gremlin = Wallet.createRandom()
 const lender = Wallet.createRandom()
 let up: Server
 let upUrl = ''
-const seen: { url: string; auth: string; body: { messages: { role: string; content: string }[]; max_tokens?: number; user?: string } }[] = []
+const seen: { url: string; auth: string; body: { messages: { role: string; content: string }[]; model: string; max_tokens?: number; user?: string } }[] = []
 let lentAnswer: { status: number; headers?: Record<string, string>; body?: string } = { status: 200 }
 
 beforeAll(async () => {
@@ -141,6 +145,70 @@ async function gateway(keys: LentKeys, clock: { t: number }) {
 }
 
 describe('lent keys in the gateway', () => {
+  it('applies the maker policy to a donated provider and routes its draft through trusted review', async () => {
+    const key = await openGrant({ provider: { id: 'anthropic', label: 'Claude', baseUrl: 'https://api.anthropic.com/v1', models: ['claude-sonnet-4-5', 'claude-haiku-5-5', 'claude-opus-5-5'], inputPerM: 1, outputPerM: 1, budgetApi: 'none' } })
+    const keys = new LentKeys({ gremlin: gremlin.address, used: () => 0, now: () => T0 })
+    keys.set([key])
+    keys.setCatalog(key.grant.grantId, openaiCatalog('anthropic', { data: key.grant.provider.models.map(id => ({ id })) }))
+    const cfg = GatewayConfig.parse({
+      providers: [{ id: 'own', kind: 'openai', baseUrl: `${upUrl}/own/v1` }],
+      routes: { 'gremlin-main': [{ provider: 'own', model: 'own-model' }] },
+      policy: { primary: 'own/own-model', approved: ['anthropic/claude-sonnet-4-5', 'anthropic/claude-haiku-5-5'] },
+      glean: { enabled: false },
+    })
+    let pressure: 'low' | undefined
+    const retired = vi.fn(async () => Response.json({ error: { message: 'model not found, sk-lent' } }, { status: 404 }))
+    const gw = createGateway(cfg, {
+      adminToken: 'dev-service-token', now: () => T0, health: () => ({ resourcePressure: pressure }), lentStatus: () => keys.status(),
+      lent: () => keys.offers().map(offer => ({ ...offer, fetch: (url, init) => JSON.parse(String(init.body)).model === 'claude-sonnet-4-5'
+        ? retired() : offer.fetch(`${upUrl}/lent${new URL(url).pathname}`, init) })),
+    })
+    await new Promise<void>(r => gw.listen(0, '127.0.0.1', r))
+    const base = `http://127.0.0.1:${(gw.address() as { port: number }).port}`
+    const ask = async () => {
+      const r = await fetch(`${base}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'gremlin-main', messages: [{ role: 'user', content: 'hi' }] }) })
+      return r.json()
+    }
+    const mcp = new McpServer({ name: 'test', version: '0' })
+    const client = new Client({ name: 'test', version: '0' })
+    vi.stubEnv('GREMLIN_SERVICE_TOKEN', 'dev-service-token')
+    try {
+      registerLentTools(mcp, { adminUrl: base })
+      const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
+      await mcp.connect(serverTransport)
+      await client.connect(clientTransport)
+      expect((await fetch(`${base}/admin/lent`)).status).toBe(401)
+      expect((await ask()).choices[0].message.content).toContain('/own/v1')
+      expect(keys.catalogDue(key.grant.grantId)).toBe(true)
+      expect(seen.map(s => s.body.model)).toEqual(['claude-haiku-5-5', 'own-model'])
+      expect(JSON.stringify(seen.at(-1)!.body)).toContain('untrusted_draft')
+      expect(JSON.stringify(seen.at(-1)!.body)).not.toContain('sk-lent')
+      expect((await ask()).choices[0].message.content).toContain('/own/v1')
+      expect(retired).toHaveBeenCalledTimes(1)
+      const status = await client.callTool({ name: 'lent_keys' })
+      expect(status.isError).toBeFalsy()
+      expect(JSON.stringify(status.content)).toContain('trusted reviewer accepted')
+      expect(JSON.stringify(status.content)).not.toContain('sk-lent')
+
+      pressure = 'low'
+      seen.length = 0
+      await ask()
+      expect(seen.map(s => s.body.model)).toEqual(['own-model'])
+      expect(JSON.stringify((await client.callTool({ name: 'lent_keys' })).content)).toContain('disk or memory pressure')
+    } finally {
+      vi.unstubAllEnvs()
+      await client.close()
+      await mcp.close()
+      gw.close()
+    }
+  })
+
+  it('reads Hashference donated credit from the provider account envelope', async () => {
+    const key = await openGrant({ provider: { id: 'hashference', label: 'Hashference', baseUrl: 'https://hashference.com/v1', models: ['model'], inputPerM: 1, outputPerM: 1, budgetApi: 'hashference' } })
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ account: { balance: { availableCredits: 1871 } } }))
+    await expect(remainingUsd(key, fetch)).resolves.toBe(1.871)
+  })
+
   it('adds the lender\'s wishes, delimited, only to calls that use the lent key', async () => {
     const clock = { t: T0 }
     const keys = new LentKeys({ gremlin: gremlin.address, used: () => 0, now: () => clock.t })

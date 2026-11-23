@@ -8,6 +8,7 @@ export function documentationTargets(config: GatewayConfig, sources: AccessSourc
   for (const p of config.providers) {
     if (p.kind === 'hashference' && new URL(p.baseUrl).origin === 'https://hashference.com') targets.push(
       { id: `${p.id}:renewal`, source: p.id, purpose: 'renewal', url: 'https://hashference.com/docs/agents.md' },
+      { id: `${p.id}:quai-payments`, source: p.id, purpose: 'renewal', url: 'https://hashference.com/docs/quai-payments' },
       { id: `${p.id}:api`, source: p.id, purpose: 'api', url: 'https://hashference.com/openapi.json' },
     )
     p.documentationUrls?.forEach((url, i) => targets.push({ id: `${p.id}:documentation:${i}`, source: p.id, purpose: 'renewal', url }))

@@ -24,7 +24,7 @@ import { withDeadline } from '@gremlins/hatch/node'
 import { homeFile, keys } from '../env.js'
 import { boardPost } from '../board.js'
 import { readStatus, updateStatus } from '../status.js'
-import { account, buyCredit, readKey, setupKey, HashferenceError, type HashferenceKey } from '../hashference.js'
+import { account, buyCredit, readKey, reconcileCredit, setupKey, HashferenceError, HashferencePaymentReview, type HashferenceKey } from '../hashference.js'
 import type { SecurityResult } from '../tools/security.js'
 import { WAKE_JOB_ID } from '../bootstrap/hermes.js'
 import {
@@ -86,7 +86,6 @@ export interface MonitorDeps {
     fetch?: typeof fetch
     base?: string
     pay?: (to: string, amountWei: bigint) => Promise<string>
-    sentCount?: () => Promise<number>
     sleep?: (ms: number) => Promise<void>
   }
   wallet?: () => Promise<WalletSnapshot>
@@ -217,27 +216,43 @@ export class HealthMonitor {
     }
     const plan = planTopUp(inInput)
     let bought = 0
-    if (plan.usd > 0 && key) {
+    let credited = false
+    if (key) {
       try {
-        const tools = this.d.hashference?.pay ? undefined : await import('../tools/hashference.js')
-        const pay = this.d.hashference?.pay ?? tools!.payQuai
-        const sentCount = this.d.hashference?.sentCount ?? tools?.quaiSentCount
-        const p = await buyCredit(key, plan.usd, { ...this.hf(), pay, sentCount, now: this.d.now, journalFile: homeFile('inference-purchase.json') })
-        const paidUsd = p.usd ?? plan.usd
-        bought = p.status === 'paid' ? paidUsd : 0
-        if (!readActions().some(a => a.kind === 'topup' && a.invoiceId === p.invoiceId))
-          act('inference', 'topup', `bought $${paidUsd.toFixed(2)} of Hashference credit (${plan.why}); invoice ${p.status}`, { ok: true, usd: paidUsd, status: p.status, tx: p.tx, invoiceId: p.invoiceId })
-        if (wallet && !p.recovered) { wallet.totalUsd -= paidUsd; if (wallet.quaiUsd !== undefined) wallet.quaiUsd -= paidUsd; wallet.byAsset['quai:quai'] = (wallet.byAsset['quai:quai'] ?? 0) - paidUsd }
+        const opts = { ...this.hf(), now: this.d.now, journalFile: homeFile('inference-purchase.json') }
+        const p = plan.usd > 0 ? await buyCredit(key, plan.usd, {
+          ...opts, ...(this.d.hashference?.pay ? { pay: this.d.hashference.pay }
+            : { preparePayment: (await import('../tools/hashference.js')).prepareQuaiPayment }),
+        }) : await reconcileCredit(key, opts)
+        if (p) {
+          const paidUsd = p.usd ?? plan.usd
+          if (p.status === 'paid') {
+            credited = true
+            // Recovered credit can already be included in the balance read at the start of this check.
+            if (p.recovered) {
+              const available = await account(key, this.hf()).then(a => a.availableUsd).catch(() => undefined)
+              if (available !== undefined) bought = Math.max(0, available - (hfUsd ?? 0))
+            } else bought = paidUsd
+            if (!readActions().some(a => a.kind === 'topup' && a.invoiceId === p.invoiceId))
+              act('inference', 'topup', `bought $${paidUsd.toFixed(2)} of Hashference credit (${p.recovered ? 'reconciled original invoice' : plan.why})`, { ok: true, usd: paidUsd, status: p.status, tx: p.tx, invoiceId: p.invoiceId })
+          } else notes.push(`Hashference invoice ${p.invoiceId} is ${p.status}`)
+          if (wallet && !p.recovered) { wallet.totalUsd -= paidUsd; if (wallet.quaiUsd !== undefined) wallet.quaiUsd -= paidUsd; wallet.byAsset['quai:quai'] = (wallet.byAsset['quai:quai'] ?? 0) - paidUsd }
+        }
       } catch (e) {
-        act('inference', 'topup', `top-up of $${plan.usd.toFixed(2)} failed: ${(e as Error).message.slice(0, 160)}`, { ok: false, usd: plan.usd })
+        if (e instanceof HashferencePaymentReview) {
+          notes.push(e.message)
+          if (!readActions().some(a => a.kind === 'topup-review' && a.invoiceId === e.invoiceId))
+            act('inference', 'topup-review', e.message, { ok: false, invoiceId: e.invoiceId })
+        } else if (plan.usd > 0) act('inference', 'topup', `top-up of $${plan.usd.toFixed(2)} failed: ${(e as Error).message.slice(0, 160)}`, { ok: false, usd: plan.usd })
+        else notes.push(`Could not check pending Hashference payment: ${(e as Error).message.slice(0, 160)}`)
       }
     } else if (plan.usd > 0) notes.push('top-up wanted but there is no Hashference account yet')
     if (plan.usd === 0 && (plan.firstRun || plan.creditUsd < plan.floorUsd)) notes.push(`no top-up: ${plan.why}`)
 
     // A paid provider benched for 30 minutes after a 402 would otherwise sit out the credit we just bought.
-    const unblock = bought > 0 || (wake.forInference && plan.creditUsd >= plan.floorUsd)
+    const unblock = credited || (wake.forInference && plan.creditUsd >= plan.floorUsd)
     if (unblock) {
-      const provider = bought > 0 ? 'hashference' : undefined
+      const provider = credited ? 'hashference' : undefined
       try {
         if (await (this.d.resetCooldown ?? defaultResetCooldown())(provider)) act('inference', 'cooldown-reset', `cleared the gateway cooldown for ${provider ?? 'all providers'}`)
       } catch (e) { notes.push(`gateway cooldown reset failed: ${(e as Error).message.slice(0, 100)}`) }
@@ -330,7 +345,7 @@ export class HealthMonitor {
     const inferenceMeasured = hfUsd !== undefined || veniceUsd !== undefined
     await this.requestHelp(st, notes, {
       hosting: hostingRenewed ? false : hosting?.daysLeft === undefined ? undefined : hosting.daysLeft < HEALTH.compute.hostingDays.critical,
-      inference: bought > 0 ? false : inferenceBlocked || (inferenceMeasured ? inference.status === 'starved' : undefined),
+      inference: credited ? false : inferenceBlocked || (inferenceMeasured ? inference.status === 'starved' : undefined),
       runtime: runner.restarts24h >= HEALTH.compute.restarts24h.bad || ['bad', 'critical'].includes(pressure.disk) ||
         ['bad', 'critical'].includes(pressure.memory) || (res.diskFreeFrac === undefined ? undefined : false),
       runway: wallet?.quaiUsd === undefined ? undefined : money.level === 'critical',

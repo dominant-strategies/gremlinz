@@ -203,6 +203,35 @@ describe('health monitor', () => {
     expect(t.hf.s.paidWei).toHaveLength(0)
   })
 
+  it('records one review alert across restarts and reconciles without buying more credit', async () => {
+    let now = Date.now()
+    let reads = 0
+    let paid = false
+    const t = setup({ hfUsd: 10, now: () => now })
+    const invoice = { id: 'legacy-invoice', amountAtomic: '123', expiresAt: new Date(now - H).toISOString() }
+    writeFileSync(join(t.home, 'inference-purchase.json'), JSON.stringify({ requestId: 'legacy', usd: 3, state: 'sending', invoice }))
+    const fetch = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/legacy-invoice')) {
+        reads++
+        return json(200, { invoice: { ...invoice, status: paid ? 'paid' : 'expired', paymentObserved: paid } })
+      }
+      return t.hf.f(url, init)
+    }) as typeof globalThis.fetch
+    const deps = { ...t.deps, hashference: { ...t.deps.hashference, fetch } }
+    expect((await new HealthMonitor(deps).check()).notes.join(' ')).toContain('legacy-invoice')
+    await new HealthMonitor(deps).check()
+    expect(reads).toBe(1)
+    const actions = () => readFileSync(join(t.home, 'health-actions.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+    expect(actions().filter(a => a.kind === 'topup-review')).toHaveLength(1)
+    paid = true
+    now += 15 * 60_000
+    const updated = await new HealthMonitor(deps).check()
+    expect(updated).toMatchObject({ inferenceUsd: 10, lastTopUp: { usd: 3, status: 'paid' } })
+    expect(t.resets).toEqual(['hashference'])
+    expect(t.hf.s.invoices).toBe(0)
+    expect(t.hf.s.paidWei).toHaveLength(0)
+  })
+
   it('writes health.json with every area, and the board tier', async () => {
     const t = setup({ hfUsd: 10, walletUsd: 500 })
     const h = await t.monitor.check()

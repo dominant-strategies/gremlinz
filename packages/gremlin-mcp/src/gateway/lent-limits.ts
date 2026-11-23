@@ -49,6 +49,7 @@ export interface Disabled { status: number; reason: string; at: number }
 
 /** A 403 that is about this request's content, not the key (OpenRouter's moderation, for one). */
 const CONTENT_403 = /moderation|flagged|content.?policy|safety/i
+export const isContentRefusal = (text: string) => CONTENT_403.test(text)
 
 export class KeyLimiter {
   private rpm: TokenBucket
@@ -100,7 +101,7 @@ export class KeyLimiter {
   observe(status: number, headers: Headers, text = ''): 'disabled' | undefined {
     const t = this.now()
     if (status >= 200 && status < 300) { this.strikes = 0; return }
-    if (status === 401 || (status === 403 && !CONTENT_403.test(text))) {
+    if (status === 401 || (status === 403 && !isContentRefusal(text))) {
       if (this.disabled) return
       this.disabled = { status, reason: `the provider refused the key (${status}${text ? `: ${text.replace(/\s+/g, ' ').slice(0, 160)}` : ''})`, at: t }
       return 'disabled'

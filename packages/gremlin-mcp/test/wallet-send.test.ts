@@ -1,13 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Transaction, Address, NETWORK, OutScript } from '@scure/btc-signer'
 import { getCompiledTransactionMessageDecoder, getTransactionDecoder, getBase64EncodedWireTransaction } from '@solana/kit'
 import { base58, base64 } from '@scure/base'
+import { JsonRpcProvider as QuaiProvider, QuaiTransaction, Wallet as QuaiWallet, Zone } from 'quais'
 import { deriveKeys } from '../src/wallets/keys.js'
 import { asset } from '../src/wallets/chains.js'
-import { buildSolanaTransfer, buildUtxoTransfer, destinationProblem } from '../src/wallets/send.js'
+import { buildSolanaTransfer, buildUtxoTransfer, destinationProblem, prepareQuaiTransfer } from '../src/wallets/send.js'
 import { priceFn, recordSend } from '../src/wallets/policy.js'
 
 const ABANDON = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
@@ -28,6 +29,26 @@ describe('destinations', () => {
     expect(destinationProblem(asset('btc:bitcoin')!, them.litecoin.address)).toBeDefined()
     expect(destinationProblem(asset('ltc:litecoin')!, them.litecoin.address)).toBeUndefined()
   })
+})
+
+it('computes the hash of the exact signed Quai transaction before broadcasting', async () => {
+  const init = vi.spyOn(QuaiProvider.prototype as unknown as { initialize(): Promise<void> }, 'initialize').mockResolvedValue()
+  const populate = vi.spyOn(QuaiWallet.prototype, 'populateQuaiTransaction')
+    .mockImplementation(async tx => ({ ...tx, from: me.quai.address, to: them.quai.address, type: 0, nonce: 7, gasLimit: 21_000n, gasPrice: 10n, chainId: 9n, value: 123n }))
+  const broadcast = vi.spyOn(QuaiProvider.prototype, 'broadcastTransaction').mockImplementation(async () => ({} as never))
+  try {
+    const payment = await prepareQuaiTransfer(me, them.quai.address, 123n)
+    expect(payment.nonce).toBe(7)
+    expect(broadcast).not.toHaveBeenCalled()
+    await payment.broadcast()
+    const [zone, signed] = broadcast.mock.calls[0]!
+    expect(zone).toBe(Zone.Cyprus1)
+    expect(QuaiTransaction.from(signed)).toMatchObject({ hash: payment.tx, nonce: 7, to: them.quai.address, value: 123n })
+  } finally {
+    init.mockRestore()
+    populate.mockRestore()
+    broadcast.mockRestore()
+  }
 })
 
 describe('bitcoin transfer', () => {

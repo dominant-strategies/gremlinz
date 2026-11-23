@@ -22,7 +22,7 @@ export function describeLent(grants: LentKeyStatus[]): string {
     const lines = [
       `## ${g.provider.name}, lent by ${g.lender} (grant ${g.grantId})`,
       `State: ${state}`,
-      `Models: ${g.models.join(', ')}. Used this period: $${a.usedThisPeriodUsd.toFixed(4)}${g.remainingOnKeyUsd !== null ? `; the provider says $${g.remainingOnKeyUsd.toFixed(2)} is left on the key` : ''}.`,
+      `Models: ${g.models.join(', ') || 'no model matches the grant'}. Used this period: $${a.usedThisPeriodUsd.toFixed(4)}${g.remainingOnKeyUsd !== null ? `; the provider says $${g.remainingOnKeyUsd.toFixed(2)} is left on the key` : ''}.`,
       `Rate limits for you on this key: ${lim.limits.rpm} requests/min${lim.limits.tpm ? `, ${lim.limits.tpm} tokens/min` : ''}${lim.limits.rpd ? `, ${lim.limits.rpd} requests/day` : ''}, ${lim.limits.concurrency} at a time. Your gateway enforces them.`,
       'The lender\'s rules (enforced by your gateway):', ...policyLines(g.policy).map((l) => `- ${l.replace(/^Your budget/, 'Their budget').replace(/^It may/, 'You may')}`),
       `Repayment: ${g.repay === 'patron' ? 'credit them as a patron' : 'buy them syndicate shares out of income'}.`,
@@ -43,9 +43,14 @@ export function registerLentTools(server: McpServer, deps: LentDeps = {}) {
     annotations: { readOnlyHint: true },
   }, async () => {
     try {
-      const r = await (deps.fetch ?? fetch)(`${admin}/admin/lent`, { signal: AbortSignal.timeout(10_000) })
+      const token = process.env.GREMLIN_SERVICE_TOKEN
+      const r = await (deps.fetch ?? fetch)(`${admin}/admin/lent`, {
+        headers: token ? { authorization: `Bearer ${token}` } : undefined,
+        redirect: 'error', signal: AbortSignal.timeout(10_000),
+      })
       if (!r.ok) return fail(`Your gateway did not answer (${r.status}).`)
-      return text(describeLent(((await r.json()) as { grants: LentKeyStatus[] }).grants))
+      const { grants, routing } = (await r.json()) as { grants: LentKeyStatus[]; routing?: { at: string; reason: string } }
+      return text(describeLent(grants) + (routing ? `\n\nLatest draft routing (${routing.at}): ${routing.reason}.` : ''))
     } catch (e) {
       return fail(`Could not reach your gateway: ${(e as Error).message.slice(0, 200)}`)
     }

@@ -118,27 +118,36 @@ export async function balance(key: HashferenceKey, opts: { fetch?: Fetch; base?:
 
 export interface Invoice {
   id: string
-  status: 'awaiting_payment' | 'confirming' | 'paid' | 'review'
+  status: 'awaiting_payment' | 'expired' | 'confirming' | 'paid' | 'review'
   /** QUAI in wei, exact: send precisely this. */
   amountAtomic: string
   addresses: string[]
   expiresAt: string
   creditMicrousd: number
+  quoteExpired?: boolean
+  canPay?: boolean
+  paymentObserved?: boolean
+  serverTime?: string
+}
+
+function paymentInvoice(response: { invoice: Invoice; serverTime?: string }): Invoice {
+  return { ...response.invoice, serverTime: response.invoice?.serverTime ?? response.serverTime }
 }
 
 /** A QUAI invoice for `usd` of credit ($1 to $500). Pay exactly amountAtomic to addresses[0] before expiresAt (~5 min). */
 export async function createQuaiInvoice(key: HashferenceKey, usd: number, opts: { fetch?: Fetch; base?: string; requestId?: string } = {}): Promise<Invoice> {
   if (!(usd >= 1 && usd <= 500)) throw new Error('Hashference QUAI invoices are $1 to $500')
-  const r = await call<{ invoice: Invoice }>(opts.fetch ?? fetch, 'POST', '/v1/payments', {
+  const r = await call<{ invoice: Invoice; serverTime?: string }>(opts.fetch ?? fetch, 'POST', '/v1/payments', {
     body: { asset: 'QUAI', creditMicrousd: Math.round(usd * 1_000_000), requestId: opts.requestId ?? randomUUID() }, auth: key.apiKey, base: opts.base,
   })
   const inv = r.invoice
   if (!inv?.id || !/^\d+$/.test(inv.amountAtomic ?? '') || !inv.addresses?.[0]) throw new Error('Hashference returned an unusable invoice')
-  return inv
+  return paymentInvoice(r)
 }
 
 export async function invoice(key: HashferenceKey, id: string, opts: { fetch?: Fetch; base?: string } = {}): Promise<Invoice> {
-  return (await call<{ invoice: Invoice }>(opts.fetch ?? fetch, 'GET', `/v1/payments/${encodeURIComponent(id)}`, { auth: key.apiKey, base: opts.base })).invoice
+  const r = await call<{ invoice: Invoice; serverTime?: string }>(opts.fetch ?? fetch, 'GET', `/v1/payments/${encodeURIComponent(id)}`, { auth: key.apiKey, base: opts.base })
+  return paymentInvoice(r)
 }
 
 /** After paying by hand (or if the invoice didn't notice), point Hashference at the transaction. */
@@ -148,84 +157,150 @@ export async function verifyPayment(key: HashferenceKey, id: string, tx: string,
 
 export const hasKey = (file: string) => existsSync(file) && !!readKey(file)
 
-export interface BuyDeps {
+export interface PreparedPayment {
+  tx: string
+  nonce: number
+  broadcast(): Promise<void>
+}
+
+type InvoiceDeps = {
   fetch?: Fetch
   base?: string
-  /** Pays `amountWei` QUAI to `to`; returns the transaction hash. */
-  pay: (to: string, amountWei: bigint) => Promise<string>
-  /**
-   * The paying wallet's transaction count, pending included. With it, a payment that failed before broadcast (empty
-   * wallet, RPC refused it) is recognised as never sent instead of blocking every later top-up.
-   */
-  sentCount?: () => Promise<number>
-  sleep?: (ms: number) => Promise<void>
   now?: () => number
   /** Shared by the monitor and manual top-ups; records intent before any transfer. */
   journalFile?: string
 }
+export type BuyDeps = InvoiceDeps & { sleep?: (ms: number) => Promise<void> } & (
+  | { preparePayment: (to: string, amountWei: bigint) => Promise<PreparedPayment>; pay?: never }
+  | { pay: (to: string, amountWei: bigint) => Promise<string>; preparePayment?: never }
+)
 
 export interface Purchase { invoiceId: string; tx: string; quaiWei: bigint; status: Invoice['status']; usd?: number; recovered?: boolean }
-interface PurchaseJournal { requestId: string; usd: number; state: 'creating' | 'prepared' | 'sending' | 'sent' | 'complete'; invoice?: Invoice; tx?: string; nonceBefore?: number }
+interface PurchaseJournal {
+  requestId: string
+  usd: number
+  state: 'creating' | 'prepared' | 'sending' | 'sent' | 'complete' | 'expired-unpaid'
+  invoice?: Invoice
+  tx?: string
+  nonce?: number
+  review?: { reason: string; recheckAt: number }
+}
+
+const REVIEW_INTERVAL_MS = 15 * 60_000
+const PAYMENT_MARGIN_MS = 30_000
+
+export class HashferencePaymentReview extends Error {
+  constructor(public invoiceId: string, reason: string) {
+    super(`Hashference invoice ${invoiceId}: ${reason}`)
+  }
+}
 
 /**
  * Buy `usd` of credit: invoice, pay exactly the quoted QUAI, then poll for a few minutes (and point Hashference at the
- * transaction if it hasn't noticed). A transfer error may have happened after broadcast; the journal preserves that
- * uncertainty and refuses to pay again until the provider confirms the original invoice, unless the wallet's nonce
- * shows nothing was sent. Dropping the purchase then is safe even if the lost transfer surfaces later: the next
- * payment reuses that same nonce, so at most one of the two can ever be mined.
+ * transaction if it hasn't noticed). A transfer error may have happened after broadcast. Only a journal still
+ * in the pre-broadcast state may replace an expired quote. An unchanged wallet nonce cannot clear an uncertain send.
  */
 export async function buyCredit(key: HashferenceKey, usd: number, deps: BuyDeps): Promise<Purchase> {
   if (deps.journalFile) return withFileLock(deps.journalFile + '.lock', () => purchase(key, usd, deps))
   return purchase(key, usd, deps)
 }
 
-async function purchase(key: HashferenceKey, usd: number, deps: BuyDeps, retried = false): Promise<Purchase> {
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+/** Recheck an in-flight payment even when current policy authorizes no new spending. */
+export async function reconcileCredit(key: HashferenceKey, deps: InvoiceDeps & { journalFile: string }): Promise<Purchase | undefined> {
+  return withFileLock(deps.journalFile + '.lock', () => purchase(key, undefined, deps))
+}
+
+function purchase(key: HashferenceKey, usd: number, deps: BuyDeps, refreshed?: boolean): Promise<Purchase>
+function purchase(key: HashferenceKey, usd: undefined, deps: InvoiceDeps): Promise<Purchase | undefined>
+async function purchase(key: HashferenceKey, usd: number | undefined, deps: InvoiceDeps | BuyDeps, refreshed = false): Promise<Purchase | undefined> {
+  const now = deps.now ?? Date.now
   const opts = { fetch: deps.fetch, base: deps.base }
   let journal: PurchaseJournal | undefined
   if (deps.journalFile && existsSync(deps.journalFile)) journal = JSON.parse(readFileSync(deps.journalFile, 'utf8')) as PurchaseJournal
-  const recovered = !!journal && journal.state !== 'complete'
-  if (!recovered) journal = { requestId: randomUUID(), usd, state: 'creating' }
-  const j = journal!
+  const payment = usd === undefined ? undefined : deps as BuyDeps
+  if (!payment && journal?.state !== 'sending' && journal?.state !== 'sent') return
+  if (!journal || journal.state === 'complete' || journal.state === 'expired-unpaid') {
+    if (usd === undefined) return
+    journal = { requestId: randomUUID(), usd, state: 'creating' }
+  }
+  const j = journal
   const save = () => { if (deps.journalFile) writeJsonDurable(deps.journalFile, j) }
-  save()
-  if (!j.invoice) { j.invoice = await createQuaiInvoice(key, j.usd, { ...opts, requestId: j.requestId }); j.state = 'prepared'; save() }
+  const hasSavedInvoice = !!j.invoice
+  if (!j.invoice) {
+    if (!payment || j.state !== 'creating') throw new Error('Hashference payment journal is missing its invoice')
+    save(); j.invoice = await createQuaiInvoice(key, j.usd, { ...opts, requestId: j.requestId }); j.state = 'prepared'; save()
+  }
   const inv = j.invoice
   const amount = BigInt(inv.amountAtomic)
-  const neverSent = async () => j.nonceBefore !== undefined && !!deps.sentCount && (await deps.sentCount()) === j.nonceBefore
-  if (j.state === 'sending' && !j.tx) {
-    const remote = await invoice(key, inv.id, opts)
-    if (remote.status !== 'paid') {
-      if (retried || !(await neverSent())) throw new Error(`Payment outcome unknown for invoice ${inv.id}; refusing another transfer until reconciled`)
-      j.state = 'complete'; save()
-      return purchase(key, usd, deps, true)
-    }
-    j.state = 'complete'; save()
-    return { invoiceId: inv.id, tx: 'unknown (provider confirmed payment)', quaiWei: amount, status: 'paid', usd: j.usd, recovered: true }
+  const review = (reason: string): never => {
+    j.review = { reason, recheckAt: now() + REVIEW_INTERVAL_MS }
+    save()
+    throw new HashferencePaymentReview(inv.id, reason)
   }
-  if (j.state === 'prepared') {
-    if (Date.parse(inv.expiresAt) - (deps.now ?? Date.now)() < 30_000) {
-      j.state = 'complete'; save()
-      throw new Error('the invoice expires too soon to pay safely; try again')
+  const result = (status: Invoice['status'], resumed: boolean): Purchase => {
+    if (status === 'paid') { j.state = 'complete'; delete j.review; save() }
+    return { invoiceId: inv.id, tx: j.tx ?? 'unknown (provider confirmed payment)', quaiWei: amount, status, ...(deps.journalFile ? { usd: j.usd, recovered: resumed } : {}) }
+  }
+  if (j.review && now() < j.review.recheckAt) throw new HashferencePaymentReview(inv.id, j.review.reason)
+  if (j.state === 'prepared' && payment && usd !== undefined) {
+    const quote = hasSavedInvoice ? await invoice(key, inv.id, opts) : inv
+    if (quote.status === 'paid') return result('paid', true)
+    const serverTime = Date.parse(quote.serverTime ?? '')
+    const expiresAt = Date.parse(inv.expiresAt) - (Number.isFinite(serverTime) ? serverTime - now() : 0)
+    const expiresSoon = () => expiresAt - now() < PAYMENT_MARGIN_MS
+    const replaceQuote = () => {
+      // No broadcast was called from this journal. A fresh request ID is required for a fresh quote.
+      j.state = 'expired-unpaid'; delete j.review; save()
+      if (refreshed) throw new Error('Hashference returned a quote too close to expiry to pay safely')
+      return purchase(key, Math.min(usd, j.usd), payment, true)
     }
-    if (deps.sentCount) j.nonceBefore = await deps.sentCount()
-    j.state = 'sending'; save()
+    if (quote.paymentObserved || quote.status === 'confirming' || quote.status === 'review') {
+      j.state = 'sending'
+      return review(`payment status is ${quote.status}; check the wallet and invoice before any further transfer`)
+    }
+    if (quote.status !== 'awaiting_payment' && quote.status !== 'expired')
+      return review(`payment status is ${quote.status}; check the wallet and invoice before any further transfer`)
+    if (!Number.isFinite(expiresAt)) return review('the quote has no valid expiry; check the invoice before paying')
+    if (quote.status === 'expired' || quote.quoteExpired || expiresSoon()) return replaceQuote()
+    if (quote.canPay === false) return review('the invoice is closed to payment; check its status before any transfer')
+    if (j.usd > usd) {
+      j.state = 'complete'; save()
+      return purchase(key, usd, payment, true)
+    }
+
+    const prepared = await payment.preparePayment?.(inv.addresses[0]!, amount)
+    if (expiresSoon()) return replaceQuote()
+    if (prepared) { j.tx = prepared.tx; j.nonce = prepared.nonce }
+    j.state = 'sending'; delete j.review; save()
     try {
-      j.tx = await deps.pay(inv.addresses[0]!, amount)
-    } catch (e) {
-      // Leave the journal at 'sending' unless the nonce proves the transfer never left.
-      if (await neverSent().catch(() => false)) { j.state = 'complete'; save() }
-      throw e
+      if (prepared) await prepared.broadcast()
+      else j.tx = await payment.pay!(inv.addresses[0]!, amount)
+    } catch {
+      return review('broadcast outcome unknown; reconcile the original payment before any further transfer')
     }
     j.state = 'sent'; save()
+    const sleep = payment.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+    let status: Invoice['status'] = 'awaiting_payment'
+    for (let i = 0; i < 18 && (status === 'awaiting_payment' || status === 'confirming'); i++) {
+      await sleep(10_000)
+      try { status = (await invoice(key, inv.id, opts)).status } catch { /* keep polling */ }
+    }
+    if (status === 'awaiting_payment' || status === 'expired') {
+      try { status = (await verifyPayment(key, inv.id, j.tx!, opts)).status } catch { /* hold for recovery */ }
+    }
+    if (status === 'paid' || status === 'confirming' || status === 'awaiting_payment') return result(status, false)
+    return review(`payment status is ${status}; reconcile the original transaction before any further transfer`)
   }
-  const tx = j.tx!
-  let status = inv.status
-  for (let i = 0; i < 18 && status !== 'paid'; i++) {
-    await sleep(10_000)
-    try { status = (await invoice(key, inv.id, opts)).status } catch { /* keep polling */ }
+
+  // Restart or ambiguous send. Query only the original invoice and verify only the original hash.
+  const reason = j.review?.reason ?? 'payment outcome unknown; check pending and confirmed wallet transactions before any further transfer'
+  let status: Invoice['status']
+  try {
+    status = (await invoice(key, inv.id, opts)).status
+    if (j.tx && (status === 'awaiting_payment' || status === 'expired')) status = (await verifyPayment(key, inv.id, j.tx, opts)).status
+  } catch {
+    return review(reason)
   }
-  if (status === 'awaiting_payment') { try { status = (await verifyPayment(key, inv.id, tx, opts)).status } catch { /* reported by status */ } }
-  if (status === 'paid') { j.state = 'complete'; save() }
-  return { invoiceId: inv.id, tx, quaiWei: amount, status, ...(deps.journalFile ? { usd: j.usd, recovered } : {}) }
+  if (status === 'paid' || (status === 'confirming' && j.tx)) return result(status, true)
+  return review(status === 'review' ? 'provider needs manual review; contact Hashference with the original payment evidence' : reason)
 }

@@ -5,13 +5,11 @@
 import { z } from 'zod'
 import { formatUnits } from 'ethers'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { chainKeys, homeFile, keys, phrase } from '../env.js'
+import { chainKeys, homeFile, keys } from '../env.js'
 import { fail, text } from '../result.js'
 import { readHealth, spendGate } from '../health/gate.js'
 import { balance, buyCredit, readKey, setupKey, type Purchase } from '../hashference.js'
-import { send } from '../wallets/send.js'
-import { JsonRpcProvider as QuaiProvider } from 'quais'
-import { ASSETS, QUAI, rpcFor } from '../wallets/chains.js'
+import { prepareQuaiTransfer } from '../wallets/send.js'
 import { recordSend } from '../wallets/policy.js'
 import { MakerApproval, requireMakerApproval, type Approve } from './approval.js'
 
@@ -20,31 +18,26 @@ export interface HashferenceDeps {
   base?: string
   /** Pays an invoice; defaults to a real QUAI transfer from the gremlin's wallet. Returns the transaction hash. */
   pay?: (to: string, amountWei: bigint) => Promise<string>
-  sentCount?: () => Promise<number>
   sleep?: (ms: number) => Promise<void>
 }
 
 export const keyFile = () => homeFile('hashference.json')
 
-/** A real QUAI transfer from the gremlin's wallet, recorded in the send log. Returns the transaction hash. */
-export async function payQuai(to: string, amount: bigint): Promise<string> {
-  const quai = ASSETS.find((a) => a.id === 'quai:quai')!
-  const r = await send({ keys: await chainKeys(), phrase: phrase(), asset: quai, to, amount })
-  recordSend(homeFile('sends.jsonl'), { asset: quai.id, to, amount: formatUnits(amount, quai.decimals), tx: r.tx })
-  return r.tx
-}
-
-/** The gremlin's Quai transaction count, pending included: payQuai's next nonce. */
-export async function quaiSentCount(): Promise<number> {
-  const provider = new QuaiProvider(rpcFor('quai', QUAI.rpc), undefined, { usePathing: true })
-  return provider.getTransactionCount((await chainKeys()).quai.address, 'pending')
+export async function prepareQuaiPayment(to: string, amount: bigint) {
+  const prepared = await prepareQuaiTransfer(await chainKeys(), to, amount)
+  return {
+    ...prepared,
+    broadcast: async () => {
+      await prepared.broadcast()
+      recordSend(homeFile('sends.jsonl'), { asset: 'quai:quai', to, amount: formatUnits(amount, 18), tx: prepared.tx })
+    },
+  }
 }
 
 export function registerHashferenceTools(server: McpServer, deps: HashferenceDeps = {}, approve: Approve = requireMakerApproval) {
   const opts = { fetch: deps.fetch, base: deps.base }
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)))
-  const pay = deps.pay ?? payQuai
-  const sentCount = deps.pay ? deps.sentCount : (deps.sentCount ?? quaiSentCount)
+  const payment = deps.pay ? { pay: deps.pay } : { preparePayment: prepareQuaiPayment }
 
   server.registerTool('hashference_setup', {
     description:
@@ -97,7 +90,7 @@ export function registerHashferenceTools(server: McpServer, deps: HashferenceDep
     if (blocked) return fail(blocked)
     let p: Purchase
     try {
-      p = await buyCredit(k, usd, { ...opts, pay, sentCount, sleep, journalFile: homeFile('inference-purchase.json') })
+      p = await buyCredit(k, usd, { ...opts, ...payment, sleep, journalFile: homeFile('inference-purchase.json') })
     } catch (e) {
       return fail(`Top-up could not complete; check the invoice outcome before retrying: ${(e as Error).message.slice(0, 300)}`)
     }

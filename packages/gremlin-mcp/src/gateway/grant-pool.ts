@@ -53,10 +53,10 @@ export class GrantPool {
     })().finally(() => { this.refreshing = undefined })
     return this.refreshing
   }
-  /** Rechecked immediately before dispatch, including expiry and cache age. */
-  allowanceFor(grantId: string): { scopes: SpendingScope[]; maxPerCallUsd?: number } | undefined {
+  private checkAllowance(grantId: string): { scopes: SpendingScope[]; maxPerCallUsd?: number } | { reason: string } {
     const g = this.grants.find(g => g.grant.grantId === grantId)
-    if (!g || !this.live(g) || this.lentKeys.limiter(grantId)?.disabled) return undefined
+    if (!g || !this.live(g)) return { reason: 'grant authorization expired or could not be refreshed' }
+    if (this.lentKeys.limiter(grantId)?.disabled) return { reason: 'provider refused the key' }
     const now = this.now()
     const { start, reset } = period(g.grant.policy.period, now)
     const group = this.group(g)
@@ -65,10 +65,15 @@ export class GrantPool {
     const fresh = b && b.start === start && now - b.at < 120_000
     const remaining = fresh && b.usd !== undefined ? Math.max(0, b.usd - Math.max(0, used - b.used)) : undefined
     // Providers with a balance API must report a fresh balance to authorize spending.
-    if (g.grant.provider.budgetApi !== 'none' && remaining === undefined) return undefined
+    if (g.grant.provider.budgetApi !== 'none' && remaining === undefined) return { reason: 'fresh provider balance unavailable' }
     const allow = allowance(g.grant.policy, now, used, remaining)
-    if (allow.allowedUsd <= 0) return undefined
+    if (allow.allowedUsd <= 0) return { reason: allow.reason }
     return { scopes: [{ id: group, used, limit: used + allow.allowedUsd, until: Math.min(reset, g.grant.expiresAt ? Date.parse(g.grant.expiresAt) : Infinity) }], maxPerCallUsd: g.grant.policy.maxPerCallUsd }
+  }
+  /** Rechecked immediately before dispatch, including expiry and cache age. */
+  allowanceFor(grantId: string) {
+    const check = this.checkAllowance(grantId)
+    return 'scopes' in check ? check : undefined
   }
   async offers(force = false) {
     await this.refresh(force)
@@ -99,10 +104,10 @@ export class GrantPool {
   async status() {
     await this.offers()
     return this.lentKeys.status().map(s => {
-      const scope = this.allowanceFor(s.grantId)?.scopes[0]
-      return { ...s, allowance: scope
-        ? { ...s.allowance, allowedUsd: scope.limit - scope.used, usedThisPeriodUsd: scope.used, resetsAt: new Date(scope.until).toISOString() }
-        : { ...s.allowance, allowedUsd: 0, reason: 'authorization or provider balance unavailable' } }
+      const check = this.checkAllowance(s.grantId)
+      if ('reason' in check) return { ...s, allowance: { ...s.allowance, allowedUsd: 0, reason: check.reason } }
+      const scope = check.scopes[0]!
+      return { ...s, allowance: { ...s.allowance, allowedUsd: scope.limit - scope.used, usedThisPeriodUsd: scope.used, resetsAt: new Date(scope.until).toISOString() } }
     })
   }
 }

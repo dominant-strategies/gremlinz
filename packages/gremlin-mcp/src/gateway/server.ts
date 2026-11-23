@@ -13,7 +13,8 @@ import type { Documentation, DocumentationTarget } from './documentation.js'
 import type { Reservation } from './reservations.js'
 import { gleanRoute, sensitiveReason } from './glean.js'
 import { refAllowed } from '@gremlins/hatch'
-import type { LentOffer } from './grants.js'
+import { modelGone, type LentOffer } from './grants.js'
+import { isContentRefusal } from './lent-limits.js'
 import { classify, isRefusal, mayRetryRefusal, permissiveRoute, routeFor, type RouterInput } from './router.js'
 import { HASHFERENCE, isHashferenceReservation } from '../hashference.js'
 
@@ -81,8 +82,6 @@ const requestBytes = (body: Record<string, unknown>, model: string) => Buffer.by
 
 /** A model its provider stopped offering is skipped this long before trying it again. */
 const RETIRED_MS = 6 * 3_600_000
-// Anthropic says it as not_found_error with the message "model: <id>".
-const MODEL_GONE = /unsupported model|model not found|no such model|unknown model|model .{0,40} (?:does not exist|is not available)|not_found_error.{0,80}"model: /i
 /** The longest a last-resort request waits for a free provider's call interval. */
 const LAST_RESORT_WAIT_MS = 20_000
 const DRAFT_LIMIT = 1024
@@ -90,7 +89,7 @@ const DRAFT_TIMEOUT_MS = 30_000
 type Completion = Record<string, unknown> & { usage?: UpstreamUsage; choices?: { message?: { content?: string; tool_calls?: unknown[] } }[] }
 
 /** A donor controls the endpoint's response. Limit what we buffer before parsing its draft. */
-async function readDraft(up: Response): Promise<Completion> {
+async function readBoundedText(up: Response, limit: number): Promise<string> {
   const reader = up.body?.getReader()
   if (!reader) throw new Error('empty draft')
   const chunks: Uint8Array[] = []
@@ -98,10 +97,10 @@ async function readDraft(up: Response): Promise<Completion> {
   try {
     for (let result = await reader.read(); !result.done; result = await reader.read()) {
       bytes += result.value.byteLength
-      if (bytes > 256 * 1024) throw new Error('draft exceeds the response limit')
+      if (bytes > limit) throw new Error('draft provider exceeded the response limit')
       chunks.push(result.value)
     }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Completion
+    return Buffer.concat(chunks).toString('utf8')
   } finally {
     await reader.cancel().catch(() => {})
     reader.releaseLock()
@@ -131,6 +130,8 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
   const fetchers = new Map(cfg.providers.map((p) => [p.id, deps.fetchers?.[p.id] ?? (p.kind === 'venice-x402' ? undefined : providerFetch(p, env))]))
   /** provider/model pairs a provider said it no longer offers, until when. */
   const retired = new Map<string, number>()
+  let lastDraftRouting: { at: string; reason: string } | undefined
+  const draftRouting = (reason: string) => { lastDraftRouting = { at: new Date(now()).toISOString(), reason } }
   const lastCall = new Map<string, number>()
   const down = (id: string, status?: number, headers?: Headers) => {
     const p = providers.get(id)
@@ -261,7 +262,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
       }
       if (req.method === 'GET' && req.url === '/admin/lent') {
         if (!isLocal(req.socket.remoteAddress)) return json(res, 403, { error: { message: 'localhost only' } })
-        return json(res, 200, { grants: await deps.lentStatus?.() ?? [] })
+        return json(res, 200, { grants: await deps.lentStatus?.() ?? [], routing: lastDraftRouting })
       }
       if (req.method === 'GET' && req.url === '/health')
         return json(res, 200, { ok: true, cooling: Object.fromEntries(Object.entries(credentials.snapshot()).filter(([, s]) => s.retryAt && s.retryAt > now()).map(([id, s]) => [id, new Date(s.retryAt!).toISOString()])), credentials: credentials.snapshot() })
@@ -269,6 +270,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
 
       const health = deps.health?.()
       if (health?.resourcePressure === 'critical') {
+        draftRouting('critical disk or memory pressure')
         res.setHeader('retry-after', '30')
         return json(res, 503, { error: { type: 'resource_pressure', message: 'Inference is temporarily paused to let the machine recover disk or memory headroom.' } })
       }
@@ -301,15 +303,23 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
       const refused = deps.refuse?.(recovery)
       const ownRoute = expandRoute(route).filter(allowed).filter(t => !t.grantId && (!refused || providers.get(t.provider)?.free || providers.get(t.provider)?.local))
       const canReview = (t: RouteTarget) => !t.grantId && reviewerIds.has(t.provider)
-      const canDraft = alias !== 'gremlin-glean' && !recovery && !maintenance && !health?.resourcePressure && !sensitive && Array.isArray(body.messages) &&
-        ownRoute.some(t => {
+      const draftRoute = alias !== 'gremlin-glean' && !recovery && !maintenance
+      const skipDraft = health?.resourcePressure ? 'disk or memory pressure' : sensitive ? 'sensitive context'
+        : !Array.isArray(body.messages) ? 'no chat messages'
+        : ownRoute.some(t => {
           const provider = providers.get(t.provider)
           if (!provider || !canReview(t) || !fetchers.get(t.provider)) return false
+          if ((retired.get(`${t.provider}/${t.model}`) ?? 0) > now()) return false
+          if (t.maxRequestBytes && requestBytes(body, t.model) > t.maxRequestBytes) return false
           const fp = credentialFingerprint(provider, env)
-          return (!(provider.keyFile || provider.apiKeyEnv) || !!fp) && credentials.available(provider.id, fp)
-        })
-      const lent = (canDraft ? await deps.lent?.() ?? [] : []).filter(l => !configuredIds.has(l.provider.id))
-        .map(l => ({ ...l, targets: l.targets.filter(t => t.grantId && allowed(t)) }))
+          return (!(provider.keyFile || provider.apiKeyEnv) || !!fp) && credentials.available(provider.id, fp) &&
+            (!fp || credentials.available(`secret:${fp}`)) && (!provider.accountId || credentials.available(`account:${provider.accountId}`))
+        }) ? undefined : 'no eligible trusted reviewer'
+      const offers = (draftRoute && !skipDraft ? await deps.lent?.() ?? [] : []).filter(l => !configuredIds.has(l.provider.id))
+      const lent = offers.map(l => ({ ...l, targets: l.targets.filter(t => t.grantId &&
+        refAllowed(cfg.policy, l.modelProvider ?? t.provider, t.model)) }))
+      if (draftRoute) draftRouting(skipDraft ?? (!offers.length ? 'no authorized grant with available allowance'
+        : lent.some(l => l.targets.length) ? 'donated models unavailable on this request' : 'no donated model matches the grant and maker policies'))
       const lentBy = new Map(lent.map(l => [l.provider.id, l]))
       const managed = (deps.sources?.offers() ?? []).filter(o => !configuredIds.has(o.provider.id))
         .map(o => ({ ...o, fetch: providerFetch(o.provider, env), targets: o.targets.filter(t => (o.provider.free && cfg.policy?.freeModels) || allowed(t)) }))
@@ -320,7 +330,8 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
       // Last resort for every route: the free endpoints. A gremlin that can't pay (or whose paid providers are all down)
       // still gets an answer, weaker but better than none; secrets never go there (checked below).
       const lastResort = alias === 'gremlin-glean' || maintenance ? [] : (keepTo(cfg.routes['gremlin-glean']) ?? []).filter((t) => !ownRoute.some((o) => o.provider === t.provider && o.model === t.model))
-      let queue = [...lent.flatMap((l) => l.targets), ...ownRoute, ...managed.flatMap(o => !refused || o.provider.free || o.provider.local ? o.targets : []), ...expandRoute(lastResort)].filter(allowed)
+      const ownTargets = [...ownRoute, ...managed.flatMap(o => !refused || o.provider.free || o.provider.local ? o.targets : []), ...expandRoute(lastResort)].filter(allowed)
+      let queue = lent.flatMap(l => l.targets).concat(ownTargets)
       if (refused && !queue.length) return json(res, 429, { error: { type: 'budget_exhausted', message: refused } })
       let lastRefusal: Record<string, unknown> | undefined
       let draft: string | undefined
@@ -330,8 +341,8 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
         if (target.grantId && (!offer || draft || draftAttempts >= 2)) continue
         if (tried.has(`${target.provider}/${target.model}`)) continue
         tried.add(`${target.provider}/${target.model}`)
-        const p = providers.get(target.provider)
-        const f = fetchers.get(target.provider)
+        const p = offer?.provider ?? providers.get(target.provider)
+        const f = offer?.fetch ?? fetchers.get(target.provider)
         // A request over a target's size cap would only come back 400; go straight to the next one.
         if (target.maxRequestBytes && requestBytes(body, target.model) > target.maxRequestBytes) { errors.push(`${target.provider}: request too large for ${target.model} (${Math.round(requestBytes(body, target.model) / 1000)} KB > ${Math.round(target.maxRequestBytes / 1000)} KB)`); continue }
         if (!p || !f) { errors.push(`${target.provider}: not configured`); continue }
@@ -364,10 +375,14 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
           if (!t.maxRequestBytes || requestBytes(review, t.model) <= t.maxRequestBytes) { requestBody = review; reviewing = true }
         }
         const prepared = offer?.prepare?.(requestBody, target)
-        if (prepared && 'skip' in prepared) { errors.push(`${p.id}: ${prepared.skip}`); continue }
+        if (prepared && 'skip' in prepared) { draftRouting('request exceeds the donor allowance'); errors.push(`${p.id}: ${prepared.skip}`); continue }
         if (prepared) requestBody = prepared.body
         const reservation = !p.free && !p.local ? deps.reserve?.(requestBody, t, p, recovery, maintenance) : undefined
-        if (deps.reserve && !p.free && !p.local && !reservation) { errors.push(`${p.id}: insufficient allowance`); continue }
+        if (deps.reserve && !p.free && !p.local && !reservation) {
+          if (offer) draftRouting('grant spending could not be reserved')
+          else if (reviewing) draftRouting('trusted review could not be reserved')
+          errors.push(`${p.id}: insufficient allowance`); continue
+        }
         lastCall.set(p.id, now())
         const started = now()
         const upstreamBody: Record<string, unknown> = { ...(reservation?.body ?? requestBody), model: target.model, ...(!offer && body.stream ? { stream_options: { ...(body.stream_options as object), include_usage: true } } : {}) }
@@ -376,7 +391,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
           draftAttempts++
           const tokens = Math.ceil(Buffer.byteLength(JSON.stringify(upstreamBody.messages ?? '')) / 4) + Number(upstreamBody.max_completion_tokens ?? upstreamBody.max_tokens ?? 1024)
           const slot = offer.admit?.(tokens)
-          if (slot && 'skip' in slot) { reservation?.release(); errors.push(`${p.id}: ${slot.skip}`); continue }
+          if (slot && 'skip' in slot) { draftRouting('donated key is resting or at its rate limit'); reservation?.release(); errors.push(`${p.id}: ${slot.skip}`); continue }
           if (slot) release = slot.release
         }
         let up: Response
@@ -418,23 +433,28 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
             clearTimeout(firstByte)
             clearTimeout(total)
             errors.push(`${p.id}: ${offer ? 'draft provider did not respond' : (e as Error).message}`)
-            if (offer) offer.observe?.(504, new Headers(), '')
+            if (offer) { draftRouting('draft provider did not respond'); offer.observe?.(504, new Headers(), '') }
             else down(p.id)
             recordCall({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: 0, ms: now() - started, incomplete: true })
             continue
           }
           if (!up.ok) {
-            const text = offer ? '' : await up.text().catch(() => '')
             recordCall({ at: new Date(started).toISOString(), alias, provider: p.id, model: target.model, status: up.status, ms: now() - started })
             if (offer) {
+              const detail = [400, 403, 404].includes(up.status) ? await readBoundedText(up, 4096).catch(() => '') : ''
+              const gone = modelGone(up.status, detail)
+              const contentRefusal = up.status === 403 && isContentRefusal(detail)
               abort.abort()
-              offer.observe?.(up.status, up.headers, text)
+              if (gone) retired.set(`${p.id}/${target.model}`, now() + RETIRED_MS)
+              offer.observe?.(up.status, up.headers, gone ? 'model not found' : contentRefusal ? 'content moderation' : '')
+              draftRouting(gone ? 'donated model retired; catalog refresh requested' : `draft provider returned ${up.status}`)
               errors.push(`${p.id}: draft provider returned ${up.status}`)
               continue
             }
+            const text = await up.text().catch(() => '')
             if (retryable(up.status)) { errors.push(`${p.id}: ${up.status} ${text.slice(0, 160)}`); down(p.id, up.status, up.headers); continue }
             // Catalogs change (a provider withdrew the model): retire just this model for a while, not the provider.
-            if ((up.status === 400 || up.status === 404) && MODEL_GONE.test(text)) {
+            if (modelGone(up.status, text)) {
               retired.set(`${p.id}/${target.model}`, now() + RETIRED_MS)
               log(`model ${p.id}/${target.model} not offered; skipping it for ${RETIRED_MS / 3_600_000}h`)
               errors.push(`${p.id}/${target.model}: ${up.status} ${text.slice(0, 120)}`)
@@ -456,7 +476,7 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
           const record = (usage?: Usage, refusal?: boolean, incomplete?: boolean) => recordCall({ at: new Date(started).toISOString(), alias, provider: p.id, model: t.model, status: up.status, usage, ms: now() - started, ...(refusal ? { refused: true } : {}), ...(incomplete ? { incomplete: true } : {}) })
           if (offer) {
             try {
-              const out = await readDraft(up)
+              const out = JSON.parse(await readBoundedText(up, 256 * 1024)) as Completion
               const msg = out?.choices?.[0]?.message
               const text = typeof msg?.content === 'string' ? msg.content.slice(0, 6000) : ''
               const suggestions = Array.isArray(msg?.tool_calls) ? JSON.stringify(msg.tool_calls).slice(0, 3000) : ''
@@ -464,8 +484,10 @@ export function createGateway(config: GatewayConfig, deps: GatewayDeps = {}): Se
               if (candidate && !sensitiveReason(candidate) && !offer.containsCredential?.(candidate)) draft = candidate
               record(usageOf(out?.usage), false, !msg)
             } catch { record(undefined, false, true) }
+            draftRouting(draft ? 'draft received; waiting for trusted review' : 'draft response was unusable')
             continue
           }
+          if (reviewing) draftRouting('trusted reviewer accepted the draft request')
           if (body.stream) return await pipeStream(up, res, record, p.firstByteMs, () => down(p.id))
           const out = (await up.json()) as Completion
           const msg = out.choices?.[0]?.message

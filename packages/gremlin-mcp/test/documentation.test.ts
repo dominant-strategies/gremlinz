@@ -125,7 +125,8 @@ describe('official renewal documentation checks', () => {
   it('tracks the wallet adapter and configured official documents without exposing credentials', () => {
     const cfg = GatewayConfig.parse({ providers: [{ id: 'hashference', kind: 'hashference', baseUrl: 'https://hashference.com/v1' }, { id: 'other', kind: 'openai', baseUrl: 'https://provider.example/v1', documentationUrls: ['https://provider.example/renewal.md'] }], routes: { 'gremlin-main': [{ provider: 'hashference', model: 'qwen3' }] }, glean: { enabled: false } })
     const targets = documentationTargets(cfg, new AccessSources())
-    expect(targets).toHaveLength(3)
-    expect(targets.map(t => t.purpose)).toEqual(['renewal', 'api', 'renewal'])
+    expect(targets).toHaveLength(4)
+    expect(targets).toContainEqual({ id: 'hashference:quai-payments', source: 'hashference', purpose: 'renewal', url: 'https://hashference.com/docs/quai-payments' })
+    expect(targets.map(t => t.purpose)).toEqual(['renewal', 'renewal', 'api', 'renewal'])
   })
 })

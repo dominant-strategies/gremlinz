@@ -3,7 +3,7 @@
  * transaction, and (unless dryRun) broadcasts it. Network access is injectable for tests.
  */
 import { Contract, JsonRpcProvider, Wallet, getAddress as evmChecksum, isAddress as isEvmAddress } from 'ethers'
-import { JsonRpcProvider as QuaiProvider, Mnemonic, QiHDWallet, Wallet as QuaiWallet, Zone, getAddress as quaiChecksum, getZoneForAddress, isQuaiAddress } from 'quais'
+import { JsonRpcProvider as QuaiProvider, Mnemonic, QiHDWallet, QuaiTransaction, Wallet as QuaiWallet, Zone, getAddress as quaiChecksum, getZoneForAddress, isQuaiAddress } from 'quais'
 import { Address, NETWORK, p2wpkh, selectUTXO } from '@scure/btc-signer'
 import { hex } from '@scure/base'
 import {
@@ -13,7 +13,7 @@ import {
 } from '@solana/kit'
 import { getTransferSolInstruction } from '@solana-program/system'
 import { TOKEN_PROGRAM_ADDRESS, findAssociatedTokenPda, getCreateAssociatedTokenIdempotentInstruction, getTransferCheckedInstruction } from '@solana-program/token'
-import { QUAI, SOLANA, UTXO_CHAINS, esploraFor, evmChain, rpcFor, type Asset } from './chains.js'
+import { ASSETS, QUAI, SOLANA, UTXO_CHAINS, esploraFor, evmChain, rpcFor, type Asset } from './chains.js'
 import { LITECOIN, type ChainKeys } from './keys.js'
 
 export interface SendResult { tx: string; explorer: string; dryRun: boolean }
@@ -47,6 +47,26 @@ async function sendEvm(keys: ChainKeys, asset: Asset, to: string, amount: bigint
 }
 
 // ── Quai and Qi ──────────────────────────────────────────────────────────────
+/** Sign without broadcasting so the caller can durably record the hash before sending. */
+export async function prepareQuaiTransfer(keys: ChainKeys, destination: string, amount: bigint, env = process.env) {
+  const to = quaiChecksum(destination)
+  const asset = ASSETS.find((a) => a.id === 'quai:quai')!
+  const problem = destinationProblem(asset, to)
+  if (problem) throw new Error(`Bad destination for ${asset.id}: ${problem}.`)
+  if (amount <= 0n) throw new Error('Amount must be positive.')
+  const provider = new QuaiProvider(rpcFor('quai', QUAI.rpc, env), undefined, { usePathing: true })
+  const wallet = new QuaiWallet(keys.quai.privateKey, provider)
+  const populated = await wallet.populateQuaiTransaction({ from: wallet.address, to, value: amount })
+  const signed = await wallet.signTransaction({ ...populated, from: wallet.address })
+  const { hash, nonce } = QuaiTransaction.from(signed)
+  if (!hash) throw new Error('Could not compute the signed Quai transaction hash')
+  return {
+    tx: hash,
+    nonce,
+    broadcast: async () => { await provider.broadcastTransaction(Zone.Cyprus1, signed) },
+  }
+}
+
 async function sendQuai(keys: ChainKeys, to: string, amount: bigint, dryRun: boolean, env: NodeJS.ProcessEnv): Promise<SendResult> {
   const provider = new QuaiProvider(rpcFor('quai', QUAI.rpc, env), undefined, { usePathing: true })
   const w = new QuaiWallet(keys.quai.privateKey, provider)
